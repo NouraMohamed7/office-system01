@@ -1,29 +1,23 @@
-// src/app/reports/page.tsx
 "use client";
 
 import { PortalLayout, Card } from "@/components/portal-layout";
 import { useToast } from "@/components/toast";
 import { useState } from "react";
 import { ChevronDown, ChevronUp, Send } from "lucide-react";
+import { addReport, useReportsStore, STATUS_TONE } from "@/lib/reports-store";
 
-interface Report { date: string; pct: number; summary: string; }
-
-const INITIAL_PAST: Report[] = [
-  { date: "17 يوليو 2026", pct: 92, summary: "تم إنجاز جميع المهام الأساسية ورفع شيت الليدز." },
-  { date: "16 يوليو 2026", pct: 78, summary: "تأخر تقرير التسويق بسبب انتظار موافقة العميل." },
-  { date: "15 يوليو 2026", pct: 85, summary: "إنجاز 4 مهام، متابعة اجتماع القسم." },
-  { date: "14 يوليو 2026", pct: 65, summary: "يوم بطيء بسبب مشاكل تقنية في السيستم." },
-];
+// مؤقتًا لحد ما يكون عندنا Auth حقيقي — استبدلها بالموظف المسجّل دخوله فعليًا
+const CURRENT_EMPLOYEE = { name: "نورا حسن", dept: "السوشيال" };
 
 export default function ReportsPage() {
   const showToast = useToast();
+  const past = useReportsStore(CURRENT_EMPLOYEE.name); // بيتحدث لايف من نفس المخزن اللي المدير بيقرا منه
 
   const [achievements, setAchievements] = useState("");
   const [problems, setProblems] = useState("");
   const [needs, setNeeds] = useState("");
   const [pct, setPct] = useState(70);
   const [errors, setErrors] = useState<{ achievements?: string }>({});
-  const [past, setPast] = useState<Report[]>(INITIAL_PAST);
   const [open, setOpen] = useState<number | null>(0);
 
   const color = pct < 50 ? "var(--warning)" : pct < 80 ? "oklch(0.68 0.13 55)" : "var(--primary)";
@@ -37,7 +31,16 @@ export default function ReportsPage() {
     setErrors({});
 
     const today = new Date().toLocaleDateString("ar-EG", { day: "numeric", month: "long", year: "numeric" });
-    setPast((prev) => [{ date: today, pct, summary: achievements.trim() }, ...prev]);
+
+    addReport({
+      employeeName: CURRENT_EMPLOYEE.name,
+      dept: CURRENT_EMPLOYEE.dept,
+      date: today,
+      pct,
+      achievements: achievements.trim(),
+      problems: problems.trim(),
+      needs: needs.trim(),
+    });
 
     setAchievements("");
     setProblems("");
@@ -97,11 +100,12 @@ export default function ReportsPage() {
         <h3 className="font-bold text-foreground mb-3">التقارير السابقة</h3>
         <div className="space-y-2">
           {past.map((r, i) => (
-            <Card key={i} className="overflow-hidden">
+            <Card key={r.id} className="overflow-hidden">
               <button onClick={() => setOpen(open === i ? null : i)}
                 className="w-full flex items-center gap-4 p-4 hover:bg-primary/5 transition text-right">
                 <div className="flex-1">
                   <div className="text-sm font-semibold text-foreground">{r.date}</div>
+                  <div className="text-xs text-muted-foreground mt-0.5">{r.status}</div>
                 </div>
                 <div className="flex items-center gap-2">
                   <div className="h-1.5 w-24 bg-border rounded-full overflow-hidden">
@@ -114,8 +118,13 @@ export default function ReportsPage() {
                 </span>
               </button>
               {open === i && (
-                <div className="px-4 pb-4 pt-2 border-t border-border/60 text-sm text-muted-foreground leading-relaxed">
-                  {r.summary}
+                <div className="px-4 pb-4 pt-2 border-t border-border/60 text-sm text-muted-foreground leading-relaxed space-y-2">
+                  <p><span className="font-semibold text-foreground">الإنجازات: </span>{r.achievements}</p>
+                  {r.problems && <p><span className="font-semibold text-foreground">المشاكل: </span>{r.problems}</p>}
+                  {r.needs && <p><span className="font-semibold text-foreground">الاحتياجات: </span>{r.needs}</p>}
+                  {r.managerNote && (
+                    <p className="text-amber-700"><span className="font-semibold">ملاحظة المدير: </span>{r.managerNote}</p>
+                  )}
                 </div>
               )}
             </Card>

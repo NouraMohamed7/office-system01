@@ -13,17 +13,17 @@ import {
 type NavItem = { to: string; ar: string; en: string; icon: React.ComponentType<{ className?: string }> };
 
 const NAV: NavItem[] = [
-  { to: "/", ar: "الرئيسية", en: "Dashboard", icon: LayoutDashboard },
-  { to: "/attendance", ar: "الحضور", en: "Attendance", icon: Clock },
-  { to: "/tasks", ar: "المهام", en: "Tasks", icon: ListTodo },
-  { to: "/reports", ar: "التقارير اليومية", en: "Daily Reports", icon: FileText },
-  { to: "/department", ar: "شغل القسم", en: "Department Work", icon: Briefcase },
-  { to: "/representatives", ar: "المناديب", en: "Representatives", icon: Users },
-  { to: "/uploads", ar: "رفع الشيتات", en: "Upload Center", icon: Upload },
-  { to: "/complaints", ar: "الشكاوى", en: "Complaints", icon: LifeBuoy },
-  { to: "/library", ar: "المكتبة", en: "Library", icon: BookOpen },
-  { to: "/performance", ar: "الأداء", en: "Performance", icon: Trophy },
-  { to: "/profile", ar: "الملف الشخصي", en: "Profile", icon: User },
+  { to: "/employee", ar: "الرئيسية", en: "Dashboard", icon: LayoutDashboard },
+  { to: "/employee/attendance", ar: "الحضور", en: "Attendance", icon: Clock },
+  { to: "/employee/tasks", ar: "المهام", en: "Tasks", icon: ListTodo },
+  { to: "/employee/reports", ar: "التقارير اليومية", en: "Daily Reports", icon: FileText },
+  { to: "/employee/department", ar: "شغل القسم", en: "Department Work", icon: Briefcase },
+  { to: "/employee/representatives", ar: "المناديب", en: "Representatives", icon: Users },
+  { to: "/employee/uploads", ar: "رفع الشيتات", en: "Upload Center", icon: Upload },
+  { to: "/employee/complaints", ar: "الشكاوى", en: "Complaints", icon: LifeBuoy },
+  { to: "/employee/library", ar: "المكتبة", en: "Library", icon: BookOpen },
+  { to: "/employee/performance", ar: "الأداء", en: "Performance", icon: Trophy },
+  { to: "/employee/profile", ar: "الملف الشخصي", en: "Profile", icon: User },
 ];
 
 export function PortalLayout({ children, title, subtitle }: { children: ReactNode; title: string; subtitle?: string }) {
@@ -40,7 +40,6 @@ export function PortalLayout({ children, title, subtitle }: { children: ReactNod
           ${mobileOpen ? "translate-x-0" : "translate-x-full lg:translate-x-0"}`}
       >
         <div className="flex h-full flex-col">
-          {/* Logo + user */}
           <div className="p-5 border-b border-border">
             <div className={`flex items-center gap-3 ${collapsed ? "justify-center" : ""}`}>
               <div className="h-10 w-10 shrink-0 rounded-xl bg-primary grid place-items-center text-primary-foreground font-bold shadow-warm">
@@ -66,10 +65,9 @@ export function PortalLayout({ children, title, subtitle }: { children: ReactNod
             )}
           </div>
 
-          {/* Nav */}
           <nav className="flex-1 overflow-y-auto scrollbar-thin p-3 space-y-1">
             {NAV.map((item) => {
-              const active = item.to === "/" ? pathname === "/" : pathname.startsWith(item.to);
+              const active = item.to === "/employee" ? pathname === "/employee" : pathname.startsWith(item.to);
               const Icon = item.icon;
               return (
                 <Link
@@ -96,7 +94,6 @@ export function PortalLayout({ children, title, subtitle }: { children: ReactNod
             })}
           </nav>
 
-          {/* Collapse toggle */}
           <button
             onClick={() => setCollapsed((c) => !c)}
             className="hidden lg:flex items-center justify-center gap-2 mx-3 mb-3 rounded-xl border border-border py-2 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground transition"
@@ -107,14 +104,11 @@ export function PortalLayout({ children, title, subtitle }: { children: ReactNod
         </div>
       </aside>
 
-      {/* Mobile overlay */}
       {mobileOpen && (
         <div className="fixed inset-0 bg-foreground/20 z-30 lg:hidden" onClick={() => setMobileOpen(false)} />
       )}
 
-      {/* Main */}
       <div className={`transition-all duration-300 ${collapsed ? "lg:mr-20" : "lg:mr-72"}`}>
-        {/* Topbar */}
         <header className="sticky top-0 z-20 bg-background/85 backdrop-blur border-b border-border">
           <div className="flex items-center gap-3 px-4 lg:px-8 h-16">
             <button className="lg:hidden p-2 -mr-2" onClick={() => setMobileOpen((o) => !o)}>
@@ -156,14 +150,11 @@ export function PortalLayout({ children, title, subtitle }: { children: ReactNod
   );
 }
 
-/* Shared UI atoms */
 export function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
   return (
     <div className={`bg-card rounded-2xl border border-border shadow-warm ${className}`}>{children}</div>
   );
 }
-
-
 
 export function StatusPill({ tone, children }: { tone: "success" | "warning" | "danger" | "teal" | "muted" | "primary"; children: ReactNode }) {
   const map: Record<string, string> = {

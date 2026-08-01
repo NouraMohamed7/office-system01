@@ -1,49 +1,82 @@
 // src/components/toast.tsx
 "use client";
 
-import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
-import { CheckCircle2, XCircle, X } from "lucide-react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { CheckCircle2, XCircle, Info } from "lucide-react";
+import { cn } from "@/lib/utils";
 
-type ToastType = "success" | "error";
-interface ToastItem { id: number; type: ToastType; message: string; }
+type ToastKind = "success" | "error" | "info";
 
-const ToastContext = createContext<{ showToast: (type: ToastType, message: string) => void } | null>(null);
+type ToastItem = {
+  id: number;
+  kind: ToastKind;
+  message: string;
+};
+
+type ShowToast = (kind: ToastKind, message: string) => void;
+
+const ToastContext = createContext<ShowToast | null>(null);
+
+const iconByKind: Record<ToastKind, typeof CheckCircle2> = {
+  success: CheckCircle2,
+  error: XCircle,
+  info: Info,
+};
+
+const toneByKind: Record<ToastKind, string> = {
+  success: "border-success/30 bg-success/10 text-success",
+  error: "border-destructive/30 bg-destructive/10 text-destructive",
+  info: "border-teal/30 bg-teal/10 text-teal",
+};
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const idRef = useRef(0);
 
-  const showToast = useCallback((type: ToastType, message: string) => {
-    const id = Date.now();
-    setToasts((prev) => [...prev, { id, type, message }]);
-    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 3500);
+  const showToast = useCallback<ShowToast>((kind, message) => {
+    const id = ++idRef.current;
+    setToasts((prev) => [...prev, { id, kind, message }]);
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 3500);
   }, []);
 
-  const remove = (id: number) => setToasts((prev) => prev.filter((t) => t.id !== id));
-
   return (
-    <ToastContext.Provider value={{ showToast }}>
+    <ToastContext.Provider value={showToast}>
       {children}
-      <div className="fixed top-4 left-4 z-[100] space-y-2 w-full max-w-sm" dir="rtl">
-        {toasts.map((t) => (
-          <div
-            key={t.id}
-            className={`flex items-start gap-3 p-4 rounded-xl shadow-warm-lg border animate-in slide-in-from-top fade-in duration-300
-              ${t.type === "success" ? "bg-success/10 border-success/30 text-success" : "bg-destructive/10 border-destructive/30 text-destructive"}`}
-          >
-            {t.type === "success" ? <CheckCircle2 className="h-5 w-5 shrink-0 mt-0.5" /> : <XCircle className="h-5 w-5 shrink-0 mt-0.5" />}
-            <div className="flex-1 text-sm font-semibold">{t.message}</div>
-            <button onClick={() => remove(t.id)} className="shrink-0 opacity-70 hover:opacity-100">
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-        ))}
+      <div className="pointer-events-none fixed bottom-4 left-1/2 z-[100] flex w-full max-w-sm -translate-x-1/2 flex-col gap-2 px-4">
+        {toasts.map((t) => {
+          const Icon = iconByKind[t.kind];
+          return (
+            <div
+              key={t.id}
+              className={cn(
+                "pointer-events-auto flex items-center gap-2 rounded-xl border px-4 py-3 text-sm font-medium shadow-warm-lg backdrop-blur",
+                "bg-card",
+                toneByKind[t.kind],
+              )}
+            >
+              <Icon className="size-4 shrink-0" />
+              <span className="text-foreground">{t.message}</span>
+            </div>
+          );
+        })}
       </div>
     </ToastContext.Provider>
   );
 }
 
-export function useToast() {
+export function useToast(): ShowToast {
   const ctx = useContext(ToastContext);
-  if (!ctx) throw new Error("useToast must be used inside ToastProvider");
-  return ctx.showToast;
+  if (!ctx) {
+    throw new Error("useToast must be used inside <ToastProvider>. Wrap it around your root layout.");
+  }
+  return ctx;
 }
