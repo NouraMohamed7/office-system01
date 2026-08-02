@@ -2,167 +2,91 @@
 
 import { useState } from "react";
 import { Avatar, Card, PageHeader, Pill, StatCard } from "@/components/manager/primitives";
-import { Send } from "lucide-react";
 
-type Priority = "عالية" | "متوسطة" | "منخفضة";
-type Status = "جديدة" | "قيد التنفيذ" | "تم الحل";
+/* ------------------------------------------------------------------ */
+/*  Types                                                               */
+/*  نفس شكل بيانات الشكوى الموجود في صفحة الموظف بالظبط، وضايف بس        */
+/*  اسم الموظف صاحب الشكوى عشان المدير يعرف هي مين                       */
+/* ------------------------------------------------------------------ */
 
-type Message = { from: "emp" | "manager"; text: string; time: string };
+type ComplaintStatus = "جديدة" | "قيد التنفيذ" | "تم الحل" | "مرفوضة";
+type ComplaintCategory = "بيئة العمل" | "الراتب والمزايا" | "زميل عمل" | "أدوات وموارد" | "أخرى";
 
 type Complaint = {
-  id: number;
+  id: string;
   emp: string;
-  title: string;
-  dept: string;
-  pr: Priority;
-  date: string;
-  st: Status;
-  timeline: string[];
-  messages: Message[];
+  subject: string;
+  category: ComplaintCategory;
+  description: string;
+  status: ComplaintStatus;
+  createdAt: string;
 };
 
-const priorityTone: Record<Priority, "danger" | "warning" | "success"> = {
-  "عالية": "danger",
-  "متوسطة": "warning",
-  "منخفضة": "success",
-};
-
-const statusTone: Record<Status, "teal" | "warning" | "success"> = {
+const statusTone: Record<ComplaintStatus, "teal" | "success" | "warning" | "danger"> = {
   "جديدة": "teal",
   "قيد التنفيذ": "warning",
   "تم الحل": "success",
+  "مرفوضة": "danger",
 };
-
-const priorityCycle: Priority[] = ["منخفضة", "متوسطة", "عالية"];
-const departments = ["الكول سنتر", "السوشيال", "المبيعات", "الدعم الفني", "الموارد البشرية"];
 
 const initialComplaints: Complaint[] = [
   {
-    id: 1,
-    emp: "محمود علي",
-    title: "مشكلة في نظام CRM",
-    dept: "الكول سنتر",
-    pr: "عالية",
-    date: "اليوم 09:20",
-    st: "جديدة",
-    timeline: ["9:30 تم إنشاء الشكوى", "10:15 رد المدير", "11:20 تحويل للدعم"],
-    messages: [
-      { from: "emp", text: "النظام بطيء جدًا في التنقل بين الشاشات منذ الصباح — استغرق فتح كل عميل حوالي 8 ثوانٍ.", time: "09:20" },
-      { from: "manager", text: "شكرًا للإبلاغ — تم تحويل الشكوى لفريق الدعم الفني وسنعود إليك خلال ساعة.", time: "10:15" },
-    ],
+    id: "c1",
+    emp: "دينا فتحي",
+    subject: "تأخر صرف مكافأة الأداء",
+    category: "الراتب والمزايا",
+    description: "مكافأة شهر يونيو لسه ماوصلتش، وحابب أعرف موعدها بالظبط.",
+    status: "قيد التنفيذ",
+    createdAt: "2026-07-20",
   },
   {
-    id: 2,
-    emp: "نورا حسن",
-    title: "طلب أدوات تصميم إضافية",
-    dept: "السوشيال",
-    pr: "متوسطة",
-    date: "أمس",
-    st: "قيد التنفيذ",
-    timeline: ["أمس 14:00 تم إنشاء الشكوى"],
-    messages: [
-      { from: "emp", text: "محتاجة نسخة إضافية من برنامج التصميم للفريق الجديد.", time: "14:00" },
-    ],
+    id: "c2",
+    emp: "أحمد رضا",
+    subject: "مشكلة في تكييف المكتب",
+    category: "بيئة العمل",
+    description: "التكييف في الدور التاني مش شغال من يومين وده مؤثر على التركيز.",
+    status: "تم الحل",
+    createdAt: "2026-07-14",
   },
   {
-    id: 3,
-    emp: "خالد يوسف",
-    title: "لم يتم صرف المكافأة",
-    dept: "المبيعات",
-    pr: "منخفضة",
-    date: "قبل يومين",
-    st: "تم الحل",
-    timeline: ["قبل يومين تم إنشاء الشكوى", "قبل يوم تم الصرف"],
-    messages: [
-      { from: "emp", text: "المكافأة الخاصة بشهر الماضي لسه ما اتصرفتش.", time: "10:00" },
-      { from: "manager", text: "تم التأكد من الحساب وتم صرف المبلغ اليوم.", time: "قبل يوم" },
-    ],
+    id: "c3",
+    emp: "ياسمين عادل",
+    subject: "طلب جهاز لابتوب بديل",
+    category: "أدوات وموارد",
+    description: "اللابتوب الحالي بطيء جدًا وبيأثر على سرعة إنجاز المهام.",
+    status: "جديدة",
+    createdAt: "2026-07-25",
   },
 ];
 
-function nowLabel() {
-  const d = new Date();
-  return d.toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" });
-}
-
 export default function ComplaintsPage() {
   const [complaints, setComplaints] = useState<Complaint[]>(initialComplaints);
-  const [selectedId, setSelectedId] = useState<number>(initialComplaints[0].id);
-  const [draft, setDraft] = useState("");
+  const [selectedId, setSelectedId] = useState<string>(initialComplaints[0].id);
 
-  const selected = complaints.find(c => c.id === selectedId)!;
+  const selected = complaints.find((c) => c.id === selectedId)!;
 
   const stats = {
     total: complaints.length,
-    new: complaints.filter(c => c.st === "جديدة").length,
-    inProgress: complaints.filter(c => c.st === "قيد التنفيذ").length,
-    resolved: complaints.filter(c => c.st === "تم الحل").length,
-    highRisk: complaints.filter(c => c.pr === "عالية" && c.st !== "تم الحل").length,
+    new: complaints.filter((c) => c.status === "جديدة").length,
+    inProgress: complaints.filter((c) => c.status === "قيد التنفيذ").length,
+    resolved: complaints.filter((c) => c.status === "تم الحل").length,
+    rejected: complaints.filter((c) => c.status === "مرفوضة").length,
   };
 
-  function updateSelected(patch: Partial<Complaint>, timelineEntry?: string) {
-    setComplaints(prev =>
-      prev.map(c =>
-        c.id === selectedId
-          ? {
-              ...c,
-              ...patch,
-              timeline: timelineEntry ? [...c.timeline, timelineEntry] : c.timeline,
-            }
-          : c
-      )
-    );
-  }
-
-  function handleSend() {
-    const text = draft.trim();
-    if (!text) return;
-    const time = nowLabel();
-    setComplaints(prev =>
-      prev.map(c =>
-        c.id === selectedId
-          ? {
-              ...c,
-              messages: [...c.messages, { from: "manager", text, time }],
-              timeline: [...c.timeline, `${time} رد المدير`],
-              st: c.st === "جديدة" ? "قيد التنفيذ" : c.st,
-            }
-          : c
-      )
-    );
-    setDraft("");
-  }
-
-  function handlePriorityCycle() {
-    const idx = priorityCycle.indexOf(selected.pr);
-    const next = priorityCycle[(idx + 1) % priorityCycle.length];
-    updateSelected({ pr: next }, `${nowLabel()} تغيير الأولوية إلى ${next}`);
-  }
-
-  function handleTransfer() {
-    const currentIdx = departments.indexOf(selected.dept);
-    const next = departments[(currentIdx + 1) % departments.length];
-    updateSelected({ dept: next, st: selected.st === "جديدة" ? "قيد التنفيذ" : selected.st }, `${nowLabel()} تحويل إلى ${next}`);
-  }
-
-  function handleClose() {
-    updateSelected({ st: "تم الحل" }, `${nowLabel()} تم إغلاق الشكوى`);
-  }
-
-  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key === "Enter") handleSend();
+  function handleStatusChange(status: ComplaintStatus) {
+    setComplaints((prev) => prev.map((c) => (c.id === selectedId ? { ...c, status } : c)));
   }
 
   return (
     <div className="space-y-6">
-      <PageHeader title="الشكاوى" subtitle="مركز الشكاوى الداخلي — أشبه بصندوق دعم فني." />
+      <PageHeader title="الشكاوى" subtitle="متابعة شكاوى الموظفين وحالتها." />
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-        <StatCard dense label="إجمالي" value={String(stats.total)} tone="primary" />
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+        <StatCard dense label="إجمالي الشكاوى" value={String(stats.total)} tone="primary" />
         <StatCard dense label="جديدة" value={String(stats.new)} tone="teal" />
         <StatCard dense label="قيد التنفيذ" value={String(stats.inProgress)} tone="warning" />
         <StatCard dense label="تم الحل" value={String(stats.resolved)} tone="success" />
-        <StatCard dense label="عالية الخطورة" value={String(stats.highRisk)} tone="danger" />
+        <StatCard dense label="مرفوضة" value={String(stats.rejected)} tone="danger" />
       </div>
 
       <div className="grid gap-6 lg:grid-cols-5">
@@ -177,103 +101,55 @@ export default function ComplaintsPage() {
                 <div className="flex items-start gap-3">
                   <Avatar name={c.emp} />
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span
-                        className="size-2 rounded-full"
-                        style={{ background: `var(--${priorityTone[c.pr] === "danger" ? "destructive" : priorityTone[c.pr] === "warning" ? "warning" : "success"})` }}
-                      />
-                      <span className="truncate text-sm font-semibold">{c.title}</span>
-                    </div>
+                    <span className="truncate text-sm font-semibold block">{c.subject}</span>
                     <div className="mt-0.5 text-[11px] text-muted-foreground">
-                      {c.emp} · {c.dept} · {c.date}
+                      {c.emp} · {c.category} · {c.createdAt}
                     </div>
                   </div>
-                  <Pill tone={statusTone[c.st]}>{c.st}</Pill>
+                  <Pill tone={statusTone[c.status]}>{c.status}</Pill>
                 </div>
               </li>
             ))}
           </ul>
         </Card>
 
-        <Card className="!p-0 flex flex-col lg:col-span-3">
-          <div className="border-b border-border p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-base font-bold">{selected.title}</div>
-                <div className="text-xs text-muted-foreground">
-                  {selected.emp} · {selected.dept} · {selected.date}
-                </div>
-              </div>
-              <div className="flex gap-1">
-                <button
-                  onClick={() => document.getElementById("reply-input")?.focus()}
-                  className="rounded-lg border border-border bg-background px-2.5 py-1 text-xs hover:bg-accent"
-                >
-                  الرد
-                </button>
-                <button
-                  onClick={handlePriorityCycle}
-                  className="rounded-lg border border-border bg-background px-2.5 py-1 text-xs hover:bg-accent"
-                >
-                  تغيير الأولوية ({selected.pr})
-                </button>
-                <button
-                  onClick={handleTransfer}
-                  className="rounded-lg border border-border bg-background px-2.5 py-1 text-xs hover:bg-accent"
-                >
-                  تحويل
-                </button>
-                <button
-                  onClick={handleClose}
-                  disabled={selected.st === "تم الحل"}
-                  className="rounded-lg border border-border bg-background px-2.5 py-1 text-xs hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  إغلاق
-                </button>
-              </div>
+        <Card className="!p-6 lg:col-span-3 space-y-5">
+          <div>
+            <div className="text-base font-bold">{selected.subject}</div>
+            <div className="mt-1 text-xs text-muted-foreground">
+              {selected.category} · {selected.createdAt}
             </div>
           </div>
 
-          <div className="flex-1 space-y-4 p-4">
-            {selected.messages.map((m, i) => (
-              <div
-                key={i}
-                className={
-                  m.from === "emp"
-                    ? "rounded-xl bg-accent/40 p-3 text-sm"
-                    : "mr-8 rounded-xl bg-primary/10 p-3 text-sm"
-                }
-              >
-                {m.text}
-                <div className="mt-1 text-[10px] text-muted-foreground">{m.time}</div>
-              </div>
-            ))}
+          <div className="flex items-center gap-2.5">
+            <Avatar name={selected.emp} size={36} />
+            <div>
+              <div className="text-[11px] text-muted-foreground">مقدّم الشكوى</div>
+              <div className="text-sm font-bold">{selected.emp}</div>
+            </div>
+          </div>
 
-            <div className="flex flex-wrap gap-3 text-xs">
-              {selected.timeline.map((s, i) => (
-                <div key={i} className="flex-1 min-w-[100px] rounded-lg border border-border bg-background p-2 text-center">
+          <p className="rounded-xl bg-secondary/50 p-4 text-sm leading-relaxed text-foreground">
+            {selected.description}
+          </p>
+
+          <div>
+            <div className="mb-2 text-xs font-semibold text-muted-foreground">حالة الشكوى</div>
+            <div className="inline-flex overflow-hidden rounded-lg border border-border">
+              {(["جديدة", "قيد التنفيذ", "تم الحل", "مرفوضة"] as ComplaintStatus[]).map((s) => (
+                <button
+                  key={s}
+                  onClick={() => handleStatusChange(s)}
+                  disabled={selected.status === s}
+                  className={`px-3 py-2 text-xs font-semibold transition ${
+                    selected.status === s
+                      ? "bg-primary text-primary-foreground cursor-default"
+                      : "bg-background text-muted-foreground hover:bg-accent"
+                  }`}
+                >
                   {s}
-                </div>
+                </button>
               ))}
-            </div>
-          </div>
-
-          <div className="border-t border-border p-3">
-            <div className="flex items-center gap-2">
-              <input
-                id="reply-input"
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="اكتب ردًا..."
-                className="h-10 flex-1 rounded-xl border border-border bg-background px-3 text-sm outline-none focus:border-primary/50"
-              />
-              <button
-                onClick={handleSend}
-                className="grid size-10 place-items-center rounded-xl bg-primary text-primary-foreground hover:bg-primary-dark"
-              >
-                <Send className="size-4" />
-              </button>
             </div>
           </div>
         </Card>

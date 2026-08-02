@@ -31,20 +31,48 @@ const STATUS_TONE: Record<Status, Tone> = {
 };
 
 const initialRows: Row[] = [
-  { id: "1", name: "نورا حسن", dept: "السوشيال", in: "08:35", out: "17:02", hrs: "8:27", st: "حاضر", tone: "success" },
-  { id: "2", name: "محمود علي", dept: "الكول سنتر", in: "09:02", out: "17:10", hrs: "8:08", st: "حاضر", tone: "success" },
-  { id: "3", name: "كريم سعيد", dept: "المبيعات", in: "10:22", out: "—", hrs: "—", st: "متأخر", tone: "warning" },
-  { id: "4", name: "خالد يوسف", dept: "المبيعات", in: "—", out: "—", hrs: "—", st: "غائب", tone: "danger" },
-  { id: "5", name: "سارة إبراهيم", dept: "التسويق", in: "—", out: "—", hrs: "—", st: "إجازة", tone: "teal" },
-  { id: "6", name: "دينا فتحي", dept: "التصميم", in: "08:50", out: "17:00", hrs: "8:10", st: "حاضر", tone: "success" },
-  { id: "7", name: "ياسر أحمد", dept: "الدعم", in: "—", out: "—", hrs: "—", st: "لم يسجل", tone: "muted" },
+  { id: "1", name: "نورا حسن", dept: "سوشيال ميديا", in: "08:35", out: "17:02", hrs: "8:27", st: "حاضر", tone: "success" },
+  { id: "2", name: "محمود علي", dept: "كول سنتر", in: "09:02", out: "17:10", hrs: "8:08", st: "حاضر", tone: "success" },
+  { id: "3", name: "كريم سعيد", dept: "تسويق", in: "10:22", out: "—", hrs: "—", st: "متأخر", tone: "warning" },
+  { id: "4", name: "خالد يوسف", dept: "داش", in: "—", out: "—", hrs: "—", st: "غائب", tone: "danger" },
+  { id: "5", name: "سارة إبراهيم", dept: "تسويق", in: "—", out: "—", hrs: "—", st: "إجازة", tone: "teal" },
+  { id: "6", name: "دينا فتحي", dept: "داش", in: "08:50", out: "17:00", hrs: "8:10", st: "حاضر", tone: "success" },
+  { id: "7", name: "ياسر أحمد", dept: "كول سنتر", in: "—", out: "—", hrs: "—", st: "لم يسجل", tone: "muted" },
 ];
 
-const DEPARTMENTS = ["السوشيال", "الكول سنتر", "المبيعات", "التسويق", "التصميم", "الدعم"];
+const DEPARTMENTS = ["سوشيال ميديا", "كول سنتر", "تسويق", "داش"];
 
 function nowTime() {
   const d = new Date();
   return d.toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
+// NEW: actually compute worked hours from in/out instead of leaving "—" forever
+function computeHours(inTime: string, outTime: string) {
+  if (inTime === "—" || outTime === "—") return "—";
+  const [ih, im] = inTime.split(":").map(Number);
+  const [oh, om] = outTime.split(":").map(Number);
+  let mins = (oh * 60 + om) - (ih * 60 + im);
+  if (mins < 0) mins += 24 * 60;
+  return `${Math.floor(mins / 60)}:${String(mins % 60).padStart(2, "0")}`;
+}
+
+// NEW: real CSV export instead of a fake timeout with no output
+function exportRowsToCsv(rows: Row[]) {
+  const header = ["الموظف", "القسم", "وقت الحضور", "وقت الانصراف", "ساعات العمل", "الحالة"];
+  const csvRows = [header.join(",")].concat(
+    rows.map((r) => [r.name, r.dept, r.in, r.out, r.hrs, r.st].join(","))
+  );
+  const csv = "\uFEFF" + csvRows.join("\n"); // BOM so Excel reads Arabic correctly
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "تقرير_الحضور.csv";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 export default function AttendancePage() {
@@ -77,7 +105,8 @@ export default function AttendancePage() {
   }
 
   function markCheckIn(r: Row) {
-    updateRow(r.id, { in: nowTime(), st: "حاضر", tone: STATUS_TONE["حاضر"] });
+    // NEW: reset out/hrs on a fresh check-in, so an old checkout time doesn't stick around
+    updateRow(r.id, { in: nowTime(), out: "—", hrs: "—", st: "حاضر", tone: STATUS_TONE["حاضر"] });
     showToast("success", `تم تسجيل حضور ${r.name}`);
     setOpenMenuId(null);
   }
@@ -88,7 +117,9 @@ export default function AttendancePage() {
       setOpenMenuId(null);
       return;
     }
-    updateRow(r.id, { out: nowTime() });
+    const out = nowTime();
+    // NEW: hrs actually gets computed now instead of staying "—"
+    updateRow(r.id, { out, hrs: computeHours(r.in, out) });
     showToast("success", `تم تسجيل انصراف ${r.name}`);
     setOpenMenuId(null);
   }
@@ -99,19 +130,29 @@ export default function AttendancePage() {
     setOpenMenuId(null);
   }
 
+  // NEW: "عرض الملف" used to be a dead button with no handler at all
+  function viewProfile(r: Row) {
+    showToast("success", `الملف الشخصي لـ ${r.name} — قريباً`);
+    setOpenMenuId(null);
+  }
+
   function handleExport() {
     setExporting(true);
     setTimeout(() => {
+      exportRowsToCsv(rows); // NEW: actually produces and downloads a file
       setExporting(false);
       showToast("success", "تم تصدير تقرير الحضور بنجاح");
-    }, 900);
+    }, 600);
   }
+
+  // NEW: dynamic date instead of a hardcoded string that goes stale
+  const todayLabel = new Date().toLocaleDateString("ar-EG", { day: "numeric", month: "long", year: "numeric" });
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="الحضور"
-        subtitle="حضور الشركة بالكامل — اليوم 20 يوليو 2026."
+        subtitle={`حضور الشركة بالكامل — اليوم ${todayLabel}.`}
         actions={
           <button
             onClick={handleExport}
@@ -202,7 +243,7 @@ export default function AttendancePage() {
                           <button onClick={() => markAbsent(r)} className="flex w-full items-center gap-2 px-3.5 py-2.5 text-right text-sm text-destructive transition hover:bg-destructive/10">
                             <UserX className="size-4" /> تسجيل غياب
                           </button>
-                          <button className="flex w-full items-center gap-2 px-3.5 py-2.5 text-right text-sm transition hover:bg-accent">
+                          <button onClick={() => viewProfile(r)} className="flex w-full items-center gap-2 px-3.5 py-2.5 text-right text-sm transition hover:bg-accent">
                             <User className="size-4 text-primary" /> عرض الملف
                           </button>
                         </div>

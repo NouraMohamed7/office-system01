@@ -3,7 +3,7 @@
 
 import { PortalLayout, Card, StatusPill } from "@/components/portal-layout";
 import { useToast } from "@/components/toast";
-import { Clock, Check, LogIn, LogOut } from "lucide-react";
+import { Clock, Check, LogIn, LogOut, Coffee, PlayCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 
 const PAST_RECORDS = [
@@ -18,22 +18,45 @@ const PAST_RECORDS = [
 
 const OFFICIAL_START = "09:00";
 
+type BreakRecord = { start: string; end: string | null; startMs: number; endMs: number | null };
+
 export default function AttendancePage() {
   const showToast = useToast();
-  const [now, setNow] = useState(new Date());
+  // Start as null on both server and client so the initial render matches.
+  // The real Date is only set after mount (client-only), avoiding hydration mismatches.
+  const [now, setNow] = useState<Date | null>(null);
   const [checkInTime, setCheckInTime] = useState<string | null>(null);
   const [checkOutTime, setCheckOutTime] = useState<string | null>(null);
 
+  // Break state
+  const [isOnBreak, setIsOnBreak] = useState(false);
+  const [breaks, setBreaks] = useState<BreakRecord[]>([]);
+  const [breakElapsedSec, setBreakElapsedSec] = useState(0); // live elapsed for current break
+
   useEffect(() => {
+    setNow(new Date());
     const t = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(t);
   }, []);
 
-  const time = now.toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-  const date = now.toLocaleDateString("ar-EG", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
-  const shortDate = now.toISOString().slice(0, 10);
+  // Tick the current break's elapsed time while on break
+  useEffect(() => {
+    if (!isOnBreak) return;
+    const current = breaks[breaks.length - 1];
+    if (!current) return;
+    const tick = () => setBreakElapsedSec(Math.floor((Date.now() - current.startMs) / 1000));
+    tick();
+    const t = setInterval(tick, 1000);
+    return () => clearInterval(t);
+  }, [isOnBreak, breaks]);
+
+  const mounted = now !== null;
+  const time = now ? now.toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—:—:—";
+  const date = now ? now.toLocaleDateString("ar-EG", { weekday: "long", day: "numeric", month: "long", year: "numeric" }) : "";
+  const shortDate = now ? now.toISOString().slice(0, 10) : "";
 
   const isLate = () => {
+    if (!now) return false;
     const [h, m] = OFFICIAL_START.split(":").map(Number);
     const officialMinutes = h * 60 + m;
     const nowMinutes = now.getHours() * 60 + now.getMinutes();
@@ -41,6 +64,7 @@ export default function AttendancePage() {
   };
 
   const handleCheckIn = () => {
+    if (!now) return;
     const exactTime = now.toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
     setCheckInTime(exactTime);
     if (isLate()) {
@@ -51,14 +75,57 @@ export default function AttendancePage() {
   };
 
   const handleCheckOut = () => {
+    if (!now) return;
+    if (isOnBreak) {
+      showToast("error", "لازم تنهي البريك الأول قبل ما تسجل انصراف");
+      return;
+    }
     const exactTime = now.toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
     setCheckOutTime(exactTime);
     showToast("success", `تم تسجيل انصرافك الساعة ${exactTime}`);
   };
 
+  const handleStartBreak = () => {
+    if (!now) return;
+    const exactTime = now.toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    setBreaks((prev) => [...prev, { start: exactTime, end: null, startMs: Date.now(), endMs: null }]);
+    setBreakElapsedSec(0);
+    setIsOnBreak(true);
+    showToast("success", `بدأت البريك الساعة ${exactTime}`);
+  };
+
+  const handleEndBreak = () => {
+    if (!now) return;
+    const exactTime = now.toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    setBreaks((prev) => {
+      const updated = [...prev];
+      const last = updated[updated.length - 1];
+      if (last && last.end === null) {
+        updated[updated.length - 1] = { ...last, end: exactTime, endMs: Date.now() };
+      }
+      return updated;
+    });
+    setIsOnBreak(false);
+    setBreakElapsedSec(0);
+    showToast("success", `انتهت البريك الساعة ${exactTime}`);
+  };
+
   const todayStatus = checkInTime
     ? (isLate() ? "متأخر" : "حاضر")
     : null;
+
+  // Total break seconds today (completed breaks + live current one)
+  const totalBreakSeconds = breaks.reduce((sum, b) => {
+    if (b.endMs) return sum + Math.floor((b.endMs - b.startMs) / 1000);
+    if (isOnBreak) return sum + breakElapsedSec;
+    return sum;
+  }, 0);
+
+  const formatDuration = (totalSec: number) => {
+    const m = Math.floor(totalSec / 60).toString().padStart(2, "0");
+    const s = (totalSec % 60).toString().padStart(2, "0");
+    return `${m}:${s}`;
+  };
 
   return (
     <PortalLayout title="الحضور" subtitle="سجل حضورك وانصرافك اليومي وراجع تاريخك">
@@ -69,8 +136,8 @@ export default function AttendancePage() {
           <div className="text-5xl font-bold text-foreground tabular-nums mt-2 mb-6">{time}</div>
 
           {!checkInTime && (
-            <button onClick={handleCheckIn}
-              className="inline-flex items-center gap-3 bg-primary text-primary-foreground rounded-2xl px-8 py-4 font-bold text-lg hover:bg-[color:var(--primary-dark)] transition shadow-warm">
+            <button onClick={handleCheckIn} disabled={!mounted}
+              className="inline-flex items-center gap-3 bg-primary text-primary-foreground rounded-2xl px-8 py-4 font-bold text-lg hover:bg-[color:var(--primary-dark)] transition shadow-warm disabled:opacity-40 disabled:cursor-not-allowed">
               <LogIn className="h-6 w-6" />
               تسجيل الحضور
             </button>
@@ -87,13 +154,47 @@ export default function AttendancePage() {
                   <div className="text-sm tabular-nums">الساعة {checkInTime}</div>
                 </div>
               </div>
-              <div>
-                <button onClick={handleCheckOut}
-                  className="inline-flex items-center gap-3 bg-destructive text-destructive-foreground rounded-2xl px-8 py-4 font-bold text-lg hover:opacity-90 transition shadow-warm">
-                  <LogOut className="h-6 w-6" />
+
+              {isOnBreak && (
+                <div className="inline-flex items-center gap-3 bg-warning/10 text-warning rounded-2xl px-6 py-4">
+                  <div className="h-10 w-10 rounded-full bg-warning grid place-items-center">
+                    <Coffee className="h-6 w-6 text-warning-foreground" />
+                  </div>
+                  <div className="text-right">
+                    <div className="font-bold">في استراحة الآن</div>
+                    <div className="text-sm tabular-nums">{formatDuration(breakElapsedSec)}</div>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex flex-wrap items-center justify-center gap-3">
+                {!isOnBreak && (
+                  <button onClick={handleStartBreak}
+                    className="inline-flex items-center gap-2 bg-warning/15 text-warning rounded-2xl px-6 py-3 font-bold hover:bg-warning/25 transition">
+                    <Coffee className="h-5 w-5" />
+                    بدء البريك
+                  </button>
+                )}
+                {isOnBreak && (
+                  <button onClick={handleEndBreak}
+                    className="inline-flex items-center gap-2 bg-success/15 text-success rounded-2xl px-6 py-3 font-bold hover:bg-success/25 transition">
+                    <PlayCircle className="h-5 w-5" />
+                    إنهاء البريك
+                  </button>
+                )}
+
+                <button onClick={handleCheckOut} disabled={isOnBreak}
+                  className="inline-flex items-center gap-2 bg-destructive text-destructive-foreground rounded-2xl px-8 py-3 font-bold text-lg hover:opacity-90 transition shadow-warm disabled:opacity-40 disabled:cursor-not-allowed">
+                  <LogOut className="h-5 w-5" />
                   تسجيل الانصراف
                 </button>
               </div>
+
+              {breaks.length > 0 && (
+                <div className="text-sm text-muted-foreground">
+                  إجمالي وقت البريك النهاردة: <span className="font-bold tabular-nums text-foreground">{formatDuration(totalBreakSeconds)}</span>
+                </div>
+              )}
             </div>
           )}
 
@@ -109,6 +210,13 @@ export default function AttendancePage() {
                 <div className="text-xs font-semibold">وقت الانصراف</div>
                 <div className="text-lg font-bold tabular-nums mt-1">{checkOutTime}</div>
               </div>
+              {breaks.length > 0 && (
+                <div className="col-span-2 bg-warning/10 text-warning rounded-2xl p-4">
+                  <Coffee className="h-5 w-5 mx-auto mb-1" />
+                  <div className="text-xs font-semibold">إجمالي وقت البريك</div>
+                  <div className="text-lg font-bold tabular-nums mt-1">{formatDuration(totalBreakSeconds)}</div>
+                </div>
+              )}
               <div className="col-span-2 text-sm text-muted-foreground mt-1">
                 تم إنهاء يوم العمل بنجاح ✅
               </div>
@@ -128,6 +236,7 @@ export default function AttendancePage() {
                 <tr className="text-right text-muted-foreground border-b border-border">
                   <th className="pb-3 font-semibold">وقت الحضور</th>
                   <th className="pb-3 font-semibold">وقت الانصراف</th>
+                  <th className="pb-3 font-semibold">إجمالي البريك</th>
                   <th className="pb-3 font-semibold">الحالة</th>
                 </tr>
               </thead>
@@ -135,6 +244,7 @@ export default function AttendancePage() {
                 <tr className="border-b border-border/60">
                   <td className="py-3 text-foreground tabular-nums">{checkInTime}</td>
                   <td className="py-3 text-muted-foreground tabular-nums">{checkOutTime ?? "— لسه ماسجلتيش انصراف —"}</td>
+                  <td className="py-3 text-muted-foreground tabular-nums">{formatDuration(totalBreakSeconds)}</td>
                   <td className="py-3">
                     {todayStatus && (
                       <StatusPill tone={todayStatus === "حاضر" ? "success" : "warning"}>{todayStatus}</StatusPill>
@@ -144,6 +254,24 @@ export default function AttendancePage() {
               </tbody>
             </table>
           </div>
+
+          {breaks.length > 0 && (
+            <div className="mt-5 pt-5 border-t border-border/60">
+              <h4 className="text-sm font-semibold text-foreground mb-3">تفاصيل البريكات</h4>
+              <div className="space-y-2">
+                {breaks.map((b, i) => (
+                  <div key={i} className="flex items-center justify-between text-sm bg-warning/5 rounded-xl px-4 py-2">
+                    <span className="flex items-center gap-2 text-warning font-semibold">
+                      <Coffee className="h-4 w-4" /> بريك {i + 1}
+                    </span>
+                    <span className="tabular-nums text-muted-foreground">
+                      {b.start} — {b.end ?? "جارية الآن"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </Card>
       )}
 

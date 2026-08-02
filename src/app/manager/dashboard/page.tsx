@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Card, PageHeader, ProgressBar, SectionTitle, StatCard } from "@/components/manager/primitives";
 import {
-  Users, UserCheck, UserX, Clock, Palmtree, ClipboardList, FileText, FolderCheck, MessageSquare,
+  Users, UserCheck, UserX, Clock, Palmtree, FileText, FolderCheck, MessageSquare,
   Truck, Wallet, Plus, ChevronDown, UserPlus, ListPlus, Receipt, ShieldCheck,
   ClipboardCheck, MinusCircle, Gift, Megaphone,
 } from "lucide-react";
@@ -90,24 +90,6 @@ export default function DashboardPage() {
         </div>
       </section>
 
-      <section>
-        <SectionTitle sub="Tasks">المهام</SectionTitle>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <button onClick={() => go("/manager/tasks?status=new")} className="block w-full appearance-none border-0 bg-transparent p-0 text-right transition-transform hover:-translate-y-0.5">
-            <StatCard dense label="جديدة" value="24" icon={ClipboardList} tone="teal" />
-          </button>
-          <button onClick={() => go("/manager/tasks?status=in_progress")} className="block w-full appearance-none border-0 bg-transparent p-0 text-right transition-transform hover:-translate-y-0.5">
-            <StatCard dense label="جارية" value="41" icon={ClipboardList} tone="primary" />
-          </button>
-          <button onClick={() => go("/manager/tasks?status=done")} className="block w-full appearance-none border-0 bg-transparent p-0 text-right transition-transform hover:-translate-y-0.5">
-            <StatCard dense label="مكتملة" value="87" icon={ClipboardList} tone="success" />
-          </button>
-          <button onClick={() => go("/manager/tasks?status=overdue")} className="block w-full appearance-none border-0 bg-transparent p-0 text-right transition-transform hover:-translate-y-0.5">
-            <StatCard dense label="متأخرة" value="9" icon={ClipboardList} tone="danger" />
-          </button>
-        </div>
-      </section>
-
       <div className="grid gap-6 lg:grid-cols-2">
         <div>
           <SectionTitle sub="Reports">التقارير</SectionTitle>
@@ -132,7 +114,7 @@ export default function DashboardPage() {
         </div>
         <div>
           <SectionTitle sub="Files">الملفات</SectionTitle>
-          <div className="grid grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <button onClick={() => go("/manager/files?status=new")} className="block w-full appearance-none border-0 bg-transparent p-0 text-right transition-transform hover:-translate-y-0.5">
               <StatCard dense label="جديدة" value="11" tone="teal" icon={FolderCheck} />
             </button>
@@ -150,7 +132,7 @@ export default function DashboardPage() {
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
-       <div>
+        <div>
           <SectionTitle sub="Complaints">الشكاوى</SectionTitle>
           <div className="grid grid-cols-1 gap-3">
             <button onClick={() => go("/manager/complaints?status=new")} className="block w-full appearance-none border-0 bg-transparent p-0 text-right transition-transform hover:-translate-y-0.5">
@@ -164,7 +146,7 @@ export default function DashboardPage() {
             </button>
           </div>
         </div>
-       <div>
+        <div>
           <SectionTitle sub="Representatives">المناديب</SectionTitle>
           <div className="grid grid-cols-2 gap-3">
             <button onClick={() => go("/manager/representatives")} className="block w-full appearance-none border-0 bg-transparent p-0 text-right transition-transform hover:-translate-y-0.5">
@@ -199,21 +181,6 @@ export default function DashboardPage() {
           </div>
         </div>
       </div>
-
-      <Card>
-        <SectionTitle sub="Quick Actions">إجراءات سريعة</SectionTitle>
-        <div className="flex flex-wrap gap-2">
-          {quickActions.map((a) => (
-            <button
-              key={a.label}
-              onClick={() => go(a.href)}
-              className="rounded-full border border-primary/30 bg-primary/5 px-3.5 py-1.5 text-xs font-semibold text-primary hover:bg-primary/10"
-            >
-              {a.label}
-            </button>
-          ))}
-        </div>
-      </Card>
     </div>
   );
 }

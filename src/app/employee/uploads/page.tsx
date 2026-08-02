@@ -3,29 +3,30 @@
 
 import { PortalLayout, Card, StatusPill } from "@/components/portal-layout";
 import { useToast } from "@/components/toast";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { UploadCloud, FileText, Image as ImageIcon, FileSpreadsheet, File as FileIcon, Trash2, Download, FolderOpen, Clock3, CheckCircle2, XCircle } from "lucide-react";
 
-type FileCategory = "مستند رسمي" | "فاتورة" | "صورة" | "تقرير" | "أخرى";
 type FileStatus = "قيد المراجعة" | "مقبول" | "مرفوض";
 
 type UploadedFile = {
   id: string;
   name: string;
   sizeKb: number;
-  category: FileCategory;
   status: FileStatus;
   uploadedAt: string;
+  // مصدر التحميل الفعلي (بيتولد وقت الرفع الحقيقي عن طريق object URL)
+  fileUrl?: string;
 };
 
 const INITIAL_FILES: UploadedFile[] = [
-  { id: "f1", name: "عقد_العمل.pdf", sizeKb: 842, category: "مستند رسمي", status: "مقبول", uploadedAt: "2026-07-20" },
-  { id: "f2", name: "فاتورة_يوليو.pdf", sizeKb: 210, category: "فاتورة", status: "قيد المراجعة", uploadedAt: "2026-07-24" },
-  { id: "f3", name: "تقرير_الأداء.docx", sizeKb: 155, category: "تقرير", status: "مقبول", uploadedAt: "2026-07-18" },
-  { id: "f4", name: "صورة_البطاقة.jpg", sizeKb: 1320, category: "صورة", status: "مرفوض", uploadedAt: "2026-07-15" },
+  { id: "f1", name: "عقد_العمل.pdf", sizeKb: 842, status: "مقبول", uploadedAt: "2026-07-20" },
+  { id: "f2", name: "فاتورة_يوليو.pdf", sizeKb: 210, status: "قيد المراجعة", uploadedAt: "2026-07-24" },
+  { id: "f3", name: "تقرير_الأداء.docx", sizeKb: 155, status: "مقبول", uploadedAt: "2026-07-18" },
+  { id: "f4", name: "صورة_البطاقة.jpg", sizeKb: 1320, status: "مرفوض", uploadedAt: "2026-07-15" },
 ];
 
-const CATEGORIES: FileCategory[] = ["مستند رسمي", "فاتورة", "صورة", "تقرير", "أخرى"];
+const MAX_SIZE_MB = 10;
+const ALLOWED_EXT = ["pdf", "docx", "xlsx", "csv", "jpg", "jpeg", "png"];
 
 function iconForFile(name: string) {
   const ext = name.split(".").pop()?.toLowerCase();
@@ -38,23 +39,60 @@ function iconForFile(name: string) {
 export default function UploadsPage() {
   const showToast = useToast();
   const [files, setFiles] = useState<UploadedFile[]>(INITIAL_FILES);
-  const [category, setCategory] = useState<FileCategory>("مستند رسمي");
   const [isDragging, setIsDragging] = useState(false);
   const [filterStatus, setFilterStatus] = useState<"الكل" | FileStatus>("الكل");
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // تنظيف الـ object URLs لما الصفحة تتقفل عشان منسربش الذاكرة
+  useEffect(() => {
+    return () => {
+      files.forEach((f) => {
+        if (f.fileUrl) URL.revokeObjectURL(f.fileUrl);
+      });
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const addFiles = (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
-    const newFiles: UploadedFile[] = Array.from(fileList).map((f) => ({
-      id: `f-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      name: f.name,
-      sizeKb: Math.max(1, Math.round(f.size / 1024)),
-      category,
-      status: "قيد المراجعة",
-      uploadedAt: new Date().toISOString().slice(0, 10),
-    }));
-    setFiles((prev) => [...newFiles, ...prev]);
-    showToast("success", `تم رفع ${newFiles.length} ${newFiles.length === 1 ? "ملف" : "ملفات"} بنجاح`);
+
+    const accepted: UploadedFile[] = [];
+    const rejectedTooBig: string[] = [];
+    const rejectedType: string[] = [];
+
+    Array.from(fileList).forEach((f) => {
+      const ext = f.name.split(".").pop()?.toLowerCase() || "";
+      const sizeMb = f.size / (1024 * 1024);
+
+      if (!ALLOWED_EXT.includes(ext)) {
+        rejectedType.push(f.name);
+        return;
+      }
+      if (sizeMb > MAX_SIZE_MB) {
+        rejectedTooBig.push(f.name);
+        return;
+      }
+
+      accepted.push({
+        id: `f-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        name: f.name,
+        sizeKb: Math.max(1, Math.round(f.size / 1024)),
+        status: "قيد المراجعة",
+        uploadedAt: new Date().toISOString().slice(0, 10),
+        fileUrl: URL.createObjectURL(f),
+      });
+    });
+
+    if (accepted.length > 0) {
+      setFiles((prev) => [...accepted, ...prev]);
+      showToast("success", `تم رفع ${accepted.length} ${accepted.length === 1 ? "ملف" : "ملفات"} بنجاح`);
+    }
+    if (rejectedType.length > 0) {
+      showToast("error", `صيغة غير مدعومة: ${rejectedType.join("، ")}`);
+    }
+    if (rejectedTooBig.length > 0) {
+      showToast("error", `الحجم أكبر من ${MAX_SIZE_MB} ميجا: ${rejectedTooBig.join("، ")}`);
+    }
   };
 
   const handleDrop = (e: React.DragEvent) => {
@@ -64,8 +102,26 @@ export default function UploadsPage() {
   };
 
   const handleDelete = (id: string, name: string) => {
-    setFiles((prev) => prev.filter((f) => f.id !== id));
+    setFiles((prev) => {
+      const target = prev.find((f) => f.id === id);
+      if (target?.fileUrl) URL.revokeObjectURL(target.fileUrl);
+      return prev.filter((f) => f.id !== id);
+    });
     showToast("success", `تم حذف ${name}`);
+  };
+
+  const handleDownload = (f: UploadedFile) => {
+    if (!f.fileUrl) {
+      showToast("error", "الملف ده تجريبي مفيش نسخة حقيقية لتحميلها");
+      return;
+    }
+    const a = document.createElement("a");
+    a.href = f.fileUrl;
+    a.download = f.name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    showToast("success", `جاري تحميل ${f.name}`);
   };
 
   const filtered = filterStatus === "الكل" ? files : files.filter((f) => f.status === filterStatus);
@@ -88,15 +144,6 @@ export default function UploadsPage() {
 
       <Card className="p-6 mb-6">
         <h3 className="font-bold text-foreground mb-4">رفع ملف جديد</h3>
-        <div className="grid md:grid-cols-3 gap-4 mb-4">
-          <div className="md:col-span-1">
-            <label className="text-sm font-semibold text-foreground">تصنيف الملف</label>
-            <select value={category} onChange={(e) => setCategory(e.target.value as FileCategory)}
-              className="mt-2 w-full h-11 rounded-xl border border-border bg-card px-3 text-sm">
-              {CATEGORIES.map((c) => <option key={c}>{c}</option>)}
-            </select>
-          </div>
-        </div>
 
         <div
           onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
@@ -108,11 +155,12 @@ export default function UploadsPage() {
         >
           <UploadCloud className={`h-10 w-10 mx-auto mb-3 ${isDragging ? "text-primary" : "text-muted-foreground"}`} />
           <p className="font-semibold text-foreground">اسحبي الملفات هنا أو دوسي للاختيار</p>
-          <p className="text-xs text-muted-foreground mt-1">PDF, DOCX, XLSX, JPG, PNG — حتى 10 ميجا لكل ملف</p>
+          <p className="text-xs text-muted-foreground mt-1">PDF, DOCX, XLSX, JPG, PNG — حتى {MAX_SIZE_MB} ميجا لكل ملف</p>
           <input
             ref={inputRef}
             type="file"
             multiple
+            accept=".pdf,.docx,.xlsx,.csv,.jpg,.jpeg,.png"
             className="hidden"
             onChange={(e) => { addFiles(e.target.files); e.target.value = ""; }}
           />
@@ -145,13 +193,14 @@ export default function UploadsPage() {
                 <div className="flex-1 min-w-0">
                   <div className="font-semibold text-foreground text-sm truncate">{f.name}</div>
                   <div className="text-xs text-muted-foreground mt-0.5">
-                    {f.category} · {f.sizeKb} KB · {f.uploadedAt}
+                    {f.sizeKb} KB · {f.uploadedAt}
                   </div>
                 </div>
                 <StatusPill tone={f.status === "مقبول" ? "success" : f.status === "مرفوض" ? "danger" : "warning"}>
                   {f.status}
                 </StatusPill>
                 <button
+                  onClick={() => handleDownload(f)}
                   title="تحميل"
                   className="h-9 w-9 grid place-items-center rounded-lg text-muted-foreground hover:bg-secondary hover:text-foreground transition shrink-0"
                 >

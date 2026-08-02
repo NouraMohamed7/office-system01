@@ -1,31 +1,29 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Card, PageHeader, Pill, SectionTitle, StatCard } from "@/components/manager/primitives";
-import { Plus, Wallet, MoreVertical, Check, X, Trash2 } from "lucide-react";
+import { Card, PageHeader, SectionTitle, StatCard } from "@/components/manager/primitives";
+import { Plus, Wallet, MoreVertical, Trash2 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell, Tooltip, CartesianGrid } from "recharts";
 
 // الأقسام الفعلية في الشركة فقط
 const DEPARTMENTS = ["سوشيال ميديا", "تسويق", "داش متابعة مناديب"] as const;
 type Department = (typeof DEPARTMENTS)[number];
 
-const CATEGORIES = ["رواتب", "إعلانات", "أدوات مكتبية", "إيجار", "ضيافة"] as const;
-type Category = (typeof CATEGORIES)[number];
+// التصنيف بقى نص حر بيكتبه المستخدم مش قايمة مقفولة
+type Category = string;
 
-const CATEGORY_COLOR: Record<Category, string> = {
-  "رواتب": "var(--primary)",
-  "إعلانات": "var(--teal)",
-  "أدوات مكتبية": "var(--success)",
-  "إيجار": "var(--warning)",
-  "ضيافة": "var(--destructive)",
-};
-
-type Status = "بانتظار الاعتماد" | "معتمدة" | "ملغاة";
-const STATUS_TONE: Record<Status, "warning" | "success" | "danger"> = {
-  "بانتظار الاعتماد": "warning",
-  "معتمدة": "success",
-  "ملغاة": "danger",
-};
+// باليتة ألوان ثابتة بتتلف على أي تصنيف يتكتب، عشان كل تصنيف ياخد لون واضح في الرسم البياني
+const CATEGORY_PALETTE = [
+  "var(--primary)",
+  "var(--teal)",
+  "var(--success)",
+  "var(--warning)",
+  "var(--destructive)",
+];
+function colorForCategory(cat: string, knownCats: string[]) {
+  const idx = knownCats.indexOf(cat);
+  return CATEGORY_PALETTE[idx % CATEGORY_PALETTE.length];
+}
 
 type Expense = {
   id: number;
@@ -34,7 +32,6 @@ type Expense = {
   amount: number;
   who: string;
   dept: Department;
-  st: Status;
 };
 
 const INITIAL_TREASURY = 903120;
@@ -52,11 +49,11 @@ function formatAmount(n: number) {
 }
 
 const initialExpenses: Expense[] = [
-  { id: 1, daysAgo: 0, cat: "إعلانات", amount: 2400, who: "أحمد", dept: "تسويق", st: "بانتظار الاعتماد" },
-  { id: 2, daysAgo: 1, cat: "أدوات مكتبية", amount: 820, who: "دينا", dept: "سوشيال ميديا", st: "معتمدة" },
-  { id: 3, daysAgo: 2, cat: "إيجار", amount: 15000, who: "أحمد", dept: "داش متابعة مناديب", st: "معتمدة" },
-  { id: 4, daysAgo: 3, cat: "رواتب", amount: 45000, who: "أحمد", dept: "تسويق", st: "معتمدة" },
-  { id: 5, daysAgo: 4, cat: "ضيافة", amount: 620, who: "سارة", dept: "سوشيال ميديا", st: "ملغاة" },
+  { id: 1, daysAgo: 0, cat: "إعلانات", amount: 2400, who: "أحمد", dept: "تسويق" },
+  { id: 2, daysAgo: 1, cat: "أدوات مكتبية", amount: 820, who: "دينا", dept: "سوشيال ميديا" },
+  { id: 3, daysAgo: 2, cat: "إيجار", amount: 15000, who: "أحمد", dept: "داش متابعة مناديب" },
+  { id: 4, daysAgo: 3, cat: "رواتب", amount: 45000, who: "أحمد", dept: "تسويق" },
+  { id: 5, daysAgo: 4, cat: "ضيافة", amount: 620, who: "سارة", dept: "سوشيال ميديا" },
 ];
 
 export default function ExpensesPage() {
@@ -71,38 +68,40 @@ export default function ExpensesPage() {
   const [fDate, setFDate] = useState("الكل");
 
   // فورم إضافة مصروف
-  const [nCat, setNCat] = useState<Category>(CATEGORIES[0]);
+  const [nCat, setNCat] = useState("");
   const [nAmount, setNAmount] = useState("");
   const [nWho, setNWho] = useState("");
   const [nDept, setNDept] = useState<Department>(DEPARTMENTS[0]);
 
   const whoOptions = useMemo(() => ["الكل", ...Array.from(new Set(expenses.map(e => e.who)))], [expenses]);
+  // قايمة التصنيفات المستخدمة فعليًا، مشتقة من البيانات نفسها بدل ما تكون مقفولة
+  const knownCategories = useMemo(() => Array.from(new Set(expenses.map(e => e.cat))), [expenses]);
+  const catOptions = useMemo(() => ["الكل", ...knownCategories], [knownCategories]);
 
-  // ---- كل الإحصائيات محسوبة فعليًا من البيانات ----
-  const approved = expenses.filter(e => e.st === "معتمدة");
-  const today = approved.filter(e => e.daysAgo === 0).reduce((s, e) => s + e.amount, 0);
-  const week = approved.filter(e => e.daysAgo <= 6).reduce((s, e) => s + e.amount, 0);
-  const month = approved.filter(e => e.daysAgo <= 29).reduce((s, e) => s + e.amount, 0);
-  const year = approved.filter(e => e.daysAgo <= 365).reduce((s, e) => s + e.amount, 0);
-  const balance = INITIAL_TREASURY - approved.reduce((s, e) => s + e.amount, 0);
-  const opsCount = approved.length;
+  // ---- كل الإحصائيات محسوبة فعليًا من البيانات (كل المصروفات المسجّلة) ----
+  const today = expenses.filter(e => e.daysAgo === 0).reduce((s, e) => s + e.amount, 0);
+  const week = expenses.filter(e => e.daysAgo <= 6).reduce((s, e) => s + e.amount, 0);
+  const month = expenses.filter(e => e.daysAgo <= 29).reduce((s, e) => s + e.amount, 0);
+  const year = expenses.filter(e => e.daysAgo <= 365).reduce((s, e) => s + e.amount, 0);
+  const balance = INITIAL_TREASURY - expenses.reduce((s, e) => s + e.amount, 0);
+  const opsCount = expenses.length;
 
   // ---- بيانات الرسوم مشتقة من البيانات الفعلية ----
-  const pieData = CATEGORIES.map(c => ({
+  const pieData = knownCategories.map(c => ({
     name: c,
-    value: approved.filter(e => e.cat === c).reduce((s, e) => s + e.amount, 0),
-    c: CATEGORY_COLOR[c],
+    value: expenses.filter(e => e.cat === c).reduce((s, e) => s + e.amount, 0),
+    c: colorForCategory(c, knownCategories),
   })).filter(p => p.value > 0);
 
   const weekly = Array.from({ length: 6 }, (_, i) => {
     const from = i * 7, to = from + 6;
-    const total = approved.filter(e => e.daysAgo >= from && e.daysAgo <= to).reduce((s, e) => s + e.amount, 0);
+    const total = expenses.filter(e => e.daysAgo >= from && e.daysAgo <= to).reduce((s, e) => s + e.amount, 0);
     return { m: `أسبوع ${6 - i}`, v: total };
   }).reverse();
 
   const daily = Array.from({ length: 20 }, (_, i) => {
     const dAgo = 19 - i;
-    const total = approved.filter(e => e.daysAgo === dAgo).reduce((s, e) => s + e.amount, 0);
+    const total = expenses.filter(e => e.daysAgo === dAgo).reduce((s, e) => s + e.amount, 0);
     return { d: formatDate(dateFromDaysAgo(dAgo)), v: total };
   });
 
@@ -119,19 +118,15 @@ export default function ExpensesPage() {
 
   function handleAddExpense() {
     const amt = Number(nAmount);
-    if (!amt || amt <= 0 || !nWho.trim()) return;
+    if (!amt || amt <= 0 || !nWho.trim() || !nCat.trim()) return;
     setExpenses(prev => [
-      { id: Date.now(), daysAgo: 0, cat: nCat, amount: amt, who: nWho.trim(), dept: nDept, st: "بانتظار الاعتماد" },
+      { id: Date.now(), daysAgo: 0, cat: nCat.trim(), amount: amt, who: nWho.trim(), dept: nDept },
       ...prev,
     ]);
+    setNCat("");
     setNAmount("");
     setNWho("");
     setShowForm(false);
-  }
-
-  function setStatus(id: number, st: Status) {
-    setExpenses(prev => prev.map(e => (e.id === id ? { ...e, st } : e)));
-    setOpenMenuId(null);
   }
 
   function deleteExpense(id: number) {
@@ -157,9 +152,12 @@ export default function ExpensesPage() {
       {showForm && (
         <Card className="!p-4">
           <div className="grid gap-3 sm:grid-cols-5">
-            <select value={nCat} onChange={e => setNCat(e.target.value as Category)} className="rounded-xl border border-border bg-background px-3 py-2 text-sm">
-              {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
+            <input
+              value={nCat}
+              onChange={e => setNCat(e.target.value)}
+              placeholder="اكتب التصنيف"
+              className="rounded-xl border border-border bg-background px-3 py-2 text-sm"
+            />
             <input
               value={nAmount}
               onChange={e => setNAmount(e.target.value)}
@@ -208,8 +206,7 @@ export default function ExpensesPage() {
             {DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}
           </select>
           <select value={fCat} onChange={e => setFCat(e.target.value)} className="rounded-xl border border-border bg-background px-3 py-1.5 text-xs text-muted-foreground hover:bg-accent">
-            <option value="الكل">التصنيف: الكل</option>
-            {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+            {catOptions.map(c => <option key={c} value={c}>{c === "الكل" ? "التصنيف: الكل" : c}</option>)}
           </select>
         </div>
       </Card>
@@ -219,12 +216,12 @@ export default function ExpensesPage() {
           <table className="w-full text-sm">
             <thead className="bg-accent/40 text-xs text-muted-foreground">
               <tr className="[&>th]:px-4 [&>th]:py-3 [&>th]:text-right">
-                <th>التاريخ</th><th>التصنيف</th><th>القيمة (ج)</th><th>المسؤول</th><th>القسم</th><th>الحالة</th><th></th>
+                <th>التاريخ</th><th>التصنيف</th><th>القيمة (ج)</th><th>المسؤول</th><th>القسم</th><th></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
               {filteredRows.length === 0 && (
-                <tr><td colSpan={7} className="px-4 py-8 text-center text-xs text-muted-foreground">لا توجد مصروفات مطابقة</td></tr>
+                <tr><td colSpan={6} className="px-4 py-8 text-center text-xs text-muted-foreground">لا توجد مصروفات مطابقة</td></tr>
               )}
               {filteredRows.map((r) => (
                 <tr key={r.id} className="row-hover hover:row-hover-active relative">
@@ -235,7 +232,6 @@ export default function ExpensesPage() {
                   <td className="px-4 py-3 font-bold text-primary tabular">{formatAmount(r.amount)}</td>
                   <td className="px-4 py-3">{r.who}</td>
                   <td className="px-4 py-3 text-muted-foreground">{r.dept}</td>
-                  <td className="px-4 py-3"><Pill tone={STATUS_TONE[r.st]}>{r.st}</Pill></td>
                   <td className="px-4 py-3">
                     <div className="relative inline-block">
                       <button
@@ -246,20 +242,6 @@ export default function ExpensesPage() {
                       </button>
                       {openMenuId === r.id && (
                         <div className="absolute left-0 z-10 mt-1 w-40 rounded-xl border border-border bg-background p-1 text-xs shadow-lg">
-                          <button
-                            disabled={r.st === "معتمدة"}
-                            onClick={() => setStatus(r.id, "معتمدة")}
-                            className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
-                          >
-                            <Check className="size-3.5" /> اعتماد
-                          </button>
-                          <button
-                            disabled={r.st === "ملغاة"}
-                            onClick={() => setStatus(r.id, "ملغاة")}
-                            className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
-                          >
-                            <X className="size-3.5" /> إلغاء
-                          </button>
                           <button
                             onClick={() => deleteExpense(r.id)}
                             className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-destructive hover:bg-accent"

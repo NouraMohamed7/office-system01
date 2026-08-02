@@ -2,7 +2,6 @@
 
 import { useMemo, useState } from "react";
 import { Card, PageHeader, Pill } from "@/components/manager/primitives";
-import { LineChart, Line, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Tooltip } from "recharts";
 
 type TxType = "دخل" | "مصروف";
 type Tx = {
@@ -95,15 +94,6 @@ export default function CashPage() {
   const totalOut = useMemo(
     () => txs.filter((t) => t.type === "مصروف").reduce((s, t) => s + t.amount, 0),
     [txs]
-  );
-
-  const balanceCurve = useMemo(
-    () =>
-      chronological.map((t) => ({
-        d: formatDate(t.date),
-        v: t.bal,
-      })),
-    [chronological]
   );
 
   function formatMoney(n: number) {
@@ -233,8 +223,8 @@ export default function CashPage() {
         </Card>
       )}
 
-      <div className="grid gap-4 lg:grid-cols-4">
-        <Card className="lg:col-span-2 bg-linear-to-br from-primary/10 to-warning/10">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <Card className="bg-linear-to-br from-primary/10 to-warning/10">
           <div className="text-xs text-muted-foreground">الرصيد الحالي</div>
           <div className="mt-2 text-4xl font-bold text-primary tabular">
             {currentBalance.toLocaleString()} <span className="text-lg text-muted-foreground">ج</span>
@@ -252,30 +242,6 @@ export default function CashPage() {
           <div className="mt-2 text-2xl font-bold text-destructive tabular">- {formatMoney(totalOut)} ج</div>
         </Card>
       </div>
-
-      <Card>
-        <div className="text-sm font-semibold">تطور الرصيد</div>
-        <div className="mt-2 h-52">
-          {balanceCurve.length > 1 ? (
-            <ResponsiveContainer>
-              <LineChart data={balanceCurve}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                <XAxis dataKey="d" tick={{ fontSize: 11 }} />
-                <YAxis tick={{ fontSize: 11 }} />
-                <Tooltip
-                  contentStyle={{ borderRadius: 12 }}
-                  formatter={(value) => (typeof value === "number" ? value.toLocaleString() : String(value ?? ""))}
-                />
-                <Line type="monotone" dataKey="v" stroke="var(--primary)" strokeWidth={2} dot={{ r: 2 }} />
-              </LineChart>
-            </ResponsiveContainer>
-          ) : (
-            <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
-              لا توجد بيانات كافية بعد
-            </div>
-          )}
-        </div>
-      </Card>
 
       <Card className="p-0! overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-4">

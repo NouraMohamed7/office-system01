@@ -16,6 +16,7 @@ import {
   CheckCircle2,
   AlertTriangle,
   UserRound,
+  Plus,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 
@@ -155,6 +156,12 @@ const STATUS_OPTIONS: { key: EmployeeStatus; ar: string; icon: typeof Circle }[]
 
 const PRIORITY_LABEL: Record<Priority, string> = { high: "عالية", med: "متوسطة", low: "منخفضة" };
 
+const PRIORITY_OPTIONS: { key: Priority; ar: string }[] = [
+  { key: "low", ar: "منخفضة" },
+  { key: "med", ar: "متوسطة" },
+  { key: "high", ar: "عالية" },
+];
+
 // "الحالة المعروضة" على البورد بتدمج حالة الموظف مع التأخير المحسوب من الديدلاين
 type DisplayStatus = EmployeeStatus | "late";
 
@@ -186,11 +193,21 @@ function dueHint(task: Task) {
   return `متبقي ${diffDays} أيام`;
 }
 
+// تاريخ اليوم بصيغة YYYY-MM-DD عشان نستخدمه كـ min في حقل التاريخ
+function todayInputValue() {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 export default function TasksPage() {
   const showToast = useToast();
   const [tasks, setTasks] = useState<Task[]>(INITIAL_TASKS);
   const [view, setView] = useState<"board" | "list">("board");
   const [selected, setSelected] = useState<Task | null>(null);
+  const [isAddOpen, setIsAddOpen] = useState(false);
 
   const stats = useMemo(() => {
     const total = tasks.length;
@@ -217,6 +234,25 @@ export default function TasksPage() {
     setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, comments: [...t.comments, newComment] } : t)));
     setSelected((prev) => (prev && prev.id === taskId ? { ...prev, comments: [...prev.comments, newComment] } : prev));
     showToast("success", "تم إضافة تعليقك");
+  };
+
+  const addTask = (data: { title: string; desc: string; priority: Priority; dueDate: Date }) => {
+    const nextId = tasks.length > 0 ? Math.max(...tasks.map((t) => t.id)) + 1 : 1;
+    const newTask: Task = {
+      id: nextId,
+      title: data.title.trim(),
+      desc: data.desc.trim(),
+      priority: data.priority,
+      dueDate: data.dueDate,
+      assignedBy: "أنت",
+      assignedByRole: "مهمة شخصية",
+      attachments: 0,
+      status: "new",
+      comments: [],
+    };
+    setTasks((prev) => [newTask, ...prev]);
+    setIsAddOpen(false);
+    showToast("success", "تمت إضافة المهمة بنجاح");
   };
 
   return (
@@ -255,6 +291,13 @@ export default function TasksPage() {
             <List className="h-4 w-4" /> قائمة
           </button>
         </div>
+
+        <button
+          onClick={() => setIsAddOpen(true)}
+          className="inline-flex items-center gap-2 bg-primary text-primary-foreground rounded-xl px-4 py-2.5 text-sm font-bold hover:bg-primary-dark transition shadow-warm"
+        >
+          <Plus className="h-4 w-4" /> إضافة مهمة
+        </button>
       </div>
 
       {view === "board" ? (
@@ -319,6 +362,8 @@ export default function TasksPage() {
           onAddComment={(text) => addComment(selected.id, text)}
         />
       )}
+
+      {isAddOpen && <AddTaskModal onClose={() => setIsAddOpen(false)} onAdd={addTask} />}
     </PortalLayout>
   );
 }
@@ -409,6 +454,126 @@ function TaskCard({
 function PriorityDot({ p }: { p: Priority }) {
   const map = { high: "bg-destructive", med: "bg-warning", low: "bg-success" };
   return <span className={`h-2.5 w-2.5 rounded-full ${map[p]} shrink-0 mt-1.5`} title={PRIORITY_LABEL[p]} />;
+}
+
+function AddTaskModal({
+  onClose,
+  onAdd,
+}: {
+  onClose: () => void;
+  onAdd: (data: { title: string; desc: string; priority: Priority; dueDate: Date }) => void;
+}) {
+  const [title, setTitle] = useState("");
+  const [desc, setDesc] = useState("");
+  const [priority, setPriority] = useState<Priority>("med");
+  const [dueDateStr, setDueDateStr] = useState(todayInputValue());
+  const [error, setError] = useState("");
+
+  const handleSubmit = () => {
+    if (!title.trim()) {
+      setError("من فضلك اكتب عنوان المهمة");
+      return;
+    }
+    if (!dueDateStr) {
+      setError("من فضلك اختار تاريخ التسليم");
+      return;
+    }
+    const dueDate = new Date(dueDateStr);
+    dueDate.setHours(9, 0, 0, 0);
+    onAdd({ title, desc, priority, dueDate });
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-foreground/30 backdrop-blur-sm p-4" dir="rtl" onClick={onClose}>
+      <div
+        className="bg-card rounded-2xl shadow-warm-lg w-full max-w-md p-6 relative animate-in fade-in zoom-in-95 duration-200"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button onClick={onClose} className="absolute top-4 left-4 p-2 rounded-xl hover:bg-secondary text-muted-foreground">
+          <X className="h-5 w-5" />
+        </button>
+
+        <h2 className="text-lg font-bold text-foreground mb-5">إضافة مهمة جديدة</h2>
+
+        <div className="space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-muted-foreground mb-2">عنوان المهمة</label>
+            <input
+              value={title}
+              onChange={(e) => {
+                setTitle(e.target.value);
+                if (error) setError("");
+              }}
+              placeholder="مثال: تجهيز عرض تقديمي للعميل"
+              className="w-full h-11 rounded-xl border border-border bg-background px-3 text-sm focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none"
+              autoFocus
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-muted-foreground mb-2">الوصف (اختياري)</label>
+            <textarea
+              value={desc}
+              onChange={(e) => setDesc(e.target.value)}
+              placeholder="تفاصيل أكتر عن المهمة"
+              rows={3}
+              className="w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none resize-none"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-muted-foreground mb-2">الأولوية</label>
+              <div className="inline-flex w-full rounded-xl bg-secondary p-1">
+                {PRIORITY_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.key}
+                    type="button"
+                    onClick={() => setPriority(opt.key)}
+                    className={`flex-1 rounded-lg px-2 py-2 text-xs font-semibold transition ${
+                      priority === opt.key ? "bg-card text-primary shadow-warm" : "text-muted-foreground"
+                    }`}
+                  >
+                    {opt.ar}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-muted-foreground mb-2">تاريخ التسليم</label>
+              <input
+                type="date"
+                value={dueDateStr}
+                min={todayInputValue()}
+                onChange={(e) => {
+                  setDueDateStr(e.target.value);
+                  if (error) setError("");
+                }}
+                className="w-full h-11 rounded-xl border border-border bg-background px-3 text-sm focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none"
+              />
+            </div>
+          </div>
+
+          {error && <p className="text-xs text-destructive font-semibold">{error}</p>}
+        </div>
+
+        <div className="flex items-center gap-3 mt-6">
+          <button
+            onClick={handleSubmit}
+            className="flex-1 bg-primary text-primary-foreground rounded-xl px-4 py-3 text-sm font-bold hover:bg-primary-dark transition"
+          >
+            إضافة المهمة
+          </button>
+          <button
+            onClick={onClose}
+            className="flex-1 bg-secondary text-foreground rounded-xl px-4 py-3 text-sm font-bold hover:opacity-80 transition"
+          >
+            إلغاء
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function TaskDrawer({

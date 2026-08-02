@@ -4,42 +4,94 @@
 import { PortalLayout, Card } from "@/components/portal-layout";
 import { useToast } from "@/components/toast";
 import { useState } from "react";
-import { Image as ImageIcon, Film, LayoutTemplate, Phone, TrendingUp, TrendingDown, User, Truck } from "lucide-react";
+import * as XLSX from "xlsx";
+import { Image as ImageIcon, Film, LayoutTemplate, TrendingUp, TrendingDown, User, Truck, MessageCircle, Download } from "lucide-react";
 
-type Tab = "social" | "call" | "dash";
+type Tab = "social" | "dash";
+
+const INITIAL_COUNTS = { posts: 34, reels: 12, stories: 58 };
 
 export default function DepartmentPage() {
+  const showToast = useToast();
   const [tab, setTab] = useState<Tab>("social");
+  const [counts, setCounts] = useState(INITIAL_COUNTS);
+  const [drivers, setDrivers] = useState<Driver[]>(initialDrivers);
+
+  const handleExport = () => {
+    const wb = XLSX.utils.book_new();
+
+    const socialSheet = XLSX.utils.json_to_sheet([
+      { "المؤشر": "عدد البوستات", "القيمة": counts.posts },
+      { "المؤشر": "عدد الريلز", "القيمة": counts.reels },
+      { "المؤشر": "عدد الستوري", "القيمة": counts.stories },
+    ]);
+    XLSX.utils.book_append_sheet(wb, socialSheet, "السوشيال ميديا");
+
+    const driversSheet = XLSX.utils.json_to_sheet(
+      drivers.map((d) => ({
+        "اسم المندوب": d.name,
+        "الحالة": d.status,
+        "عدد التعليقات": d.comments.length,
+        "آخر تعليق": d.comments[d.comments.length - 1]?.text || "",
+      }))
+    );
+    XLSX.utils.book_append_sheet(wb, driversSheet, "المناديب");
+
+    const commentsRows = drivers.flatMap((d) =>
+      d.comments.map((c) => ({ "اسم المندوب": d.name, "التعليق": c.text, "التوقيت": c.time }))
+    );
+    if (commentsRows.length > 0) {
+      const commentsSheet = XLSX.utils.json_to_sheet(commentsRows);
+      XLSX.utils.book_append_sheet(wb, commentsSheet, "تفاصيل التعليقات");
+    }
+
+    const dateStr = new Date().toISOString().slice(0, 10);
+    XLSX.writeFile(wb, `تقرير_شغل_القسم_${dateStr}.xlsx`);
+    showToast("success", "تم تصدير التقرير بصيغة إكسيل");
+  };
+
   return (
     <PortalLayout title="شغل القسم" subtitle="بيانات وتسجيل أعمال قسمك">
-      <div className="inline-flex rounded-xl bg-secondary p-1 mb-6 flex-wrap">
-        {[
-          { k: "social", ar: "السوشيال ميديا" },
-          { k: "call", ar: "الكول سنتر / التسويق" },
-          { k: "dash", ar: "المناديب / Dash" },
-        ].map((t) => (
-          <button key={t.k} onClick={() => setTab(t.k as Tab)}
-            className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${tab === t.k ? "bg-card text-primary shadow-warm" : "text-muted-foreground"}`}>
-            {t.ar}
-          </button>
-        ))}
+      <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
+        <div className="inline-flex rounded-xl bg-secondary p-1 flex-wrap">
+          {[
+            { k: "social", ar: "السوشيال ميديا" },
+            { k: "dash", ar: "المناديب / Dash" },
+          ].map((t) => (
+            <button key={t.k} onClick={() => setTab(t.k as Tab)}
+              className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${tab === t.k ? "bg-card text-primary shadow-warm" : "text-muted-foreground"}`}>
+              {t.ar}
+            </button>
+          ))}
+        </div>
+
+        <button
+          onClick={handleExport}
+          className="inline-flex items-center gap-2 bg-success text-success-foreground rounded-xl px-4 py-2.5 text-sm font-bold hover:opacity-90 transition shadow-warm"
+        >
+          <Download className="h-4 w-4" />
+          تصدير إلى إكسيل
+        </button>
       </div>
 
-      {tab === "social" && <SocialVariant />}
-      {tab === "call" && <CallVariant />}
-      {tab === "dash" && <DashVariant />}
+      {tab === "social" && <SocialVariant counts={counts} setCounts={setCounts} />}
+      {tab === "dash" && <DashVariant drivers={drivers} setDrivers={setDrivers} />}
     </PortalLayout>
   );
 }
 
-function SocialVariant() {
+function SocialVariant({
+  counts,
+  setCounts,
+}: {
+  counts: { posts: number; reels: number; stories: number };
+  setCounts: React.Dispatch<React.SetStateAction<{ posts: number; reels: number; stories: number }>>;
+}) {
   const showToast = useToast();
   const [platform, setPlatform] = useState("Instagram");
   const [contentType, setContentType] = useState("بوست");
   const [link, setLink] = useState("");
   const [error, setError] = useState("");
-
-  const [counts, setCounts] = useState({ posts: 34, reels: 12, stories: 58 });
 
   const handleSave = () => {
     if (!link.trim()) {
@@ -87,138 +139,36 @@ function SocialVariant() {
   );
 }
 
-function CallVariant() {
-  const showToast = useToast();
-  const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
-  const [result, setResult] = useState("لم يرد");
-  const [notes, setNotes] = useState("");
-  const [errors, setErrors] = useState<{ name?: string; phone?: string }>({});
-
-  const [stats, setStats] = useState({ calls: 248, leads: 87, interested: 34, meetings: 9 });
-
-  const handleSave = () => {
-    const newErrors: typeof errors = {};
-    if (!name.trim()) newErrors.name = "الاسم مطلوب";
-    if (!phone.trim()) newErrors.phone = "رقم الهاتف مطلوب";
-    if (Object.keys(newErrors).length) {
-      setErrors(newErrors);
-      showToast("error", "فيه حقول ناقصة في الفورم");
-      return;
-    }
-    setErrors({});
-    setStats((prev) => ({
-      calls: prev.calls + 1,
-      leads: prev.leads + (result === "مهتم" || result === "متابعة" ? 1 : 0),
-      interested: prev.interested + (result === "مهتم" ? 1 : 0),
-      meetings: prev.meetings + (result === "مقابلة" ? 1 : 0),
-    }));
-    setName(""); setPhone(""); setNotes(""); setResult("لم يرد");
-    showToast("success", `تم حفظ المكالمة مع ${name || "العميل"}`);
-  };
-
-  return (
-    <>
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <MetricCard icon={Phone} label="عدد المكالمات" value={String(stats.calls)} tone="primary" trendUp="+12%" />
-        <MetricCard icon={TrendingUp} label="عدد الليدز" value={String(stats.leads)} tone="teal" trendUp="+8%" />
-        <MetricCard icon={TrendingUp} label="عدد المهتمين" value={String(stats.interested)} tone="success" trendUp="+3" />
-        <MetricCard icon={TrendingDown} label="عدد المقابلات" value={String(stats.meetings)} tone="warning" trendDown="-1" />
-      </div>
-      <div className="grid lg:grid-cols-3 gap-6">
-        <Card className="p-6 lg:col-span-2">
-          <h3 className="font-bold text-foreground mb-4">تسجيل مكالمة</h3>
-          <div className="grid md:grid-cols-2 gap-4">
-            <div>
-              <label className="text-sm font-semibold text-foreground">الاسم</label>
-              <input
-                value={name}
-                onChange={(e) => { setName(e.target.value); setErrors((p) => ({ ...p, name: undefined })); }}
-                placeholder="اسم العميل"
-                className={`mt-2 w-full h-11 rounded-xl border bg-card focus:ring-2 outline-none px-3 text-sm
-                  ${errors.name ? "border-destructive focus:border-destructive focus:ring-destructive/20" : "border-border focus:border-primary focus:ring-primary/20"}`}
-              />
-              {errors.name && <p className="text-xs text-destructive mt-1.5">{errors.name}</p>}
-            </div>
-            <div>
-              <label className="text-sm font-semibold text-foreground">الهاتف</label>
-              <input
-                value={phone}
-                onChange={(e) => { setPhone(e.target.value); setErrors((p) => ({ ...p, phone: undefined })); }}
-                placeholder="+20 ..."
-                className={`mt-2 w-full h-11 rounded-xl border bg-card focus:ring-2 outline-none px-3 text-sm
-                  ${errors.phone ? "border-destructive focus:border-destructive focus:ring-destructive/20" : "border-border focus:border-primary focus:ring-primary/20"}`}
-              />
-              {errors.phone && <p className="text-xs text-destructive mt-1.5">{errors.phone}</p>}
-            </div>
-            <div>
-              <label className="text-sm font-semibold text-foreground">النتيجة</label>
-              <select value={result} onChange={(e) => setResult(e.target.value)} className="mt-2 w-full h-11 rounded-xl border border-border bg-card px-3 text-sm">
-                <option>لم يرد</option><option>مهتم</option><option>غير مهتم</option><option>متابعة</option><option>مقابلة</option>
-              </select>
-            </div>
-            <div className="md:col-span-2">
-              <label className="text-sm font-semibold text-foreground">الملاحظات</label>
-              <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} className="mt-2 w-full rounded-xl border border-border bg-card focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none p-3 text-sm resize-none" />
-            </div>
-          </div>
-          <button onClick={handleSave} className="mt-6 bg-primary text-primary-foreground rounded-xl px-6 py-2.5 text-sm font-semibold hover:bg-[color:var(--primary-dark)] transition">حفظ المكالمة</button>
-        </Card>
-        <Card className="p-6">
-          <h3 className="font-bold text-foreground mb-4">توزيع النتائج</h3>
-          <Donut />
-          <div className="mt-4 space-y-2 text-sm">
-            {[
-              { ar: "مهتم", pct: 38, color: "var(--primary)" },
-              { ar: "متابعة", pct: 26, color: "var(--teal)" },
-              { ar: "مقابلة", pct: 14, color: "var(--success)" },
-              { ar: "لم يرد", pct: 22, color: "var(--warning)" },
-            ].map((s) => (
-              <div key={s.ar} className="flex items-center gap-2">
-                <span className="h-2.5 w-2.5 rounded-full" style={{ background: s.color }} />
-                <span className="flex-1 text-muted-foreground">{s.ar}</span>
-                <span className="font-bold tabular-nums">{s.pct}%</span>
-              </div>
-            ))}
-          </div>
-        </Card>
-      </div>
-    </>
-  );
-}
-
 type DriverStatus = "نشط" | "متغيب" | "مخالفة";
-type Driver = { id: string; name: string; status: DriverStatus };
+type DriverComment = { text: string; time: string };
+type Driver = { id: string; name: string; status: DriverStatus; comments: DriverComment[] };
 
-const initialDrivers: Record<string, Driver[]> = {
-  eg: [
-    { id: "eg-1", name: "أحمد صلاح", status: "نشط" },
-    { id: "eg-2", name: "محمود جابر", status: "نشط" },
-    { id: "eg-3", name: "كريم عادل", status: "متغيب" },
-  ],
-  sa: [
-    { id: "sa-1", name: "خالد الحربي", status: "نشط" },
-    { id: "sa-2", name: "فهد العتيبي", status: "مخالفة" },
-  ],
-  ae: [
-    { id: "ae-1", name: "راشد المهيري", status: "نشط" },
-  ],
-};
+const initialDrivers: Driver[] = [
+  { id: "eg-1", name: "أحمد صلاح", status: "نشط", comments: [] },
+  { id: "eg-2", name: "محمود جابر", status: "نشط", comments: [] },
+  { id: "eg-3", name: "كريم عادل", status: "متغيب", comments: [{ text: "متأخر في التسليم يومين ورا بعض", time: "أمس" }] },
+];
 
-function DashVariant() {
+function DashVariant({
+  drivers,
+  setDrivers,
+}: {
+  drivers: Driver[];
+  setDrivers: React.Dispatch<React.SetStateAction<Driver[]>>;
+}) {
   const showToast = useToast();
-  const [country, setCountry] = useState("eg");
-  const [drivers, setDrivers] = useState<Record<string, Driver[]>>(initialDrivers);
 
   const [name, setName] = useState("");
   const [status, setStatus] = useState<DriverStatus>("نشط");
   const [error, setError] = useState("");
 
-  const list = drivers[country];
+  const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
+  const [openComments, setOpenComments] = useState<Record<string, boolean>>({});
+
   const current = {
-    active: list.filter((d) => d.status === "نشط").length,
-    absent: list.filter((d) => d.status === "متغيب").length,
-    violations: list.filter((d) => d.status === "مخالفة").length,
+    active: drivers.filter((d) => d.status === "نشط").length,
+    absent: drivers.filter((d) => d.status === "متغيب").length,
+    violations: drivers.filter((d) => d.status === "مخالفة").length,
   };
 
   const handleSave = () => {
@@ -228,31 +178,31 @@ function DashVariant() {
       return;
     }
     setError("");
-    const newDriver: Driver = { id: `${country}-${Date.now()}`, name: name.trim(), status };
-    setDrivers((prev) => ({ ...prev, [country]: [newDriver, ...prev[country]] }));
+    const newDriver: Driver = { id: `eg-${Date.now()}`, name: name.trim(), status, comments: [] };
+    setDrivers((prev) => [newDriver, ...prev]);
     setName("");
     setStatus("نشط");
     showToast("success", `تم تسجيل المندوب ${newDriver.name}`);
   };
 
   const handleStatusChange = (id: string, newStatus: DriverStatus) => {
-    setDrivers((prev) => ({
-      ...prev,
-      [country]: prev[country].map((d) => (d.id === id ? { ...d, status: newStatus } : d)),
-    }));
+    setDrivers((prev) => prev.map((d) => (d.id === id ? { ...d, status: newStatus } : d)));
+  };
+
+  const handleAddComment = (id: string) => {
+    const text = (commentDrafts[id] || "").trim();
+    if (!text) {
+      showToast("error", "اكتب تعليق الأول قبل الإضافة");
+      return;
+    }
+    const comment: DriverComment = { text, time: "الآن" };
+    setDrivers((prev) => prev.map((d) => (d.id === id ? { ...d, comments: [...d.comments, comment] } : d)));
+    setCommentDrafts((prev) => ({ ...prev, [id]: "" }));
+    showToast("success", "تم إضافة التعليق");
   };
 
   return (
     <>
-      <div className="inline-flex rounded-xl bg-secondary p-1 mb-6">
-        {[{ k: "eg", f: "🇪🇬", ar: "مصر" }, { k: "sa", f: "🇸🇦", ar: "السعودية" }, { k: "ae", f: "🇦🇪", ar: "الإمارات" }].map((c) => (
-          <button key={c.k} onClick={() => setCountry(c.k)}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition ${country === c.k ? "bg-card text-primary shadow-warm" : "text-muted-foreground"}`}>
-            <span className="text-base">{c.f}</span> {c.ar}
-          </button>
-        ))}
-      </div>
-
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <MetricCard icon={TrendingUp} label="عدد النشطين" value={String(current.active)} tone="success" />
         <MetricCard icon={TrendingDown} label="عدد المتغيبين" value={String(current.absent)} tone="muted" />
@@ -288,46 +238,75 @@ function DashVariant() {
             <Truck className="h-4 w-4 text-primary" /> قائمة المناديب
           </h3>
           <div className="space-y-2">
-            {list.length === 0 && (
-              <p className="text-sm text-muted-foreground">لسه مفيش مناديب مسجلين في الدولة دي</p>
+            {drivers.length === 0 && (
+              <p className="text-sm text-muted-foreground">لسه مفيش مناديب مسجلين</p>
             )}
-            {list.map((d) => (
-              <div key={d.id} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3">
-                <span className="font-semibold text-foreground text-sm">{d.name}</span>
-                <select
-                  value={d.status}
-                  onChange={(e) => handleStatusChange(d.id, e.target.value as DriverStatus)}
-                  className={`h-9 rounded-lg border px-2.5 text-xs font-semibold outline-none
-                    ${d.status === "نشط" ? "border-success/30 bg-success/10 text-success" :
-                      d.status === "متغيب" ? "border-border bg-muted text-muted-foreground" :
-                      "border-destructive/30 bg-destructive/10 text-destructive"}`}
-                >
-                  <option>نشط</option>
-                  <option>متغيب</option>
-                  <option>مخالفة</option>
-                </select>
-              </div>
-            ))}
+            {drivers.map((d) => {
+              const isOpen = !!openComments[d.id];
+              return (
+                <div key={d.id} className="rounded-xl border border-border bg-card px-4 py-3">
+                  <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <span className="font-semibold text-foreground text-sm">{d.name}</span>
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={d.status}
+                        onChange={(e) => handleStatusChange(d.id, e.target.value as DriverStatus)}
+                        className={`h-9 rounded-lg border px-2.5 text-xs font-semibold outline-none
+                          ${d.status === "نشط" ? "border-success/30 bg-success/10 text-success" :
+                            d.status === "متغيب" ? "border-border bg-muted text-muted-foreground" :
+                            "border-destructive/30 bg-destructive/10 text-destructive"}`}
+                      >
+                        <option>نشط</option>
+                        <option>متغيب</option>
+                        <option>مخالفة</option>
+                      </select>
+                      <button
+                        onClick={() => setOpenComments((prev) => ({ ...prev, [d.id]: !prev[d.id] }))}
+                        className="flex items-center gap-1.5 h-9 rounded-lg border border-border px-2.5 text-xs font-semibold text-muted-foreground hover:text-primary hover:border-primary/40 transition"
+                      >
+                        <MessageCircle className="h-3.5 w-3.5" />
+                        تعليقات {d.comments.length > 0 && `(${d.comments.length})`}
+                      </button>
+                    </div>
+                  </div>
+
+                  {isOpen && (
+                    <div className="mt-3 pt-3 border-t border-border/60 space-y-2">
+                      {d.comments.length === 0 && (
+                        <p className="text-xs text-muted-foreground">لا توجد تعليقات بعد.</p>
+                      )}
+                      {d.comments.map((c, i) => (
+                        <div key={i} className="bg-secondary/50 rounded-lg px-3 py-2">
+                          <div className="flex items-center justify-between mb-0.5">
+                            <span className="text-xs text-muted-foreground">{c.time}</span>
+                          </div>
+                          <p className="text-sm text-foreground">{c.text}</p>
+                        </div>
+                      ))}
+                      <div className="flex gap-2 pt-1">
+                        <input
+                          value={commentDrafts[d.id] || ""}
+                          onChange={(e) => setCommentDrafts((prev) => ({ ...prev, [d.id]: e.target.value }))}
+                          onKeyDown={(e) => e.key === "Enter" && handleAddComment(d.id)}
+                          placeholder="اكتب تعليق..."
+                          className="flex-1 h-9 rounded-lg border border-border bg-background px-3 text-xs outline-none focus:border-primary"
+                        />
+                        <button
+                          onClick={() => handleAddComment(d.id)}
+                          className="bg-primary text-primary-foreground rounded-lg px-3 text-xs font-semibold hover:bg-[color:var(--primary-dark)] transition"
+                        >
+                          إضافة
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </Card>
       </div>
     </>
-  );
-}
-
-function Donut() {
-  const segs = [{ p: 38, c: "var(--primary)" }, { p: 26, c: "var(--teal)" }, { p: 14, c: "var(--success)" }, { p: 22, c: "var(--warning)" }];
-  let offset = 25;
-  return (
-    <svg viewBox="0 0 36 36" className="mx-auto h-40 w-40 -rotate-90">
-      <circle cx="18" cy="18" r="15.9" fill="none" stroke="var(--color-border)" strokeWidth="3.5" />
-      {segs.map((s, i) => {
-        const el = <circle key={i} cx="18" cy="18" r="15.9" fill="none" stroke={s.c} strokeWidth="3.5"
-          strokeDasharray={`${s.p} ${100 - s.p}`} strokeDashoffset={-offset + 25} />;
-        offset += s.p;
-        return el;
-      })}
-    </svg>
   );
 }
 

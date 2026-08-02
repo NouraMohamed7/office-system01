@@ -3,10 +3,11 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { Avatar, Card, PageHeader, Pill, ProgressBar, StatCard } from "@/components/manager/primitives";
+import { Avatar, Card, PageHeader, Pill, StatCard } from "@/components/manager/primitives";
 import { useToast } from "@/components/toast";
+import * as XLSX from "xlsx";
 import {
-  Plus, Search, Users, MoreVertical, X, Eye, EyeOff, RefreshCw, Copy, Trash2, Power, Pencil,
+  Plus, Search, Users, MoreVertical, X, Eye, EyeOff, RefreshCw, Copy, Trash2, Power, Pencil, FileSpreadsheet,
 } from "lucide-react";
 
 type Tone = "success" | "warning" | "danger" | "teal" | "muted" | "primary";
@@ -17,7 +18,6 @@ type Employee = {
   id: string;
   name: string;
   dept: string;
-  role: string;
   branch: string;
   personalPhone: string;
   workPhone: string;
@@ -26,11 +26,10 @@ type Employee = {
   password: string;
   status: EmployeeStatus;
   tone: Tone;
-  done: number;
   last: string;
 };
 
-const DEPARTMENTS = ["السوشيال ميديا", "الكول سنتر", "التسويق", "المبيعات", "التصميم", "الإدارة"];
+const DEPARTMENTS = ["سوشيال ميديا", "تسويق", "داش", "كول سنتر"];
 
 const STATUS_TONE: Record<EmployeeStatus, Tone> = {
   "نشط": "success",
@@ -86,19 +85,18 @@ function generatePassword(length = 10) {
 }
 
 const initialEmployees: Employee[] = [
-  { id: "1", name: "نورا حسن", dept: "السوشيال ميديا", role: "Social Media Specialist", branch: "القاهرة", personalPhone: "01011122233", workPhone: "01099988877", saudiPhone: "0512345678", email: "nora.hassan@marketingco.com", password: "Xk9mPz2Qa", status: "نشط", tone: "success", done: 92, last: "اليوم 08:35" },
-  { id: "2", name: "محمود علي", dept: "الكول سنتر", role: "Call Center Agent", branch: "الإسكندرية", personalPhone: "01123344556", workPhone: "01288877665", saudiPhone: "0555566778", email: "mahmoud.ali@marketingco.com", password: "Rj4tYw8Nb", status: "نشط", tone: "success", done: 78, last: "اليوم 09:02" },
-  { id: "3", name: "سارة إبراهيم", dept: "التسويق", role: "Marketing Manager", branch: "القاهرة", personalPhone: "01234455667", workPhone: "01555566778", saudiPhone: "0533221144", email: "sara.ibrahim@marketingco.com", password: "Hs3vLm7Kd", status: "في إجازة", tone: "teal", done: 65, last: "أمس 09:10" },
-  { id: "4", name: "كريم سعيد", dept: "المبيعات", role: "Sales Rep", branch: "الجيزة", personalPhone: "01055667788", workPhone: "01166778899", saudiPhone: "0567788990", email: "karim.saeed@marketingco.com", password: "Fg6bQx4Tp", status: "متأخر", tone: "warning", done: 54, last: "اليوم 10:22" },
-  { id: "5", name: "دينا فتحي", dept: "التصميم", role: "Graphic Designer", branch: "القاهرة", personalPhone: "01277889900", workPhone: "01399001122", saudiPhone: "0544332211", email: "dina.fathy@marketingco.com", password: "Wm8nJc5Ry", status: "نشط", tone: "success", done: 88, last: "اليوم 08:50" },
-  { id: "6", name: "خالد يوسف", dept: "المبيعات", role: "Sales Rep", branch: "الإسكندرية", personalPhone: "01500112233", workPhone: "01011223344", saudiPhone: "0522113344", email: "khaled.youssef@marketingco.com", password: "Dp2sVn9Lc", status: "غائب", tone: "danger", done: 40, last: "قبل 3 أيام" },
+  { id: "1", name: "نورا حسن", dept: "سوشيال ميديا", branch: "القاهرة", personalPhone: "01011122233", workPhone: "01099988877", saudiPhone: "0512345678", email: "nora.hassan@marketingco.com", password: "Xk9mPz2Qa", status: "نشط", tone: "success", last: "اليوم 08:35" },
+  { id: "2", name: "محمود علي", dept: "كول سنتر", branch: "الإسكندرية", personalPhone: "01123344556", workPhone: "01288877665", saudiPhone: "0555566778", email: "mahmoud.ali@marketingco.com", password: "Rj4tYw8Nb", status: "نشط", tone: "success", last: "اليوم 09:02" },
+  { id: "3", name: "سارة إبراهيم", dept: "تسويق", branch: "القاهرة", personalPhone: "01234455667", workPhone: "01555566778", saudiPhone: "0533221144", email: "sara.ibrahim@marketingco.com", password: "Hs3vLm7Kd", status: "في إجازة", tone: "teal", last: "أمس 09:10" },
+  { id: "4", name: "كريم سعيد", dept: "داش", branch: "الجيزة", personalPhone: "01055667788", workPhone: "01166778899", saudiPhone: "0567788990", email: "karim.saeed@marketingco.com", password: "Fg6bQx4Tp", status: "متأخر", tone: "warning", last: "اليوم 10:22" },
+  { id: "5", name: "دينا فتحي", dept: "سوشيال ميديا", branch: "القاهرة", personalPhone: "01277889900", workPhone: "01399001122", saudiPhone: "0544332211", email: "dina.fathy@marketingco.com", password: "Wm8nJc5Ry", status: "نشط", tone: "success", last: "اليوم 08:50" },
+  { id: "6", name: "خالد يوسف", dept: "داش", branch: "الإسكندرية", personalPhone: "01500112233", workPhone: "01011223344", saudiPhone: "0522113344", email: "khaled.youssef@marketingco.com", password: "Dp2sVn9Lc", status: "غائب", tone: "danger", last: "قبل 3 أيام" },
 ];
 
 type FormState = {
   name: string;
   englishName: string;
   dept: string;
-  role: string;
   branch: string;
   personalPhone: string;
   workPhone: string;
@@ -108,7 +106,7 @@ type FormState = {
 };
 
 const emptyForm: FormState = {
-  name: "", englishName: "", dept: "", role: "", branch: "",
+  name: "", englishName: "", dept: "", branch: "",
   personalPhone: "", workPhone: "", saudiPhone: "", email: "", password: "",
 };
 
@@ -118,7 +116,7 @@ export default function EmployeesPage() {
   const [search, setSearch] = useState("");
   const [deptFilter, setDeptFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
-  const [sortBy, setSortBy] = useState("done_desc");
+  const [sortBy, setSortBy] = useState("newest");
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
 
   const [modalOpen, setModalOpen] = useState(false);
@@ -131,15 +129,20 @@ export default function EmployeesPage() {
   const filtered = useMemo(() => {
     let list = employees.filter((e) => {
       const q = search.trim();
-      if (q && !e.name.includes(q) && !e.email.includes(q)) return false;
+      if (
+        q &&
+        !e.name.includes(q) &&
+        !e.email.includes(q) &&
+        !e.personalPhone.includes(q) &&
+        !e.workPhone.includes(q)
+      ) return false;
       if (deptFilter && e.dept !== deptFilter) return false;
       if (statusFilter && e.status !== statusFilter) return false;
       return true;
     });
     list = [...list].sort((a, b) => {
-      if (sortBy === "done_desc") return b.done - a.done;
-      if (sortBy === "done_asc") return a.done - b.done;
       if (sortBy === "newest") return Number(b.id) - Number(a.id);
+      if (sortBy === "name") return a.name.localeCompare(b.name, "ar");
       return 0;
     });
     return list;
@@ -164,7 +167,7 @@ export default function EmployeesPage() {
   function openEditModal(emp: Employee) {
     setEditingId(emp.id);
     setForm({
-      name: emp.name, englishName: "", dept: emp.dept, role: emp.role, branch: emp.branch,
+      name: emp.name, englishName: "", dept: emp.dept, branch: emp.branch,
       personalPhone: emp.personalPhone, workPhone: emp.workPhone, saudiPhone: emp.saudiPhone,
       email: emp.email, password: emp.password,
     });
@@ -254,7 +257,6 @@ export default function EmployeesPage() {
         ...emp,
         name: form.name.trim(),
         dept: form.dept,
-        role: form.role.trim() || emp.role,
         branch: form.branch.trim() || emp.branch,
         personalPhone: normalizePhone(form.personalPhone),
         workPhone: normalizePhone(form.workPhone),
@@ -268,7 +270,6 @@ export default function EmployeesPage() {
         id: String(Date.now()),
         name: form.name.trim(),
         dept: form.dept,
-        role: form.role.trim() || "-",
         branch: form.branch.trim() || "-",
         personalPhone: normalizePhone(form.personalPhone),
         workPhone: normalizePhone(form.workPhone),
@@ -277,7 +278,6 @@ export default function EmployeesPage() {
         password: form.password,
         status: "نشط",
         tone: "success",
-        done: 0,
         last: "لم يسجل الدخول بعد",
       };
       setEmployees((list) => [newEmployee, ...list]);
@@ -300,18 +300,60 @@ export default function EmployeesPage() {
     setOpenMenuId(null);
   }
 
+  function handleExportExcel() {
+    if (filtered.length === 0) {
+      showToast("error", "مفيش بيانات عشان تتصدّر");
+      return;
+    }
+
+    const rows = filtered.map((e) => ({
+      "الاسم": e.name,
+      "القسم": e.dept,
+      "الفرع": e.branch,
+      "الهاتف الشخصي": e.personalPhone,
+      "هاتف الشغل": e.workPhone,
+      "الهاتف السعودي": e.saudiPhone,
+      "الإيميل": e.email,
+      "الباسورد": e.password,
+      "الحالة": e.status,
+      "آخر حضور": e.last,
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    worksheet["!cols"] = [
+      { wch: 20 }, { wch: 15 }, { wch: 14 }, { wch: 15 },
+      { wch: 15 }, { wch: 15 }, { wch: 26 }, { wch: 14 }, { wch: 12 }, { wch: 16 },
+    ];
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "الموظفون");
+
+    const dateStr = new Date().toISOString().slice(0, 10);
+    XLSX.writeFile(workbook, `الموظفون-${dateStr}.xlsx`);
+
+    showToast("success", `تم تصدير ${filtered.length} موظف لملف Excel`);
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader
         title="الموظفون"
         subtitle="إدارة كاملة لبيانات الموظفين والأداء."
         actions={
-          <button
-            onClick={openAddModal}
-            className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-warm hover:bg-primary-dark"
-          >
-            <Plus className="size-4" /> إضافة موظف جديد
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleExportExcel}
+              className="inline-flex items-center gap-2 rounded-xl bg-success px-4 py-2 text-sm font-semibold text-success-foreground shadow-warm hover:opacity-90"
+            >
+              <FileSpreadsheet className="size-4" /> تصدير Excel
+            </button>
+            <button
+              onClick={openAddModal}
+              className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-warm hover:bg-primary-dark"
+            >
+              <Plus className="size-4" /> إضافة موظف جديد
+            </button>
+          </div>
         }
       />
 
@@ -330,7 +372,7 @@ export default function EmployeesPage() {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="h-10 w-full rounded-xl border border-border bg-background pr-10 pl-4 text-sm outline-none focus:border-primary/50"
-              placeholder="ابحث بالاسم أو الإيميل..."
+              placeholder="ابحث بالاسم أو الإيميل أو رقم التلفون..."
             />
           </div>
 
@@ -358,9 +400,8 @@ export default function EmployeesPage() {
               onChange={(e) => setSortBy(e.target.value)}
               className="h-10 rounded-xl border border-border bg-background px-3 text-xs outline-none"
             >
-              <option value="done_desc">ترتيب: الأعلى أداءً</option>
-              <option value="done_asc">الأقل أداءً</option>
-              <option value="newest">الأحدث إضافة</option>
+              <option value="newest">ترتيب: الأحدث إضافة</option>
+              <option value="name">الاسم (أ-ي)</option>
             </select>
           </div>
         </div>
@@ -371,7 +412,7 @@ export default function EmployeesPage() {
           <table className="w-full text-sm">
             <thead className="bg-accent/40 text-xs text-muted-foreground">
               <tr className="[&>th]:px-4 [&>th]:py-3 [&>th]:text-right">
-                <th>الموظف</th><th>القسم</th><th>الوظيفة</th><th>الفرع</th><th>الحالة</th><th>نسبة الإنجاز</th><th>آخر حضور</th><th></th>
+                <th>الموظف</th><th>رقم التلفون</th><th>القسم</th><th>الفرع</th><th>الحالة</th><th>آخر حضور</th><th></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -383,16 +424,10 @@ export default function EmployeesPage() {
                       <span className="font-semibold hover:text-primary">{e.name}</span>
                     </Link>
                   </td>
+                  <td className="px-4 py-3 text-xs tabular text-muted-foreground" dir="ltr">{e.personalPhone}</td>
                   <td className="px-4 py-3 text-muted-foreground">{e.dept}</td>
-                  <td className="px-4 py-3 text-muted-foreground">{e.role}</td>
                   <td className="px-4 py-3 text-muted-foreground">{e.branch}</td>
                   <td className="px-4 py-3"><Pill tone={e.tone}>{e.status}</Pill></td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-2">
-                      <ProgressBar value={e.done} />
-                      <span className="w-8 text-xs tabular text-muted-foreground">{e.done}%</span>
-                    </div>
-                  </td>
                   <td className="px-4 py-3 text-xs text-muted-foreground">{e.last}</td>
                   <td className="relative px-4 py-3">
                     <button
@@ -422,7 +457,7 @@ export default function EmployeesPage() {
               ))}
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-4 py-10 text-center text-sm text-muted-foreground">
+                  <td colSpan={7} className="px-4 py-10 text-center text-sm text-muted-foreground">
                     مفيش نتائج مطابقة للبحث/الفلتر
                   </td>
                 </tr>
@@ -472,14 +507,9 @@ export default function EmployeesPage() {
                 </select>
               </Field>
 
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="الوظيفة (اختياري)">
-                  <input value={form.role} onChange={(e) => updateField("role", e.target.value)} className={inputClass(false)} placeholder="مثال: Sales Rep" />
-                </Field>
-                <Field label="الفرع (اختياري)">
-                  <input value={form.branch} onChange={(e) => updateField("branch", e.target.value)} className={inputClass(false)} placeholder="مثال: القاهرة" />
-                </Field>
-              </div>
+              <Field label="الفرع (اختياري)">
+                <input value={form.branch} onChange={(e) => updateField("branch", e.target.value)} className={inputClass(false)} placeholder="مثال: القاهرة" />
+              </Field>
 
               <Field label="رقم التلفون الشخصي" error={errors.personalPhone} required>
                 <input

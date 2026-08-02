@@ -8,17 +8,17 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
+import { Building2 } from "lucide-react";
 
 const nav = [
   { to: "/manager/dashboard", icon: Home, ar: "الرئيسية", en: "Dashboard" },
   { to: "/manager/employees", icon: Users, ar: "الموظفون", en: "Employees" },
   { to: "/manager/attendance", icon: Clock, ar: "الحضور", en: "Attendance" },
   { to: "/manager/tasks", icon: ListChecks, ar: "المهام", en: "Tasks" },
-  { to: "/manager/reports", icon: FileText, ar: "التقارير اليومية", en: "Daily Reports" },
-  // { to: "/manager/department", icon: Building2, ar: "شغل القسم", en: "Department Work" },
+  { to: "/manager/reports", icon: FileText, ar: "التقارير اليومية", en: "Daily Reports" }, { to: "/manager/department", icon: Building2, ar: "شغل القسم", en: "Department Work" },
   { to: "/manager/representatives", icon: Truck, ar: "المناديب", en: "Representatives" },
   { to: "/manager/uploads", icon: UploadCloud, ar: "رفع الشيتات", en: "Upload Center" },
-  { to: "/manager/approvals", icon: CheckCircle2, ar: "الاعتمادات", en: "Approvals", badge: 14 },
+  // { to: "/manager/approvals", icon: CheckCircle2, ar: "الاعتمادات", en: "Approvals", badge: 14 },
   { to: "/manager/complaints", icon: MessageSquare, ar: "الشكاوى", en: "Complaints" },
   { to: "/manager/expenses", icon: Wallet, ar: "المصروفات", en: "Expenses" },
   { to: "/manager/cash", icon: Landmark, ar: "الخزنة", en: "Company Cash" },
