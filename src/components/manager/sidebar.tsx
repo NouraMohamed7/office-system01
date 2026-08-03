@@ -91,17 +91,6 @@ export function ManagerSidebar() {
                   </span>
                 </div>
               )}
-              {"badge" in item && item.badge ? (
-                <span
-                  className={cn(
-                    "grid min-w-5.5 shrink-0 place-items-center rounded-full px-1.5 text-[11px] font-bold tabular",
-                    active ? "bg-white text-primary" : "bg-primary text-primary-foreground",
-                    collapsed && "absolute -top-0.5 -left-0.5 size-4 min-w-0 text-[9px]",
-                  )}
-                >
-                  {item.badge}
-                </span>
-              ) : null}
             </Link>
           );
         })}
