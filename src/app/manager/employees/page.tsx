@@ -1,7 +1,7 @@
 // src/app/manager/employees/page.tsx
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import Link from "next/link";
 import { Avatar, Card, PageHeader, Pill, StatCard } from "@/components/manager/primitives";
 import { useToast } from "@/components/toast";
@@ -9,6 +9,8 @@ import * as XLSX from "xlsx";
 import {
   Plus, Search, Users, MoreVertical, X, Eye, EyeOff, RefreshCw, Copy, Trash2, Power, Pencil, FileSpreadsheet,
 } from "lucide-react";
+import { getDepartments, type Department } from "@/modules/department/api/department.api";
+import { getEmployees, createEmployee } from "@/modules/employees/api/employees.api";
 
 type Tone = "success" | "warning" | "danger" | "teal" | "muted" | "primary";
 
@@ -28,8 +30,6 @@ type Employee = {
   tone: Tone;
   last: string;
 };
-
-const DEPARTMENTS = ["سوشيال ميديا", "تسويق", "داش", "كول سنتر"];
 
 const STATUS_TONE: Record<EmployeeStatus, Tone> = {
   "نشط": "success",
@@ -84,15 +84,6 @@ function generatePassword(length = 10) {
   return out;
 }
 
-const initialEmployees: Employee[] = [
-  { id: "1", name: "نورا حسن", dept: "سوشيال ميديا", branch: "القاهرة", personalPhone: "01011122233", workPhone: "01099988877", saudiPhone: "0512345678", email: "nora.hassan@marketingco.com", password: "Xk9mPz2Qa", status: "نشط", tone: "success", last: "اليوم 08:35" },
-  { id: "2", name: "محمود علي", dept: "كول سنتر", branch: "الإسكندرية", personalPhone: "01123344556", workPhone: "01288877665", saudiPhone: "0555566778", email: "mahmoud.ali@marketingco.com", password: "Rj4tYw8Nb", status: "نشط", tone: "success", last: "اليوم 09:02" },
-  { id: "3", name: "سارة إبراهيم", dept: "تسويق", branch: "القاهرة", personalPhone: "01234455667", workPhone: "01555566778", saudiPhone: "0533221144", email: "sara.ibrahim@marketingco.com", password: "Hs3vLm7Kd", status: "في إجازة", tone: "teal", last: "أمس 09:10" },
-  { id: "4", name: "كريم سعيد", dept: "داش", branch: "الجيزة", personalPhone: "01055667788", workPhone: "01166778899", saudiPhone: "0567788990", email: "karim.saeed@marketingco.com", password: "Fg6bQx4Tp", status: "متأخر", tone: "warning", last: "اليوم 10:22" },
-  { id: "5", name: "دينا فتحي", dept: "سوشيال ميديا", branch: "القاهرة", personalPhone: "01277889900", workPhone: "01399001122", saudiPhone: "0544332211", email: "dina.fathy@marketingco.com", password: "Wm8nJc5Ry", status: "نشط", tone: "success", last: "اليوم 08:50" },
-  { id: "6", name: "خالد يوسف", dept: "داش", branch: "الإسكندرية", personalPhone: "01500112233", workPhone: "01011223344", saudiPhone: "0522113344", email: "khaled.youssef@marketingco.com", password: "Dp2sVn9Lc", status: "غائب", tone: "danger", last: "قبل 3 أيام" },
-];
-
 type FormState = {
   name: string;
   englishName: string;
@@ -112,7 +103,51 @@ const emptyForm: FormState = {
 
 export default function EmployeesPage() {
   const showToast = useToast();
-  const [employees, setEmployees] = useState<Employee[]>(initialEmployees);
+
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [departments, setDepartments] = useState<Department[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    async function loadData() {
+      try {
+        const [depts, emps] = await Promise.all([
+          getDepartments(),
+          getEmployees(),
+        ]);
+
+        setDepartments(depts);
+
+        // نحول شكل البيانات من الباك لشكل الـ Employee اللي الصفحة متوقعاه
+        // الأرقام (personalPhone/workPhone/saudiPhone) بقت جايه حقيقي من جدول phone
+        const mapped: Employee[] = emps.map((e) => ({
+          id: e.id,
+          name: e.full_name,
+          dept: e.department?.name ?? "-",
+          branch: e.branch?.city ?? "-",
+          personalPhone: e.personalPhone,
+          workPhone: e.workPhone,
+          saudiPhone: e.saudiPhone,
+          email: e.email,
+          password: "", // مش هيترجع من الباك لأسباب أمنية
+          status: (e.emp_status as EmployeeStatus) || "نشط",
+          tone: STATUS_TONE[(e.emp_status as EmployeeStatus) || "نشط"],
+          last: "-",
+        }));
+
+        setEmployees(mapped);
+      } catch (err) {
+        setLoadError(err instanceof Error ? err.message : "حصل خطأ في تحميل البيانات");
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    loadData();
+  }, []);
+
   const [search, setSearch] = useState("");
   const [deptFilter, setDeptFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -245,13 +280,14 @@ export default function EmployeesPage() {
     return Object.keys(next).length === 0;
   }
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!validate()) {
       showToast("error", "في بيانات ناقصة أو غير صحيحة، راجع الحقول باللون الأحمر");
       return;
     }
 
+    // --- التعديل: لسه شغال في الذاكرة بس، هنربطه بالباك في خطوة تانية ---
     if (editingId) {
       setEmployees((list) => list.map((emp) => emp.id === editingId ? {
         ...emp,
@@ -265,9 +301,41 @@ export default function EmployeesPage() {
         password: form.password,
       } : emp));
       showToast("success", `تم تحديث بيانات ${form.name}`);
-    } else {
+      setModalOpen(false);
+      return;
+    }
+
+    // --- الإضافة الحقيقية عن طريق create-user Edge Function ---
+    setSubmitting(true);
+    try {
+      const selectedDept = departments.find((d) => d.name === form.dept);
+      if (!selectedDept) {
+        showToast("error", "القسم المختار غير صحيح");
+        setSubmitting(false);
+        return;
+      }
+
+      const result = await createEmployee({
+        full_name: form.name.trim(),
+        email: form.email.trim(),
+        password: form.password,
+        phone_numbers: [
+          normalizePhone(form.personalPhone),
+          normalizePhone(form.workPhone),
+          normalizePhone(form.saudiPhone),
+        ].filter(Boolean),
+        department_id: selectedDept.id,
+        position_id: 1, // مؤقت لحد ما نضيف Dropdown حقيقي للوظائف
+        branch_id: 1,   // مؤقت لحد ما نضيف Dropdown حقيقي للفروع
+      });
+
+      showToast("success", `تم إضافة ${form.name} بنجاح — إيميل الدخول: ${form.email}`);
+
+      type CreateUserResult = { user?: { id?: string } };
+      const typedResult = result as CreateUserResult;
+
       const newEmployee: Employee = {
-        id: String(Date.now()),
+        id: typedResult?.user?.id || String(Date.now()),
         name: form.name.trim(),
         dept: form.dept,
         branch: form.branch.trim() || "-",
@@ -281,9 +349,13 @@ export default function EmployeesPage() {
         last: "لم يسجل الدخول بعد",
       };
       setEmployees((list) => [newEmployee, ...list]);
-      showToast("success", `تم إضافة ${form.name} — إيميل الدخول: ${newEmployee.email}`);
+      setModalOpen(false);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "حصل خطأ غير متوقع";
+      showToast("error", `فشلت إضافة الموظف: ${message}`);
+    } finally {
+      setSubmitting(false);
     }
-    setModalOpen(false);
   }
 
   function toggleStatus(emp: Employee) {
@@ -382,7 +454,7 @@ export default function EmployeesPage() {
             className="rounded-xl border border-border bg-background px-3 py-2 text-xs text-muted-foreground outline-none hover:bg-accent"
           >
             <option value="">كل الأقسام</option>
-            {DEPARTMENTS.map((d) => <option key={d} value={d}>{d}</option>)}
+            {departments.map((d) => <option key={d.id} value={d.name}>{d.name}</option>)}
           </select>
 
           <select
@@ -407,6 +479,9 @@ export default function EmployeesPage() {
         </div>
       </Card>
 
+      {loading && <p className="text-sm text-muted-foreground p-4">جاري تحميل بيانات الموظفين...</p>}
+      {loadError && <p className="text-sm text-destructive p-4">خطأ: {loadError}</p>}
+
       <Card className="!p-0 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -424,7 +499,7 @@ export default function EmployeesPage() {
                       <span className="font-semibold hover:text-primary">{e.name}</span>
                     </Link>
                   </td>
-                  <td className="px-4 py-3 text-xs tabular text-muted-foreground" dir="ltr">{e.personalPhone}</td>
+                  <td className="px-4 py-3 text-xs tabular text-muted-foreground" dir="ltr">{e.personalPhone || "—"}</td>
                   <td className="px-4 py-3 text-muted-foreground">{e.dept}</td>
                   <td className="px-4 py-3 text-muted-foreground">{e.branch}</td>
                   <td className="px-4 py-3"><Pill tone={e.tone}>{e.status}</Pill></td>
@@ -503,7 +578,7 @@ export default function EmployeesPage() {
               <Field label="القسم" error={errors.dept} required>
                 <select value={form.dept} onChange={(e) => updateField("dept", e.target.value)} className={inputClass(!!errors.dept)}>
                   <option value="">اختر القسم</option>
-                  {DEPARTMENTS.map((d) => <option key={d} value={d}>{d}</option>)}
+                  {departments.map((d) => <option key={d.id} value={d.name}>{d.name}</option>)}
                 </select>
               </Field>
 
@@ -601,8 +676,12 @@ export default function EmployeesPage() {
               )}
 
               <div className="flex gap-2 pt-2">
-                <button type="submit" className="h-11 flex-1 rounded-xl bg-primary text-sm font-semibold text-primary-foreground hover:bg-primary-dark">
-                  {editingId ? "حفظ التعديلات" : "إضافة الموظف"}
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="h-11 flex-1 rounded-xl bg-primary text-sm font-semibold text-primary-foreground hover:bg-primary-dark disabled:opacity-60"
+                >
+                  {submitting ? "جاري الحفظ..." : editingId ? "حفظ التعديلات" : "إضافة الموظف"}
                 </button>
                 <button type="button" onClick={() => setModalOpen(false)} className="h-11 rounded-xl border border-border px-5 text-sm font-semibold hover:bg-accent">
                   إلغاء

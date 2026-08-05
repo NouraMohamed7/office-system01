@@ -1,12 +1,16 @@
+// src/app/manager/attendance/page.tsx
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Avatar, Card, PageHeader, Pill, StatCard } from "@/components/manager/primitives";
 import { useToast } from "@/components/toast";
 import {
   Users, UserCheck, Clock, UserX, Palmtree, ClipboardX,
   Download, MoreVertical, LogIn, LogOut, User, Loader2,
 } from "lucide-react";
+import { getAttendanceToday, getCompanyMonthSummary, type AttendanceTodayRow, type CompanyMonthSummary } from "@/modules/attendance/api/attendance.api";
+import { getEmployees } from "@/modules/employees/api/employees.api";
+import { getDepartments, type Department } from "@/modules/department/api/department.api";
 
 type Tone = "success" | "warning" | "danger" | "teal" | "muted" | "primary";
 type Status = "حاضر" | "متأخر" | "غائب" | "إجازة" | "لم يسجل";
@@ -30,24 +34,16 @@ const STATUS_TONE: Record<Status, Tone> = {
   "لم يسجل": "muted",
 };
 
-const initialRows: Row[] = [
-  { id: "1", name: "نورا حسن", dept: "سوشيال ميديا", in: "08:35", out: "17:02", hrs: "8:27", st: "حاضر", tone: "success" },
-  { id: "2", name: "محمود علي", dept: "كول سنتر", in: "09:02", out: "17:10", hrs: "8:08", st: "حاضر", tone: "success" },
-  { id: "3", name: "كريم سعيد", dept: "تسويق", in: "10:22", out: "—", hrs: "—", st: "متأخر", tone: "warning" },
-  { id: "4", name: "خالد يوسف", dept: "داش", in: "—", out: "—", hrs: "—", st: "غائب", tone: "danger" },
-  { id: "5", name: "سارة إبراهيم", dept: "تسويق", in: "—", out: "—", hrs: "—", st: "إجازة", tone: "teal" },
-  { id: "6", name: "دينا فتحي", dept: "داش", in: "08:50", out: "17:00", hrs: "8:10", st: "حاضر", tone: "success" },
-  { id: "7", name: "ياسر أحمد", dept: "كول سنتر", in: "—", out: "—", hrs: "—", st: "لم يسجل", tone: "muted" },
-];
-
-const DEPARTMENTS = ["سوشيال ميديا", "كول سنتر", "تسويق", "داش"];
-
 function nowTime() {
   const d = new Date();
   return d.toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
-// NEW: actually compute worked hours from in/out instead of leaving "—" forever
+function formatTimeAr(iso: string | null) {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
 function computeHours(inTime: string, outTime: string) {
   if (inTime === "—" || outTime === "—") return "—";
   const [ih, im] = inTime.split(":").map(Number);
@@ -57,13 +53,37 @@ function computeHours(inTime: string, outTime: string) {
   return `${Math.floor(mins / 60)}:${String(mins % 60).padStart(2, "0")}`;
 }
 
-// NEW: real CSV export instead of a fake timeout with no output
+// نحول شكل بيانات attendance_today (من الباك) لشكل Row اللي الصفحة متوقعاه
+// deptMap: خريطة users_id -> اسم القسم (جايه من جدول users + department، لأن attendance_today مفيهوش قسم)
+function mapTodayRowToRow(r: AttendanceTodayRow, deptMap: Map<string, string>): Row {
+  const inTime = formatTimeAr(r.check_in_at);
+  const outTime = formatTimeAr(r.check_out_at);
+
+  let status: Status = "لم يسجل";
+  if (r.status === "غائب" || r.status === "إجازة") {
+    status = r.status as Status;
+  } else if (r.check_in_at) {
+    status = (r.late_minutes && r.late_minutes > 0) ? "متأخر" : "حاضر";
+  }
+
+  return {
+    id: r.users_id,
+    name: r.name,
+    dept: deptMap.get(r.users_id) ?? "-",
+    in: inTime,
+    out: outTime,
+    hrs: computeHours(inTime, outTime),
+    st: status,
+    tone: STATUS_TONE[status],
+  };
+}
+
 function exportRowsToCsv(rows: Row[]) {
   const header = ["الموظف", "القسم", "وقت الحضور", "وقت الانصراف", "ساعات العمل", "الحالة"];
   const csvRows = [header.join(",")].concat(
     rows.map((r) => [r.name, r.dept, r.in, r.out, r.hrs, r.st].join(","))
   );
-  const csv = "\uFEFF" + csvRows.join("\n"); // BOM so Excel reads Arabic correctly
+  const csv = "\uFEFF" + csvRows.join("\n");
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -77,11 +97,42 @@ function exportRowsToCsv(rows: Row[]) {
 
 export default function AttendancePage() {
   const showToast = useToast();
-  const [rows, setRows] = useState<Row[]>(initialRows);
+  const [rows, setRows] = useState<Row[]>([]);
+  const [departments, setDepartments] = useState<Department[]>([]);
+  const [monthSummary, setMonthSummary] = useState<CompanyMonthSummary | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [deptFilter, setDeptFilter] = useState("");
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+
+  useEffect(() => {
+    async function load() {
+      try {
+        const [todayRows, employees, depts, summary] = await Promise.all([
+          getAttendanceToday(),
+          getEmployees(), // مستخدمينها هنا بس عشان نجيب قسم كل موظف (users_id -> department)
+          getDepartments(),
+          getCompanyMonthSummary(),
+        ]);
+
+        const deptMap = new Map<string, string>();
+        for (const e of employees) {
+          if (e.department?.name) deptMap.set(e.id, e.department.name);
+        }
+
+        setRows(todayRows.map((r) => mapTodayRowToRow(r, deptMap)));
+        setDepartments(depts);
+        setMonthSummary(summary);
+      } catch (err) {
+        setLoadError(err instanceof Error ? err.message : "حصل خطأ في تحميل بيانات الحضور");
+      } finally {
+        setLoading(false);
+      }
+    }
+    load();
+  }, []);
 
   const filtered = useMemo(() => {
     return rows.filter((r) => {
@@ -104,10 +155,11 @@ export default function AttendancePage() {
     setRows((list) => list.map((r) => (r.id === id ? { ...r, ...patch } : r)));
   }
 
+  // --- الأزرار دي لسه محلية بس؛ الباك لسه مفيهوش endpoint يسمح للمدير
+  // يعدّل حضور موظف تاني نيابة عنه. لما تتوفر، هنستبدل الكود جوا كل دالة بنداء API حقيقي.
   function markCheckIn(r: Row) {
-    // NEW: reset out/hrs on a fresh check-in, so an old checkout time doesn't stick around
     updateRow(r.id, { in: nowTime(), out: "—", hrs: "—", st: "حاضر", tone: STATUS_TONE["حاضر"] });
-    showToast("success", `تم تسجيل حضور ${r.name}`);
+    showToast("success", `تم تسجيل حضور ${r.name} (محليًا فقط — لسه مش متصل بالباك)`);
     setOpenMenuId(null);
   }
 
@@ -118,19 +170,17 @@ export default function AttendancePage() {
       return;
     }
     const out = nowTime();
-    // NEW: hrs actually gets computed now instead of staying "—"
     updateRow(r.id, { out, hrs: computeHours(r.in, out) });
-    showToast("success", `تم تسجيل انصراف ${r.name}`);
+    showToast("success", `تم تسجيل انصراف ${r.name} (محليًا فقط — لسه مش متصل بالباك)`);
     setOpenMenuId(null);
   }
 
   function markAbsent(r: Row) {
     updateRow(r.id, { in: "—", out: "—", hrs: "—", st: "غائب", tone: STATUS_TONE["غائب"] });
-    showToast("success", `تم تسجيل ${r.name} كغائب`);
+    showToast("success", `تم تسجيل ${r.name} كغائب (محليًا فقط — لسه مش متصل بالباك)`);
     setOpenMenuId(null);
   }
 
-  // NEW: "عرض الملف" used to be a dead button with no handler at all
   function viewProfile(r: Row) {
     showToast("success", `الملف الشخصي لـ ${r.name} — قريباً`);
     setOpenMenuId(null);
@@ -139,13 +189,12 @@ export default function AttendancePage() {
   function handleExport() {
     setExporting(true);
     setTimeout(() => {
-      exportRowsToCsv(rows); // NEW: actually produces and downloads a file
+      exportRowsToCsv(rows);
       setExporting(false);
       showToast("success", "تم تصدير تقرير الحضور بنجاح");
     }, 600);
   }
 
-  // NEW: dynamic date instead of a hardcoded string that goes stale
   const todayLabel = new Date().toLocaleDateString("ar-EG", { day: "numeric", month: "long", year: "numeric" });
 
   return (
@@ -164,6 +213,12 @@ export default function AttendancePage() {
           </button>
         }
       />
+
+      {loadError && (
+        <Card className="p-4 border-2 border-destructive/30 text-destructive text-sm">
+          خطأ في تحميل البيانات: {loadError}
+        </Card>
+      )}
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <StatCard dense label="إجمالي الموظفين" value={stats.total} icon={Users} tone="primary" />
@@ -188,10 +243,12 @@ export default function AttendancePage() {
             className="rounded-xl border border-border bg-background px-3.5 py-2 text-xs text-muted-foreground outline-none transition hover:bg-accent"
           >
             <option value="">كل الأقسام</option>
-            {DEPARTMENTS.map((d) => <option key={d} value={d}>{d}</option>)}
+            {departments.map((d) => <option key={d.id} value={d.name}>{d.name}</option>)}
           </select>
         </div>
       </Card>
+
+      {loading && <p className="text-sm text-muted-foreground p-4">جاري تحميل بيانات الحضور...</p>}
 
       <Card className="!p-0 overflow-hidden">
         <div className="overflow-x-auto">
@@ -252,7 +309,7 @@ export default function AttendancePage() {
                   </td>
                 </tr>
               ))}
-              {filtered.length === 0 && (
+              {!loading && filtered.length === 0 && (
                 <tr>
                   <td colSpan={7} className="px-4 py-10 text-center text-sm text-muted-foreground">
                     مفيش نتائج مطابقة للبحث/الفلتر
@@ -265,10 +322,10 @@ export default function AttendancePage() {
       </Card>
 
       <div className="grid gap-6 lg:grid-cols-4">
-        <StatCard label="أيام الحضور" value="22" tone="success" />
-        <StatCard label="أيام الغياب" value="1.2" sub="متوسط" tone="danger" />
-        <StatCard label="نسبة الالتزام" value="94%" tone="primary" />
-        <StatCard label="إجمالي ساعات العمل" value="1,842" tone="teal" />
+        <StatCard label="أيام الحضور" value={String(monthSummary?.avgPresentDays ?? 0)} sub="متوسط للموظف" tone="success" />
+        <StatCard label="أيام الغياب" value={String(monthSummary?.avgAbsentDays ?? 0)} sub="متوسط للموظف" tone="danger" />
+        <StatCard label="نسبة الالتزام" value={`${monthSummary?.compliancePct ?? 0}%`} tone="primary" />
+        <StatCard label="إجمالي ساعات العمل" value={(monthSummary?.totalWorkHours ?? 0).toLocaleString("ar-EG")} tone="teal" />
       </div>
     </div>
   );

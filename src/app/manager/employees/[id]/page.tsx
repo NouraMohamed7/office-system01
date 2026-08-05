@@ -1,44 +1,93 @@
+// src/app/manager/employees/[id]/page.tsx
 "use client";
 
-import { use } from "react";
+import { use, useEffect, useState } from "react";
 import { Avatar, Card, PageHeader, Pill, SectionTitle, StatCard } from "@/components/manager/primitives";
-import { Mail, Phone, MapPin, Briefcase, Building2, Calendar, MoreVertical } from "lucide-react";
+import { Mail, Phone, MapPin, Briefcase, Building2, Calendar, MoreVertical, Loader2 } from "lucide-react";
+import { getEmployeeById, type EmployeeRow } from "@/modules/employees/api/employees.api";
 
-const criteria = [
-  "الالتزام بالحضور","المواعيد","جودة العمل","سرعة التنفيذ","التعاون",
-  "تحقيق التارجت","الالتزام بالتعليمات","التواصل","حل المشكلات","التطور",
-];
+const STATUS_TONE: Record<string, "success" | "warning" | "danger" | "teal" | "muted" | "primary"> = {
+  "نشط": "success",
+  "معطل": "muted",
+  "في إجازة": "teal",
+  "متأخر": "warning",
+  "غائب": "danger",
+};
+
+function formatJoinDate(iso?: string) {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleDateString("ar-EG", { day: "2-digit", month: "2-digit", year: "numeric" });
+}
 
 export default function EmployeeProfile({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params); // <-- فك الـ Promise هنا
-  const name = "نورا حسن";
+  const { id } = use(params);
+
+  const [employee, setEmployee] = useState<EmployeeRow | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    async function load() {
+      try {
+        const emp = await getEmployeeById(id);
+        setEmployee(emp);
+      } catch (err) {
+        setLoadError(err instanceof Error ? err.message : "حصل خطأ في تحميل بيانات الموظف");
+      } finally {
+        setLoading(false);
+      }
+    }
+    load();
+  }, [id]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center gap-2 py-20 text-muted-foreground">
+        <Loader2 className="size-5 animate-spin" /> جاري تحميل بيانات الموظف...
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return <div className="p-6 text-sm text-destructive">خطأ: {loadError}</div>;
+  }
+
+  if (!employee) {
+    return <div className="p-6 text-sm text-muted-foreground">الموظف غير موجود</div>;
+  }
+
+  const status = employee.emp_status || "نشط";
+  const tone = STATUS_TONE[status] ?? "muted";
+  const phone = employee.personalPhone || employee.workPhone || employee.saudiPhone || "—";
+  const location = [employee.branch?.city, employee.branch?.address].filter(Boolean).join(" — ") || "—";
 
   return (
     <div className="space-y-6">
-      <PageHeader title={`ملف الموظف · ${name}`} subtitle={`رقم الموظف: ${id}`} />
-  
+      <PageHeader title={`ملف الموظف · ${employee.full_name}`} subtitle={`رقم الموظف: ${id}`} />
+
       <Card>
         <div className="flex flex-wrap items-start gap-5">
-          <Avatar name={name} size={72} />
+          <Avatar name={employee.full_name} size={72} />
           <div className="flex-1 min-w-[240px]">
-            <div className="text-xl font-bold">{name}</div>
-            <div className="mt-1 text-sm text-muted-foreground">Social Media Specialist</div>
+            <div className="text-xl font-bold">{employee.full_name}</div>
+            <div className="mt-1 text-sm text-muted-foreground">{employee.position?.title ?? "—"}</div>
             <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-muted-foreground md:grid-cols-3">
-              <div className="flex items-center gap-1.5"><Mail className="size-3.5" /> nora@company.com</div>
-              <div className="flex items-center gap-1.5"><Phone className="size-3.5" /> 010‑1234‑5678</div>
-              <div className="flex items-center gap-1.5"><MapPin className="size-3.5" /> القاهرة — مدينة نصر</div>
-              <div className="flex items-center gap-1.5"><Building2 className="size-3.5" /> قسم السوشيال ميديا</div>
-              <div className="flex items-center gap-1.5"><Briefcase className="size-3.5" /> فرع القاهرة</div>
-              <div className="flex items-center gap-1.5"><Calendar className="size-3.5" /> عُيّنت 12/03/2023</div>
+              <div className="flex items-center gap-1.5"><Mail className="size-3.5" /> {employee.email || "—"}</div>
+              <div className="flex items-center gap-1.5" dir="ltr"><Phone className="size-3.5" /> {phone}</div>
+              <div className="flex items-center gap-1.5"><MapPin className="size-3.5" /> {location}</div>
+              <div className="flex items-center gap-1.5"><Building2 className="size-3.5" /> {employee.department?.name ?? "—"}</div>
+              <div className="flex items-center gap-1.5"><Briefcase className="size-3.5" /> {employee.branch?.city ?? "—"}</div>
+              <div className="flex items-center gap-1.5"><Calendar className="size-3.5" /> عُيّن {formatJoinDate(employee.created_at)}</div>
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Pill tone="success">نشط</Pill>
+            <Pill tone={tone}>{status}</Pill>
             <button className="grid size-9 place-items-center rounded-lg border border-border hover:bg-accent"><MoreVertical className="size-4" /></button>
           </div>
         </div>
       </Card>
 
+      {/* الإحصائيات دي لسه بيانات وهمية — مفيش endpoint للمهام/التقارير/الأداء متاح دلوقتي */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6">
         <StatCard dense label="المهام" value="87" tone="primary" />
         <StatCard dense label="المكتملة" value="72" tone="success" />
@@ -58,6 +107,7 @@ export default function EmployeeProfile({ params }: { params: Promise<{ id: stri
       <div className="grid gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <SectionTitle sub="Timeline">سجل النشاط</SectionTitle>
+          {/* التايم لاين ده لسه بيانات وهمية — مفيش endpoint له متاح دلوقتي */}
           <ol className="space-y-3">
             {[
               { d: "20 يوليو", t: "رفعت تقرير اليوم", tone: "teal" },
@@ -76,7 +126,6 @@ export default function EmployeeProfile({ params }: { params: Promise<{ id: stri
             ))}
           </ol>
         </Card>
-
       </div>
     </div>
   );

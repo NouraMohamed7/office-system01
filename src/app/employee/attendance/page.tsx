@@ -3,40 +3,68 @@
 
 import { PortalLayout, Card, StatusPill } from "@/components/portal-layout";
 import { useToast } from "@/components/toast";
-import { Clock, Check, LogIn, LogOut, Coffee, PlayCircle } from "lucide-react";
+import { Clock, Check, LogIn, LogOut, Coffee, PlayCircle, Loader2 } from "lucide-react";
 import { useEffect, useState } from "react";
-
-const PAST_RECORDS = [
-  { date: "2026-07-18", checkIn: "09:02", checkOut: "17:10", status: "حاضر" },
-  { date: "2026-07-17", checkIn: "09:14", checkOut: "17:05", status: "متأخر" },
-  { date: "2026-07-16", checkIn: "08:55", checkOut: "16:58", status: "حاضر" },
-  { date: "2026-07-15", checkIn: "—", checkOut: "—", status: "غائب" },
-  { date: "2026-07-14", checkIn: "09:03", checkOut: "17:12", status: "حاضر" },
-  { date: "2026-07-13", checkIn: "09:21", checkOut: "17:00", status: "متأخر" },
-  { date: "2026-07-12", checkIn: "08:50", checkOut: "16:55", status: "حاضر" },
-];
-
-const OFFICIAL_START = "09:00";
+import {
+  checkIn as apiCheckIn,
+  checkOut as apiCheckOut,
+  getMyAttendanceToday,
+  getMyAttendanceHistory,
+  getMyMonthSummary,
+  type AttendanceRecord,
+  type MonthSummary,
+} from "@/modules/attendance/api/attendance.api";
 
 type BreakRecord = { start: string; end: string | null; startMs: number; endMs: number | null };
+
+function formatTime(iso: string | null): string {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
 
 export default function AttendancePage() {
   const showToast = useToast();
   // Start as null on both server and client so the initial render matches.
-  // The real Date is only set after mount (client-only), avoiding hydration mismatches.
   const [now, setNow] = useState<Date | null>(null);
-  const [checkInTime, setCheckInTime] = useState<string | null>(null);
-  const [checkOutTime, setCheckOutTime] = useState<string | null>(null);
 
-  // Break state
+  // ---- بيانات حقيقية من الباك ----
+  const [record, setRecord] = useState<AttendanceRecord | null>(null);
+  const [history, setHistory] = useState<AttendanceRecord[]>([]);
+  const [monthSummary, setMonthSummary] = useState<MonthSummary | null>(null);
+  const [loadingToday, setLoadingToday] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+
+  // ---- البريك: لسه محلي بالكامل (مفيش endpoint ليه في الباك) ----
   const [isOnBreak, setIsOnBreak] = useState(false);
   const [breaks, setBreaks] = useState<BreakRecord[]>([]);
-  const [breakElapsedSec, setBreakElapsedSec] = useState(0); // live elapsed for current break
+  const [breakElapsedSec, setBreakElapsedSec] = useState(0);
 
   useEffect(() => {
     setNow(new Date());
     const t = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(t);
+  }, []);
+
+  // تحميل حالة اليوم + السجل السابق + ملخص الشهر أول ما الصفحة تفتح
+  useEffect(() => {
+    async function load() {
+      try {
+        const [todayRec, hist, summary] = await Promise.all([
+          getMyAttendanceToday(),
+          getMyAttendanceHistory(7),
+          getMyMonthSummary(),
+        ]);
+        setRecord(todayRec);
+        setHistory(hist);
+        setMonthSummary(summary);
+      } catch (err) {
+        showToast("error", err instanceof Error ? err.message : "حصل خطأ في تحميل بيانات الحضور");
+      } finally {
+        setLoadingToday(false);
+      }
+    }
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Tick the current break's elapsed time while on break
@@ -55,36 +83,51 @@ export default function AttendancePage() {
   const date = now ? now.toLocaleDateString("ar-EG", { weekday: "long", day: "numeric", month: "long", year: "numeric" }) : "";
   const shortDate = now ? now.toISOString().slice(0, 10) : "";
 
-  const isLate = () => {
-    if (!now) return false;
-    const [h, m] = OFFICIAL_START.split(":").map(Number);
-    const officialMinutes = h * 60 + m;
-    const nowMinutes = now.getHours() * 60 + now.getMinutes();
-    return nowMinutes > officialMinutes;
-  };
+  const checkInTime = formatTime(record?.check_in_at ?? null);
+  const checkOutTime = formatTime(record?.check_out_at ?? null);
+  const hasCheckedIn = !!record?.check_in_at;
+  const hasCheckedOut = !!record?.check_out_at;
 
-  const handleCheckIn = () => {
-    if (!now) return;
-    const exactTime = now.toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-    setCheckInTime(exactTime);
-    if (isLate()) {
-      showToast("error", `تم تسجيل حضورك الساعة ${exactTime} — بتأخير عن الموعد الرسمي`);
-    } else {
-      showToast("success", `تم تسجيل حضورك الساعة ${exactTime}`);
+  async function handleCheckIn() {
+    if (!mounted || submitting) return;
+    setSubmitting(true);
+    try {
+      await apiCheckIn();
+      const fresh = await getMyAttendanceToday();
+      setRecord(fresh);
+      const exactTime = formatTime(fresh?.check_in_at ?? null);
+      if (fresh && fresh.late_minutes > 0) {
+        showToast("error", `تم تسجيل حضورك الساعة ${exactTime} — بتأخير عن الموعد الرسمي`);
+      } else {
+        showToast("success", `تم تسجيل حضورك الساعة ${exactTime}`);
+      }
+    } catch (err) {
+      showToast("error", err instanceof Error ? err.message : "تعذر تسجيل الحضور");
+    } finally {
+      setSubmitting(false);
     }
-  };
+  }
 
-  const handleCheckOut = () => {
-    if (!now) return;
+  async function handleCheckOut() {
+    if (!mounted || submitting) return;
     if (isOnBreak) {
       showToast("error", "لازم تنهي البريك الأول قبل ما تسجل انصراف");
       return;
     }
-    const exactTime = now.toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-    setCheckOutTime(exactTime);
-    showToast("success", `تم تسجيل انصرافك الساعة ${exactTime}`);
-  };
+    setSubmitting(true);
+    try {
+      await apiCheckOut();
+      const fresh = await getMyAttendanceToday();
+      setRecord(fresh);
+      showToast("success", `تم تسجيل انصرافك الساعة ${formatTime(fresh?.check_out_at ?? null)}`);
+    } catch (err) {
+      showToast("error", err instanceof Error ? err.message : "تعذر تسجيل الانصراف");
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
+  // ---- البريك (محلي زي ما هو بالظبط) ----
   const handleStartBreak = () => {
     if (!now) return;
     const exactTime = now.toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -110,11 +153,8 @@ export default function AttendancePage() {
     showToast("success", `انتهت البريك الساعة ${exactTime}`);
   };
 
-  const todayStatus = checkInTime
-    ? (isLate() ? "متأخر" : "حاضر")
-    : null;
+  const todayStatus = record?.status ?? null;
 
-  // Total break seconds today (completed breaks + live current one)
   const totalBreakSeconds = breaks.reduce((sum, b) => {
     if (b.endMs) return sum + Math.floor((b.endMs - b.startMs) / 1000);
     if (isOnBreak) return sum + breakElapsedSec;
@@ -127,6 +167,10 @@ export default function AttendancePage() {
     return `${m}:${s}`;
   };
 
+  // نسب ملخص الشهر (بناءً على إجمالي الأيام المسجّلة الشهر ده)
+  const summaryPct = (count: number) =>
+    monthSummary && monthSummary.totalDays > 0 ? Math.round((count / monthSummary.totalDays) * 100) : 0;
+
   return (
     <PortalLayout title="الحضور" subtitle="سجل حضورك وانصرافك اليومي وراجع تاريخك">
       <Card className="p-8 mb-6 text-center relative overflow-hidden">
@@ -135,15 +179,21 @@ export default function AttendancePage() {
           <div className="text-sm text-muted-foreground">{date}</div>
           <div className="text-5xl font-bold text-foreground tabular-nums mt-2 mb-6">{time}</div>
 
-          {!checkInTime && (
-            <button onClick={handleCheckIn} disabled={!mounted}
+          {loadingToday && (
+            <div className="flex items-center justify-center gap-2 text-muted-foreground py-4">
+              <Loader2 className="h-5 w-5 animate-spin" /> جاري تحميل حالة اليوم...
+            </div>
+          )}
+
+          {!loadingToday && !hasCheckedIn && (
+            <button onClick={handleCheckIn} disabled={!mounted || submitting}
               className="inline-flex items-center gap-3 bg-primary text-primary-foreground rounded-2xl px-8 py-4 font-bold text-lg hover:bg-[color:var(--primary-dark)] transition shadow-warm disabled:opacity-40 disabled:cursor-not-allowed">
-              <LogIn className="h-6 w-6" />
+              {submitting ? <Loader2 className="h-6 w-6 animate-spin" /> : <LogIn className="h-6 w-6" />}
               تسجيل الحضور
             </button>
           )}
 
-          {checkInTime && !checkOutTime && (
+          {!loadingToday && hasCheckedIn && !hasCheckedOut && (
             <div className="space-y-4">
               <div className="inline-flex items-center gap-3 bg-success/10 text-success rounded-2xl px-6 py-4">
                 <div className="h-10 w-10 rounded-full bg-success grid place-items-center">
@@ -183,9 +233,9 @@ export default function AttendancePage() {
                   </button>
                 )}
 
-                <button onClick={handleCheckOut} disabled={isOnBreak}
+                <button onClick={handleCheckOut} disabled={isOnBreak || submitting}
                   className="inline-flex items-center gap-2 bg-destructive text-destructive-foreground rounded-2xl px-8 py-3 font-bold text-lg hover:opacity-90 transition shadow-warm disabled:opacity-40 disabled:cursor-not-allowed">
-                  <LogOut className="h-5 w-5" />
+                  {submitting ? <Loader2 className="h-5 w-5 animate-spin" /> : <LogOut className="h-5 w-5" />}
                   تسجيل الانصراف
                 </button>
               </div>
@@ -198,7 +248,7 @@ export default function AttendancePage() {
             </div>
           )}
 
-          {checkInTime && checkOutTime && (
+          {!loadingToday && hasCheckedIn && hasCheckedOut && (
             <div className="grid grid-cols-2 gap-4 max-w-md mx-auto">
               <div className="bg-success/10 text-success rounded-2xl p-4">
                 <LogIn className="h-5 w-5 mx-auto mb-1" />
@@ -225,7 +275,7 @@ export default function AttendancePage() {
         </div>
       </Card>
 
-      {checkInTime && (
+      {hasCheckedIn && (
         <Card className="p-6 mb-6 border-2 border-primary/20">
           <h3 className="font-bold text-foreground mb-4 flex items-center gap-2">
             <Clock className="h-4 w-4 text-primary" /> سجل اليوم — {shortDate}
@@ -243,11 +293,11 @@ export default function AttendancePage() {
               <tbody>
                 <tr className="border-b border-border/60">
                   <td className="py-3 text-foreground tabular-nums">{checkInTime}</td>
-                  <td className="py-3 text-muted-foreground tabular-nums">{checkOutTime ?? "— لسه ماسجلتيش انصراف —"}</td>
+                  <td className="py-3 text-muted-foreground tabular-nums">{hasCheckedOut ? checkOutTime : "— لسه ماسجلتيش انصراف —"}</td>
                   <td className="py-3 text-muted-foreground tabular-nums">{formatDuration(totalBreakSeconds)}</td>
                   <td className="py-3">
                     {todayStatus && (
-                      <StatusPill tone={todayStatus === "حاضر" ? "success" : "warning"}>{todayStatus}</StatusPill>
+                      <StatusPill tone={todayStatus === "حاضر" ? "success" : todayStatus === "متأخر" ? "warning" : "danger"}>{todayStatus}</StatusPill>
                     )}
                   </td>
                 </tr>
@@ -288,11 +338,16 @@ export default function AttendancePage() {
               </tr>
             </thead>
             <tbody>
-              {PAST_RECORDS.map((r, i) => (
-                <tr key={i} className="border-b border-border/60 hover:bg-primary/5 transition">
-                  <td className="py-3 text-foreground">{r.date}</td>
-                  <td className="py-3 text-muted-foreground tabular-nums">{r.checkIn}</td>
-                  <td className="py-3 text-muted-foreground tabular-nums">{r.checkOut}</td>
+              {history.length === 0 && !loadingToday && (
+                <tr>
+                  <td colSpan={4} className="py-6 text-center text-muted-foreground">مفيش سجل سابق</td>
+                </tr>
+              )}
+              {history.map((r) => (
+                <tr key={r.id} className="border-b border-border/60 hover:bg-primary/5 transition">
+                  <td className="py-3 text-foreground">{r.attendance_date}</td>
+                  <td className="py-3 text-muted-foreground tabular-nums">{formatTime(r.check_in_at)}</td>
+                  <td className="py-3 text-muted-foreground tabular-nums">{formatTime(r.check_out_at)}</td>
                   <td className="py-3">
                     <StatusPill tone={r.status === "حاضر" ? "success" : r.status === "متأخر" ? "warning" : "danger"}>
                       {r.status}
@@ -308,9 +363,9 @@ export default function AttendancePage() {
       <div>
         <h3 className="font-bold text-foreground mb-3">ملخص الشهر</h3>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <SummaryCard label="أيام الحضور" value="22" tone="success" pct={92} />
-          <SummaryCard label="أيام الغياب" value="1" tone="danger" pct={4} />
-          <SummaryCard label="أيام التأخير" value="2" tone="warning" pct={8} />
+          <SummaryCard label="أيام الحضور" value={String(monthSummary?.presentDays ?? 0)} tone="success" pct={summaryPct(monthSummary?.presentDays ?? 0)} />
+          <SummaryCard label="أيام الغياب" value={String(monthSummary?.absentDays ?? 0)} tone="danger" pct={summaryPct(monthSummary?.absentDays ?? 0)} />
+          <SummaryCard label="أيام التأخير" value={String(monthSummary?.lateDays ?? 0)} tone="warning" pct={summaryPct(monthSummary?.lateDays ?? 0)} />
         </div>
       </div>
     </PortalLayout>
