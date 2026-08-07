@@ -3,7 +3,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Home, Users, Clock, ListChecks, FileText, Truck, UploadCloud,
-  CheckCircle2, MessageSquare, Wallet, Landmark, Gift, BookOpen, TrendingUp,
+  MessageSquare, Wallet, Landmark, Gift, BookOpen, TrendingUp,
   Megaphone, Settings, User, LogOut, ChevronsLeft, ChevronsRight,
 } from "lucide-react";
 import { useState } from "react";
@@ -31,18 +31,27 @@ const nav = [
   { to: "/manager/profile", icon: User, ar: "الملف الشخصي", en: "Profile" },
 ] as const;
 
-export function ManagerSidebar() {
+export function ManagerSidebar({
+  mobileOpen,
+  onToggleMobile,
+}: {
+  mobileOpen: boolean;
+  onToggleMobile: () => void;
+}) {
   const [collapsed, setCollapsed] = useState(false);
   const pathname = usePathname();
 
   return (
-    <aside
-      className={cn(
-        "sticky top-0 flex h-screen shrink-0 flex-col border-l border-border bg-card transition-all duration-200",
-        collapsed ? "w-19" : "w-70",
-      )}
-    >
-      <div className="border-b border-border p-4">
+    <>
+      {mobileOpen && <div className="fixed inset-0 z-40 bg-foreground/25 lg:hidden" onClick={onToggleMobile} />}
+      <aside
+        className={cn(
+          "fixed inset-y-0 right-0 z-50 flex h-screen shrink-0 flex-col border-l border-border bg-card/95 shadow-warm backdrop-blur transition-all duration-200 lg:sticky lg:top-0 lg:h-screen lg:translate-x-0",
+          collapsed ? "w-20" : "w-72",
+          mobileOpen ? "translate-x-0" : "translate-x-full lg:translate-x-0",
+        )}
+      >
+        <div className="border-b border-border p-4">
         <div className="flex items-center gap-3">
           <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary text-primary-foreground font-bold">
             م
@@ -67,7 +76,7 @@ export function ManagerSidebar() {
         )}
       </div>
 
-      <nav className="flex-1 overflow-y-auto p-2">
+        <nav className="flex-1 overflow-y-auto p-2">
         {nav.map((item) => {
           const active = pathname === item.to || pathname?.startsWith(item.to + "/");
           const Icon = item.icon;
@@ -75,6 +84,7 @@ export function ManagerSidebar() {
             <Link
               key={item.to}
               href={item.to}
+              onClick={onToggleMobile}
               className={cn(
                 "group relative mb-0.5 flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-colors",
                 active
@@ -120,6 +130,7 @@ export function ManagerSidebar() {
           )}
         </button>
       </div>
-    </aside>
+      </aside>
+    </>
   );
 }

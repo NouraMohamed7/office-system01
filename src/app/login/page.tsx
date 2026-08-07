@@ -1,13 +1,16 @@
-// src/app/login/page.tsx
 "use client";
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Mail, Lock } from "lucide-react";
+import { Button, Input } from "@/components/manager/primitives";
 import {
   signInWithPassword,
   resetPasswordForEmail,
+  getCurrentUserRole,
+  signOut,
 } from "@/modules/auth/api/auth.api";
+import { ROLE_ID } from "@/constants";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -17,24 +20,33 @@ export default function LoginPage() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [infoMsg, setInfoMsg] = useState<string | null>(null);
 
-  // تسجيل الدخول
- const onSubmit = async (e: React.FormEvent) => {
-  e.preventDefault();
-  setErrorMsg(null);
-  setInfoMsg(null);
-  setLoading(true);
+  const onSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMsg(null);
+    setInfoMsg(null);
+    setLoading(true);
 
-  try {
-    await signInWithPassword(email, password);
-    router.push("/manager/dashboard");
-  } catch (err: any) {
-    setErrorMsg(err?.message || "حدث خطأ أثناء تسجيل الدخول");
-  } finally {
-    setLoading(false);
-  }
-};
+    try {
+      const { user } = await signInWithPassword(email, password);
+      if (!user) throw new Error("تعذر تسجيل الدخول");
 
-  // نسيت كلمة المرور
+      const roleId = await getCurrentUserRole(user.id);
+
+      if (roleId === ROLE_ID.MANAGER) {
+        router.push("/manager/dashboard");
+      } else if (roleId === ROLE_ID.EMPLOYEE) {
+        router.push("/employee/dashboard");
+      } else {
+        await signOut();
+        setErrorMsg("حسابك غير مفعّل أو ليس له صلاحية دخول، تواصل مع الإدارة");
+      }
+    } catch (err: any) {
+      setErrorMsg(err?.message || "حدث خطأ أثناء تسجيل الدخول");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const onForgotPassword = async () => {
     if (!email) {
       setErrorMsg("من فضلك اكتب بريدك الإلكتروني أولاً");
@@ -56,8 +68,8 @@ export default function LoginPage() {
 
   return (
     <div dir="rtl" className="min-h-screen bg-background font-sans">
-      <div className="grid min-h-screen lg:grid-cols-2">
-        <div className="relative hidden overflow-hidden bg-gradient-to-br from-primary/10 via-warning/10 to-teal/10 lg:block">
+      <div className="grid min-h-screen lg:grid-cols-[1.1fr_0.9fr]">
+        <div className="relative hidden overflow-hidden bg-linear-to-br from-primary/10 via-warning/10 to-teal/10 lg:block">
           <div className="absolute inset-0 opacity-40" style={{
             backgroundImage: "radial-gradient(circle at 20% 30%, oklch(0.62 0.128 42 / 0.25), transparent 40%), radial-gradient(circle at 80% 70%, oklch(0.45 0.045 195 / 0.2), transparent 40%)",
           }} />
@@ -86,7 +98,7 @@ export default function LoginPage() {
         </div>
 
         <div className="flex items-center justify-center p-6 sm:p-10">
-          <form onSubmit={onSubmit} className="w-full max-w-md">
+          <form onSubmit={onSubmit} className="w-full max-w-md rounded-[1.5rem] border border-border bg-card/80 p-6 shadow-warm sm:p-8">
             <h2 className="text-2xl font-bold text-foreground">أهلاً بعودتك</h2>
             <p className="mt-1 text-sm text-muted-foreground">سجّل الدخول للمتابعة إلى لوحة التحكم.</p>
 
@@ -95,11 +107,11 @@ export default function LoginPage() {
                 <span className="mb-1.5 block text-sm font-medium">البريد الإلكتروني</span>
                 <div className="relative">
                   <Mail className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-                  <input
+                  <Input
                     type="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    className="h-11 w-full rounded-xl border border-border bg-background pr-10 pl-4 text-sm outline-none focus:border-primary/60"
+                    className="pr-10 pl-4"
                   />
                 </div>
               </label>
@@ -107,11 +119,11 @@ export default function LoginPage() {
                 <span className="mb-1.5 block text-sm font-medium">كلمة المرور</span>
                 <div className="relative">
                   <Lock className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-                  <input
+                  <Input
                     type="password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    className="h-11 w-full rounded-xl border border-border bg-background pr-10 pl-4 text-sm outline-none focus:border-primary/60"
+                    className="pr-10 pl-4"
                   />
                 </div>
               </label>
@@ -138,13 +150,9 @@ export default function LoginPage() {
                 <p className="text-sm text-teal-600">{infoMsg}</p>
               )}
 
-              <button
-                type="submit"
-                disabled={loading}
-                className="h-11 w-full rounded-xl bg-primary font-semibold text-primary-foreground shadow-warm transition-colors hover:bg-primary-dark disabled:opacity-60"
-              >
+              <Button type="submit" disabled={loading} className="h-11 w-full">
                 {loading ? "جاري تسجيل الدخول..." : "تسجيل الدخول"}
-              </button>
+              </Button>
             </div>
           </form>
         </div>

@@ -1,5 +1,10 @@
 // src/modules/attendance/api/attendance.api.ts
 import { supabase } from "@/lib/supabase/client";
+import type {
+  AttendanceStatus,
+  LeaveType,
+  LeaveStatus as LeaveStatusFull,
+} from "@/lib/attendance-labels";
 
 // ============================================================
 // Types
@@ -12,6 +17,10 @@ export type AttendanceTodayRow = {
   check_in_at: string | null;
   check_out_at: string | null;
   late_minutes: number | null;
+  // ⚠️ الدوك بيوصف الفورمات بتاعها كـ "text" مش public.attendance_type مباشرة.
+  // لحد ما نتأكد من شكل القيمة الفعلية الراجعة (شغّل select('status') وشوف
+  // النتيجة)، بنسيبها string عشان منكسرش لو رجعت حاجة غير متوقعة، وبنعمل
+  // narrowing يدوي في mapTodayRowToRow في صفحة المدير.
   status: string | null;
 };
 
@@ -23,7 +32,7 @@ export type AttendanceRecord = {
   users_id: string;
   late_minutes: number;
   total_work_minutes: number | null;
-  status: string; // "حاضر" | "متأخر" | "غائب" | "إجازة" (public.attendance_type)
+  status: AttendanceStatus; // public.attendance_type — القيم الإنجليزية الحقيقية
   check_in_at: string;
   check_out_at: string | null;
   attendance_date: string; // YYYY-MM-DD
@@ -43,6 +52,43 @@ export type CompanyMonthSummary = {
   compliancePct: number; // نسبة الالتزام = أيام الحضور من إجمالي السجلات
   totalWorkHours: number;
 };
+
+/** صف من جدول attendance_settings (إعدادات الحضور لكل فرع) */
+export type AttendanceSettings = {
+  id: number;
+  created_at: string;
+  updated_at: string;
+  late_tolerance_minutes: number;
+  // ⚠️ اختياري مؤقتًا: العمود ده لسه مش موجود فعليًا في جدول
+  // attendance_settings عند الباك (PGRST204 - "Could not find the
+  // 'notify_manager_on_late' column ... in the schema cache").
+  // رجّعه Required (شيل الـ ?) لما الباك يأكد إضافة العمود ويعمل
+  // reload للـ schema cache.
+  notify_manager_on_late?: boolean;
+  branch_id: number;
+  effective_from: string; // YYYY-MM-DD
+  effective_to: string | null; // YYYY-MM-DD
+  start_time: string; // HH:MM:SS
+  end_time: string; // HH:MM:SS
+  cutoff_time: string; // HH:MM:SS
+};
+
+export type AttendanceSettingsInput = {
+  branch_id: number;
+  late_tolerance_minutes: number;
+  // ⚠️ نفس الملاحظة اللي فوق — اختياري مؤقتًا لحد ما الباك يضيف العمود.
+  // طول ما الحقل مش موجود في الـ payload، مش هيتبعت في insert/update
+  // خالص، فمش هيسبب PGRST204 تاني.
+  notify_manager_on_late?: boolean;
+  effective_from: string;
+  effective_to?: string | null;
+  start_time: string;
+  end_time: string;
+  cutoff_time: string;
+};
+
+/** حالة طلب الإجازة اللي المدير بيقدر يحطها عبر check_leave_status (public.leave_status) */
+export type LeaveStatus = Extract<LeaveStatusFull, "accepted" | "rejected" | "cancelled">;
 
 // ============================================================
 // Helpers
@@ -103,11 +149,11 @@ export async function getCompanyMonthSummary(): Promise<CompanyMonthSummary> {
 
   for (const r of rows) {
     const entry = byUser.get(r.users_id) ?? { present: 0, absent: 0 };
-    const attended = r.status === "حاضر" || r.status === "متأخر";
+    const attended = r.status === "present" || r.status === "late";
     if (attended) {
       entry.present += 1;
       presentCount += 1;
-    } else if (r.status === "غائب") {
+    } else if (r.status === "absent") {
       entry.absent += 1;
     }
     totalMinutes += r.total_work_minutes ?? 0;
@@ -195,12 +241,122 @@ export async function getMyMonthSummary(): Promise<MonthSummary> {
     .lte("attendance_date", lastDay);
 
   if (error) throw error;
-  const rows = data ?? [];
+  const rows = (data ?? []) as AttendanceRecord[];
 
   return {
-    presentDays: rows.filter((r) => r.status === "حاضر").length,
-    absentDays: rows.filter((r) => r.status === "غائب").length,
-    lateDays: rows.filter((r) => r.status === "متأخر").length,
+    presentDays: rows.filter((r) => r.status === "present").length,
+    absentDays: rows.filter((r) => r.status === "absent").length,
+    lateDays: rows.filter((r) => r.status === "late").length,
     totalDays: rows.length,
   };
+}
+
+// ============================================================
+// Manager: إعدادات الحضور (attendance_settings) — CRUD كامل
+// موثقة بالكامل في الدوك (select/insert/update/delete)
+// ============================================================
+
+export async function getAttendanceSettings(branchId?: number): Promise<AttendanceSettings[]> {
+  let query = supabase
+    .from("attendance_settings")
+    .select("*")
+    .order("effective_from", { ascending: false });
+
+  if (branchId) query = query.eq("branch_id", branchId);
+
+  const { data, error } = await query;
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function createAttendanceSettings(
+  payload: AttendanceSettingsInput
+): Promise<AttendanceSettings> {
+  const { data, error } = await supabase
+    .from("attendance_settings")
+    .insert(payload)
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateAttendanceSettings(
+  id: number,
+  patch: Partial<AttendanceSettingsInput>
+): Promise<AttendanceSettings> {
+  const { data, error } = await supabase
+    .from("attendance_settings")
+    .update(patch)
+    .eq("id", id)
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function deleteAttendanceSettings(id: number): Promise<void> {
+  const { error } = await supabase.from("attendance_settings").delete().eq("id", id);
+  if (error) throw error;
+}
+
+// ============================================================
+// Employee: طلبات الإجازة (leave) — RPC فقط
+// ⚠️ ملاحظة مهمة: الباك حاليًا مفيهوش جدول/view نقدر نقرا منه
+// طلبات الإجازة (زي attendance_today بالنسبة للحضور). يعني مش
+// هنقدر نعرض "طلباتي" أو "الطلبات المعلقة" بعد إعادة تحميل
+// الصفحة لحد ما الباك يوفر endpoint قراءة (مثلاً جدول leaves).
+// الدوال دي شغالة وبتتصل بالـ RPC الصح، بس الصفحة بتحتفظ
+// بنتيجة الطلب محليًا في نفس الجلسة بس عشان تسمح بالتعديل/الإلغاء
+// المباشر بعد الإرسال.
+// ============================================================
+
+export async function requestLeave(payload: {
+  p_start_date: string;
+  p_end_date: string;
+  p_leave_type: LeaveType;
+  p_reason: string;
+}): Promise<unknown> {
+  const { data, error } = await supabase.rpc("request_leave", payload);
+  if (error) throw error;
+  return data;
+}
+
+export async function updateLeave(payload: {
+  p_leave_id: number;
+  p_start_date: string;
+  p_end_date: string;
+  p_reason: string;
+}): Promise<unknown> {
+  const { data, error } = await supabase.rpc("update_leave", payload);
+  if (error) throw error;
+  return data;
+}
+
+export async function deleteLeave(p_leave_id: number): Promise<unknown> {
+  const { data, error } = await supabase.rpc("delete_leave", { p_leave_id });
+  if (error) throw error;
+  return data;
+}
+
+export async function endLeaveEarly(p_leave_id: number): Promise<unknown> {
+  const { data, error } = await supabase.rpc("end_leave_early", { p_leave_id });
+  if (error) throw error;
+  return data;
+}
+
+// ============================================================
+// Manager: الموافقة/الرفض على طلب إجازة
+// ⚠️ محتاجة p_leave_id — لسه معندناش endpoint لعرض قائمة
+// الطلبات المعلقة، فالمدير محتاج يعرف رقم الطلب من مصدر تاني
+// (زي الإشعارات) لحد ما نضيف جدول/view قراءة حقيقي.
+// ============================================================
+
+export async function checkLeaveStatus(payload: {
+  p_leave_id: number;
+  p_new_status: LeaveStatus;
+}): Promise<unknown> {
+  const { data, error } = await supabase.rpc("check_leave_status", payload);
+  if (error) throw error;
+  return data;
 }

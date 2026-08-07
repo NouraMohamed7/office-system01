@@ -1,41 +1,35 @@
 import { supabase } from '@/lib/supabase/client'
+import type {
+  PersonRow,
+  DepartmentRecord,
+  PositionRecord,
+  BranchRecord,
+  PhoneRecord,
+  UserRecord,
+} from '@/types/user'
 
-export type EmployeeRow = {
-  id: string
-  full_name: string
-  email: string
-  emp_status: string
-  department: { id: number; name: string } | null
-  position: { id: number; title: string } | null
-  branch: { id: number; city: string; country?: string; address?: string | null } | null
-  personalPhone: string
-  workPhone: string
-  saudiPhone: string
-  created_at?: string
-}
-
-type DepartmentRecord = { id: number; name: string }
-type PositionRecord = { id: number; title: string }
-type BranchRecord = { id: number; city: string; country?: string; address?: string | null }
-type PhoneRecord = { id: number; number: string; is_primary: boolean; users_id: string }
-
-type UserRecord = {
-  id: string
-  name?: string
-  email?: string
-  emp_status?: string
-  department_id?: number
-  position_id?: number
-  branch_id?: number
-  created_at?: string
-}
+export type EmployeeRow = PersonRow
 
 const EGYPT_PHONE_RE = /^01[0125][0-9]{8}$/
 const SAUDI_PHONE_RE = /^(?:\+?966|00966|0)?5[0-9]{8}$/
 
+// ⚠️ الأرقام في قاعدة البيانات متخزنة بصيغة دولية (+20xxxxxxxxxx / +966xxxxxxxxx)
+// بينما الـ regex بتاعة مصر بتتوقع صيغة محلية (01xxxxxxxxx).
+// الفنكشن دي بتحوّل أي صيغة دولية (+20 / 0020 / +966 / 00966) لصيغة محلية تبدأ بـ 0
+// قبل ما نطابقها، عشان التصنيف يشتغل صح مهما كانت الصيغة المخزنة.
+function toLocalPhone(raw: string): string {
+  let v = raw.replace(/[\s-]/g, '')
+  if (v.startsWith('+20')) v = '0' + v.slice(3)
+  else if (v.startsWith('0020')) v = '0' + v.slice(4)
+  else if (v.startsWith('+966')) v = '0' + v.slice(4)
+  else if (v.startsWith('00966')) v = '0' + v.slice(5)
+  return v
+}
+
 function classifyPhones(numbers: string[]): { personalPhone: string; workPhone: string; saudiPhone: string } {
-  const saudi = numbers.find((n) => SAUDI_PHONE_RE.test(n)) ?? ''
-  const egyptians = numbers.filter((n) => EGYPT_PHONE_RE.test(n))
+  const normalized = numbers.map(toLocalPhone)
+  const saudi = normalized.find((n) => SAUDI_PHONE_RE.test(n)) ?? ''
+  const egyptians = normalized.filter((n) => EGYPT_PHONE_RE.test(n))
   return {
     personalPhone: egyptians[0] ?? '',
     workPhone: egyptians[1] ?? '',
@@ -66,7 +60,7 @@ async function getPhonesByUserIds(userIds: string[]): Promise<Map<string, string
 
 export async function getEmployees(): Promise<EmployeeRow[]> {
   const { data: users, error: usersError } = await supabase
-    .from('users')
+    .from('users_with_email')
     .select('*')
 
   if (usersError) {
@@ -106,6 +100,9 @@ export async function getEmployees(): Promise<EmployeeRow[]> {
     return {
       id: u.id,
       full_name: u.name ?? '',
+      // ⚠️ جدول users مفيهوش عمود email فعليًا (شايفينه في الـ response اللي وصلنا).
+      // الإيميل موجود بس في auth.users، ومفيش صلاحية نجيبه من هنا لمستخدمين تانيين.
+      // لو محتاجينه في اللستة، لازم endpoint في الباك (Edge Function) يرجّعه join مع auth.users.
       email: u.email ?? '',
       emp_status: u.emp_status ?? 'نشط',
       department: departmentsList.find((d) => d.id === u.department_id) ?? null,
@@ -114,6 +111,7 @@ export async function getEmployees(): Promise<EmployeeRow[]> {
       personalPhone,
       workPhone,
       saudiPhone,
+      photo_url: u.photo_url ?? null,
       created_at: u.created_at,
     }
   })
@@ -123,7 +121,7 @@ export async function getEmployees(): Promise<EmployeeRow[]> {
 
 export async function getEmployeeById(id: string): Promise<EmployeeRow | null> {
   const { data: user, error: userError } = await supabase
-    .from('users')
+    .from('users_with_email')
     .select('*')
     .eq('id', id)
     .maybeSingle()
@@ -168,34 +166,28 @@ export async function getEmployeeById(id: string): Promise<EmployeeRow | null> {
     personalPhone,
     workPhone,
     saudiPhone,
+    photo_url: u.photo_url ?? null,
     created_at: u.created_at,
   }
 }
 
 // تحويل الأرقام المحلية لصيغة دولية (+20 لمصر, +966 للسعودية) زي ما الباك بيطلب
 function toInternationalPhone(local: string): string {
-  const digits = local.replace(/\D/g, '') // شيل أي حروف غير أرقام
+  const digits = local.replace(/\D/g, '')
 
-  // مصري: بيبدأ بـ 01 وطوله 11 رقم
   if (/^01[0125][0-9]{8}$/.test(digits)) {
-    return `+20${digits.slice(1)}` // نشيل الصفر الأول ونضيف +20
+    return `+20${digits.slice(1)}`
   }
-
-  // سعودي: بيبدأ بـ 05 وطوله 10 أرقام
   if (/^05[0-9]{8}$/.test(digits)) {
     return `+966${digits.slice(1)}`
   }
-
-  // سعودي مكتوب من غير الصفر (5xxxxxxxx)
   if (/^5[0-9]{8}$/.test(digits)) {
     return `+966${digits}`
   }
-
-  // لو أصلاً فيه + أو الرقم مش متعرف عليه، رجّعه زي ما هو
   return local.startsWith('+') ? local : `+${digits}`
 }
 
-// إضافة موظف جديد عن طريق Edge Function بتاعت الباك — form-data
+// إضافة موظف جديد — create-user (form-data)
 export async function createEmployee(payload: {
   full_name: string
   email: string
@@ -233,3 +225,150 @@ export async function createEmployee(payload: {
 
   return data
 }
+
+// تعديل بيانات موظف موجود — update-user (form-data)
+// ⚠️ افتراض: نفس حقول create-user من غير email/password، وفيها user_id إجباري.
+export async function updateEmployee(payload: {
+  user_id: string
+  full_name?: string
+  phone_numbers?: string[]
+  department_id?: number
+  position_id?: number
+  branch_id?: number
+  emp_status?: string
+  photo?: File | null
+}) {
+  const formData = new FormData()
+  formData.append('user_id', payload.user_id)
+  if (payload.full_name) formData.append('name', payload.full_name)
+  if (payload.department_id !== undefined) formData.append('department_id', String(payload.department_id))
+  if (payload.position_id !== undefined) formData.append('position_id', String(payload.position_id))
+  if (payload.branch_id !== undefined) formData.append('branch_id', String(payload.branch_id))
+  if (payload.emp_status) formData.append('emp_status', payload.emp_status)
+
+  payload.phone_numbers?.forEach((phone) => {
+    formData.append('phone_numbers', toInternationalPhone(phone))
+  })
+
+  if (payload.photo) {
+    formData.append('photo', payload.photo)
+  }
+
+  const { data, error } = await supabase.functions.invoke('update-user', {
+    body: formData,
+  })
+
+  if (error) {
+    console.error('خطأ في تعديل بيانات الموظف:', error)
+    throw error
+  }
+
+  return data
+}
+
+// تفعيل/تعطيل موظف (بيستخدم نفس update-user بحقل emp_status بس)
+export async function updateEmployeeStatus(userId: string, emp_status: string) {
+  return updateEmployee({ user_id: userId, emp_status })
+}
+
+// لستة الوظائف والفروع (عشان الـ Select بتاعة الفورم)
+export async function getAllPositions(): Promise<PositionRecord[]> {
+  const { data, error } = await supabase.from('position').select('*')
+  if (error) throw error
+  return (data || []) as PositionRecord[]
+}
+
+export async function getAllBranches(): Promise<BranchRecord[]> {
+  const { data, error } = await supabase.from('branch').select('*')
+  if (error) throw error
+  return (data || []) as BranchRecord[]
+}
+
+// ⚠️ ملحوظة: مفيش endpoint لحذف موظف (delete-user) في الدوك اللي وصلني لحد دلوقتي.
+// دالة "حذف موظف" في صفحة الموظفين لسه شغالة محلي بس (in-memory) مش متصلة بالباك،
+// هتفضل كده لحد ما الباك يوفر endpoint للحذف.
+
+// ============================================================
+//  Employee Stats — تاسكات / تقارير / ملفات / حضور
+// ============================================================
+
+export type EmployeeTaskStats = {
+  total: number
+  completed: number
+  late: number
+}
+
+// ⚠️ عمود completion_percent هو المصدر الموثوق لتحديد "مكتملة" (بدل status
+// لإن القيم الممكنة لـ public.task_status مش موثقة عندي).
+// "متأخرة" = end_date فات وما اكتملتش 100%.
+export async function getEmployeeTaskStats(userId: string): Promise<EmployeeTaskStats> {
+  const { data, error } = await supabase
+    .from('tasks')
+    .select('completion_percent, end_date')
+    .eq('assigned_to', userId)
+
+  if (error) throw error
+  const rows = data || []
+  const today = new Date().toISOString().slice(0, 10)
+
+  const total = rows.length
+  const completed = rows.filter((t) => (t.completion_percent ?? 0) >= 100).length
+  const late = rows.filter(
+    (t) => (t.completion_percent ?? 0) < 100 && t.end_date && t.end_date < today
+  ).length
+
+  return { total, completed, late }
+}
+
+export async function getEmployeeReportsCount(userId: string): Promise<number> {
+  const { count, error } = await supabase
+    .from('daily_reports')
+    .select('id', { count: 'exact', head: true })
+    .eq('users_id', userId)
+
+  if (error) throw error
+  return count ?? 0
+}
+
+export async function getEmployeeFilesCount(userId: string): Promise<number> {
+  const { count, error } = await supabase
+    .from('files')
+    .select('id', { count: 'exact', head: true })
+    .eq('users_id', userId)
+
+  if (error) throw error
+  return count ?? 0
+}
+
+export type EmployeeAttendanceStats = {
+  presentDays: number
+  lateDays: number
+}
+
+// ⚠️ عمود status في attendance هو public.attendance_type لكن القيم الممكنة
+// (حاضر/غائب/متأخر...؟) مش موثقة عندي، فمعتمدتش عليه.
+// "حضور" = عدد صفوف الشهر الحالي (كل صف = يوم حضر فيه فعليًا).
+// "تأخير" = late_minutes > 0.
+// "غياب" لسه مش متاح: يحتاج مقارنة مع أيام العمل الرسمية للموظف (جدول/مصدر
+// مش موجود في الدوك) — سيبته mock في الصفحة.
+export async function getEmployeeAttendanceStats(userId: string): Promise<EmployeeAttendanceStats> {
+  const now = new Date()
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10)
+  const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10)
+
+  const { data, error } = await supabase
+    .from('attendance')
+    .select('late_minutes, attendance_date')
+    .eq('users_id', userId)
+    .gte('attendance_date', monthStart)
+    .lte('attendance_date', monthEnd)
+
+  if (error) throw error
+  const rows = data || []
+
+  return {
+    presentDays: rows.length,
+    lateDays: rows.filter((r) => (r.late_minutes ?? 0) > 0).length,
+  }
+}
+

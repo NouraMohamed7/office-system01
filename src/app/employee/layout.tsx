@@ -2,15 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ManagerSidebar } from "@/components/manager/sidebar";
-import { ManagerTopbar } from "@/components/manager/topbar";
 import { supabase } from "@/lib/supabase/client";
 import { getCurrentUserRole } from "@/modules/auth/api/auth.api";
 import { ROLE_ID } from "@/constants";
 
-export default function ManagerLayout({ children }: { children: React.ReactNode }) {
+export default function EmployeeLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
-  const [mobileOpen, setMobileOpen] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
 
   useEffect(() => {
@@ -27,8 +24,8 @@ export default function ManagerLayout({ children }: { children: React.ReactNode 
         const roleId = await getCurrentUserRole(user.id);
         if (!active) return;
 
-        if (roleId !== ROLE_ID.MANAGER) {
-          router.replace("/employee/dashboard");
+        if (roleId !== ROLE_ID.EMPLOYEE) {
+          router.replace("/manager/dashboard");
           return;
         }
         setAuthChecked(true);
@@ -44,21 +41,11 @@ export default function ManagerLayout({ children }: { children: React.ReactNode 
 
   if (!authChecked) {
     return (
-      <div className="grid min-h-screen w-full place-items-center bg-background">
+      <div dir="rtl" className="grid min-h-screen w-full place-items-center bg-background">
         <div className="size-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
       </div>
     );
   }
 
-  return (
-    <div dir="rtl" className="flex min-h-screen w-full bg-background font-sans text-foreground">
-      <ManagerSidebar mobileOpen={mobileOpen} onToggleMobile={() => setMobileOpen((v) => !v)} />
-      <div className="flex min-w-0 flex-1 flex-col">
-        <ManagerTopbar onToggleSidebar={() => setMobileOpen((v) => !v)} />
-        <main className="flex-1 px-6 py-6 lg:px-8 lg:py-8">
-          {children}
-        </main>
-      </div>
-    </div>
-  );
+  return <>{children}</>;
 }

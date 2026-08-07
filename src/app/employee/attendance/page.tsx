@@ -1,9 +1,9 @@
-// src/app/attendance/page.tsx
+// src/app/employee/attendance/page.tsx
 "use client";
 
 import { PortalLayout, Card, StatusPill } from "@/components/portal-layout";
 import { useToast } from "@/components/toast";
-import { Clock, Check, LogIn, LogOut, Coffee, PlayCircle, Loader2 } from "lucide-react";
+import { Clock, Check, LogIn, LogOut, Coffee, PlayCircle, Loader2, Palmtree, X, Pencil, Trash2, StopCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
   checkIn as apiCheckIn,
@@ -11,11 +11,49 @@ import {
   getMyAttendanceToday,
   getMyAttendanceHistory,
   getMyMonthSummary,
+  requestLeave,
+  updateLeave,
+  deleteLeave,
+  endLeaveEarly,
   type AttendanceRecord,
   type MonthSummary,
 } from "@/modules/attendance/api/attendance.api";
+import {
+  ATTENDANCE_STATUS_LABEL,
+  LEAVE_TYPE_LABEL,
+  LEAVE_TYPE_OPTIONS,
+  type LeaveType,
+} from "@/lib/attendance-labels";
 
 type BreakRecord = { start: string; end: string | null; startMs: number; endMs: number | null };
+
+// ============================================================
+// طلبات الإجازة — Session-only
+// ⚠️ الباك مفيهوش endpoint لقراءة/عرض طلبات الإجازة (زي attendance_today
+// بالنسبة للحضور)، فبنحتفظ بالطلبات هنا محليًا لحد ما تختفي بعد
+// refresh للصفحة. لما الباك يوفر جدول/view قراءة، هنستبدل الـ state ده
+// بنداء API حقيقي في useEffect زي باقي البيانات.
+// ============================================================
+type LeaveRequest = {
+  // ⚠️ الـ id ده جاي من رجوع RPC (لو رجع). لو مش موجود، الطلب بيتسجل
+  // بس من غير إمكانية تعديل/إلغاء لأننا مش عارفين رقمه.
+  id: number | null;
+  start_date: string;
+  end_date: string;
+  leave_type: LeaveType;
+  reason: string;
+};
+
+// بيحاول يطلع رقم الطلب من شكل رجوع الـ RPC (مش موثق بدقة في الدوك)
+function extractLeaveId(data: unknown): number | null {
+  if (data && typeof data === "object") {
+    const obj = data as Record<string, unknown>;
+    if (typeof obj.id === "number") return obj.id;
+    if (typeof obj.leave_id === "number") return obj.leave_id;
+  }
+  if (typeof data === "number") return data;
+  return null;
+}
 
 function formatTime(iso: string | null): string {
   if (!iso) return "—";
@@ -38,6 +76,23 @@ export default function AttendancePage() {
   const [isOnBreak, setIsOnBreak] = useState(false);
   const [breaks, setBreaks] = useState<BreakRecord[]>([]);
   const [breakElapsedSec, setBreakElapsedSec] = useState(0);
+
+  // ---- طلبات الإجازة (session-only، شوف الملاحظة فوق) ----
+  const [leaveOpen, setLeaveOpen] = useState(false);
+  const [myLeaves, setMyLeaves] = useState<LeaveRequest[]>([]);
+  const [leaveSubmitting, setLeaveSubmitting] = useState(false);
+  const [editingLeaveId, setEditingLeaveId] = useState<number | null>(null);
+  const [leaveForm, setLeaveForm] = useState<{
+    start_date: string;
+    end_date: string;
+    leave_type: LeaveType | "";
+    reason: string;
+  }>({
+    start_date: new Date().toISOString().slice(0, 10),
+    end_date: new Date().toISOString().slice(0, 10),
+    leave_type: "",
+    reason: "",
+  });
 
   useEffect(() => {
     setNow(new Date());
@@ -171,11 +226,131 @@ export default function AttendancePage() {
   const summaryPct = (count: number) =>
     monthSummary && monthSummary.totalDays > 0 ? Math.round((count / monthSummary.totalDays) * 100) : 0;
 
+  // ============================================================
+  // طلبات الإجازة
+  // ============================================================
+
+  function openNewLeaveForm() {
+    setEditingLeaveId(null);
+    setLeaveForm({
+      start_date: new Date().toISOString().slice(0, 10),
+      end_date: new Date().toISOString().slice(0, 10),
+      leave_type: "",
+      reason: "",
+    });
+    setLeaveOpen(true);
+  }
+
+  function openEditLeaveForm(l: LeaveRequest) {
+    if (l.id === null) return; // مش عارفين رقمه، مش هنقدر نعدله
+    setEditingLeaveId(l.id);
+    setLeaveForm({
+      start_date: l.start_date,
+      end_date: l.end_date,
+      leave_type: l.leave_type,
+      reason: l.reason,
+    });
+    setLeaveOpen(true);
+  }
+
+  async function submitLeaveForm() {
+    if (!leaveForm.leave_type) {
+      showToast("error", "حدد نوع الإجازة");
+      return;
+    }
+    if (!leaveForm.reason.trim()) {
+      showToast("error", "اكتب سبب الإجازة");
+      return;
+    }
+    setLeaveSubmitting(true);
+    try {
+      if (editingLeaveId !== null) {
+        await updateLeave({
+          p_leave_id: editingLeaveId,
+          p_start_date: leaveForm.start_date,
+          p_end_date: leaveForm.end_date,
+          p_reason: leaveForm.reason,
+        });
+        setMyLeaves((list) =>
+          list.map((l) =>
+            l.id === editingLeaveId
+              ? { ...l, start_date: leaveForm.start_date, end_date: leaveForm.end_date, reason: leaveForm.reason }
+              : l
+          )
+        );
+        showToast("success", "تم تعديل طلب الإجازة");
+      } else {
+        const result = await requestLeave({
+          p_start_date: leaveForm.start_date,
+          p_end_date: leaveForm.end_date,
+          p_leave_type: leaveForm.leave_type,
+          p_reason: leaveForm.reason,
+        });
+        const newId = extractLeaveId(result);
+        setMyLeaves((list) => [
+          {
+            id: newId,
+            start_date: leaveForm.start_date,
+            end_date: leaveForm.end_date,
+            leave_type: leaveForm.leave_type as LeaveType,
+            reason: leaveForm.reason,
+          },
+          ...list,
+        ]);
+        showToast("success", "تم إرسال طلب الإجازة بنجاح");
+      }
+      setLeaveOpen(false);
+    } catch (err) {
+      showToast("error", err instanceof Error ? err.message : "تعذر إرسال طلب الإجازة");
+    } finally {
+      setLeaveSubmitting(false);
+    }
+  }
+
+  async function cancelLeave(l: LeaveRequest) {
+    if (l.id === null) {
+      showToast("error", "مش قادرين نلغي الطلب ده — رقمه مش معروف (راجع الملاحظة في الكود)");
+      return;
+    }
+    try {
+      await deleteLeave(l.id);
+      setMyLeaves((list) => list.filter((x) => x.id !== l.id));
+      showToast("success", "تم إلغاء طلب الإجازة");
+    } catch (err) {
+      showToast("error", err instanceof Error ? err.message : "تعذر إلغاء طلب الإجازة");
+    }
+  }
+
+  async function endLeaveNow(l: LeaveRequest) {
+    if (l.id === null) {
+      showToast("error", "مش قادرين ننهي الإجازة دي — رقمها مش معروف");
+      return;
+    }
+    try {
+      await endLeaveEarly(l.id);
+      setMyLeaves((list) => list.filter((x) => x.id !== l.id));
+      showToast("success", "تم إنهاء الإجازة بدري");
+    } catch (err) {
+      showToast("error", err instanceof Error ? err.message : "تعذر إنهاء الإجازة");
+    }
+  }
+
   return (
     <PortalLayout title="الحضور" subtitle="سجل حضورك وانصرافك اليومي وراجع تاريخك">
       <Card className="p-8 mb-6 text-center relative overflow-hidden">
         <div className="absolute inset-0 bg-gradient-to-b from-primary/5 to-transparent pointer-events-none" />
         <div className="relative">
+          <div className="flex items-center justify-between mb-2">
+            <div />
+            <button
+              onClick={openNewLeaveForm}
+              className="inline-flex items-center gap-2 rounded-xl border border-border bg-background px-3.5 py-2 text-sm font-semibold transition hover:bg-accent active:scale-95"
+            >
+              <Palmtree className="h-4 w-4 text-teal" />
+              طلب إجازة
+            </button>
+          </div>
+
           <div className="text-sm text-muted-foreground">{date}</div>
           <div className="text-5xl font-bold text-foreground tabular-nums mt-2 mb-6">{time}</div>
 
@@ -275,6 +450,46 @@ export default function AttendancePage() {
         </div>
       </Card>
 
+      {/* ============================================================
+          طلبات الإجازة (session-only)
+      ============================================================ */}
+      {myLeaves.length > 0 && (
+        <Card className="p-6 mb-6 border-2 border-teal/20">
+          <h3 className="font-bold text-foreground mb-1 flex items-center gap-2">
+            <Palmtree className="h-4 w-4 text-teal" /> طلبات الإجازة (الجلسة الحالية)
+          </h3>
+          <p className="text-xs text-muted-foreground mb-4">
+            ⚠️ الطلبات دي بتتفقد لو عملت refresh للصفحة — لسه معندناش endpoint لعرض السجل الدائم من الباك.
+          </p>
+          <div className="space-y-2">
+            {myLeaves.map((l, i) => (
+              <div key={l.id ?? `tmp-${i}`} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border p-3 text-sm">
+                <div>
+                  <div className="font-semibold">{LEAVE_TYPE_LABEL[l.leave_type]} — {l.start_date} إلى {l.end_date}</div>
+                  <div className="text-muted-foreground text-xs">{l.reason}</div>
+                  {l.id === null && (
+                    <div className="text-warning text-xs mt-1">تم الإرسال، بس رقم الطلب مش معروف من رجوع الـ API — التعديل/الإلغاء معطلين لحد ما نتأكد من شكل الرد</div>
+                  )}
+                </div>
+                {l.id !== null && (
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button onClick={() => openEditLeaveForm(l)} className="rounded-lg border border-border p-2 hover:bg-accent" title="تعديل">
+                      <Pencil className="h-4 w-4" />
+                    </button>
+                    <button onClick={() => endLeaveNow(l)} className="rounded-lg border border-border p-2 hover:bg-accent" title="إنهاء بدري">
+                      <StopCircle className="h-4 w-4 text-warning" />
+                    </button>
+                    <button onClick={() => cancelLeave(l)} className="rounded-lg border border-border p-2 hover:bg-destructive/10" title="إلغاء">
+                      <Trash2 className="h-4 w-4 text-destructive" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
       {hasCheckedIn && (
         <Card className="p-6 mb-6 border-2 border-primary/20">
           <h3 className="font-bold text-foreground mb-4 flex items-center gap-2">
@@ -297,7 +512,9 @@ export default function AttendancePage() {
                   <td className="py-3 text-muted-foreground tabular-nums">{formatDuration(totalBreakSeconds)}</td>
                   <td className="py-3">
                     {todayStatus && (
-                      <StatusPill tone={todayStatus === "حاضر" ? "success" : todayStatus === "متأخر" ? "warning" : "danger"}>{todayStatus}</StatusPill>
+                      <StatusPill tone={todayStatus === "present" ? "success" : todayStatus === "late" ? "warning" : "danger"}>
+                        {ATTENDANCE_STATUS_LABEL[todayStatus]}
+                      </StatusPill>
                     )}
                   </td>
                 </tr>
@@ -349,8 +566,8 @@ export default function AttendancePage() {
                   <td className="py-3 text-muted-foreground tabular-nums">{formatTime(r.check_in_at)}</td>
                   <td className="py-3 text-muted-foreground tabular-nums">{formatTime(r.check_out_at)}</td>
                   <td className="py-3">
-                    <StatusPill tone={r.status === "حاضر" ? "success" : r.status === "متأخر" ? "warning" : "danger"}>
-                      {r.status}
+                    <StatusPill tone={r.status === "present" ? "success" : r.status === "late" ? "warning" : "danger"}>
+                      {ATTENDANCE_STATUS_LABEL[r.status]}
                     </StatusPill>
                   </td>
                 </tr>
@@ -368,6 +585,86 @@ export default function AttendancePage() {
           <SummaryCard label="أيام التأخير" value={String(monthSummary?.lateDays ?? 0)} tone="warning" pct={summaryPct(monthSummary?.lateDays ?? 0)} />
         </div>
       </div>
+
+      {/* ============================================================
+          مودال: طلب/تعديل إجازة
+      ============================================================ */}
+      {leaveOpen && (
+        <>
+          <div className="fixed inset-0 z-40 bg-black/40" onClick={() => setLeaveOpen(false)} />
+          <div className="fixed inset-x-4 top-1/2 z-50 mx-auto max-w-md -translate-y-1/2 rounded-2xl border border-border bg-card p-6 shadow-warm">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-lg font-bold flex items-center gap-2">
+                <Palmtree className="h-5 w-5 text-teal" />
+                {editingLeaveId !== null ? "تعديل طلب الإجازة" : "طلب إجازة جديد"}
+              </h3>
+              <button onClick={() => setLeaveOpen(false)} className="text-muted-foreground hover:text-foreground">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <label className="text-xs space-y-1 block">
+                  <span className="text-muted-foreground">من تاريخ</span>
+                  <input
+                    type="date"
+                    value={leaveForm.start_date}
+                    onChange={(e) => setLeaveForm((f) => ({ ...f, start_date: e.target.value }))}
+                    className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary/50"
+                  />
+                </label>
+                <label className="text-xs space-y-1 block">
+                  <span className="text-muted-foreground">إلى تاريخ</span>
+                  <input
+                    type="date"
+                    value={leaveForm.end_date}
+                    onChange={(e) => setLeaveForm((f) => ({ ...f, end_date: e.target.value }))}
+                    className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary/50"
+                  />
+                </label>
+              </div>
+
+              {/* نوع الإجازة: القيم دلوقتي مضبوطة على public.leave_type الحقيقي
+                  (vacation / sick / permission) — راجع src/lib/attendance-labels.ts.
+                  تعديل الحقل ده ممنوع بعد الإرسال لأن update_leave مبيقبلش p_leave_type. */}
+              <label className="text-xs space-y-1 block">
+                <span className="text-muted-foreground">نوع الإجازة</span>
+                <select
+                  value={leaveForm.leave_type}
+                  onChange={(e) => setLeaveForm((f) => ({ ...f, leave_type: e.target.value as LeaveType }))}
+                  disabled={editingLeaveId !== null}
+                  className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary/50 disabled:opacity-60"
+                >
+                  <option value="" disabled>اختار نوع الإجازة</option>
+                  {LEAVE_TYPE_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="text-xs space-y-1 block">
+                <span className="text-muted-foreground">السبب</span>
+                <textarea
+                  value={leaveForm.reason}
+                  onChange={(e) => setLeaveForm((f) => ({ ...f, reason: e.target.value }))}
+                  rows={3}
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary/50"
+                />
+              </label>
+
+              <button
+                onClick={submitLeaveForm}
+                disabled={leaveSubmitting}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-60"
+              >
+                {leaveSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Palmtree className="h-4 w-4" />}
+                {editingLeaveId !== null ? "حفظ التعديل" : "إرسال الطلب"}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
     </PortalLayout>
   );
 }

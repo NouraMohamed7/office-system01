@@ -3,14 +3,22 @@
 
 import { useMemo, useState, useEffect } from "react";
 import Link from "next/link";
-import { Avatar, Card, PageHeader, Pill, StatCard } from "@/components/manager/primitives";
+import { Avatar, Button, Card, Input, PageHeader, Pill, Select, StatCard, TableShell } from "@/components/manager/primitives";
 import { useToast } from "@/components/toast";
 import * as XLSX from "xlsx";
 import {
   Plus, Search, Users, MoreVertical, X, Eye, EyeOff, RefreshCw, Copy, Trash2, Power, Pencil, FileSpreadsheet,
 } from "lucide-react";
 import { getDepartments, type Department } from "@/modules/department/api/department.api";
-import { getEmployees, createEmployee } from "@/modules/employees/api/employees.api";
+import {
+  getEmployees,
+  createEmployee,
+  updateEmployee,
+  updateEmployeeStatus,
+  getAllPositions,
+  getAllBranches,
+} from "@/modules/employees/api/employees.api";
+import type { PositionRecord, BranchRecord } from "@/types/user";
 
 type Tone = "success" | "warning" | "danger" | "teal" | "muted" | "primary";
 
@@ -20,7 +28,11 @@ type Employee = {
   id: string;
   name: string;
   dept: string;
+  deptId?: number;
+  position: string;
+  positionId?: number;
   branch: string;
+  branchId?: number;
   personalPhone: string;
   workPhone: string;
   saudiPhone: string;
@@ -29,6 +41,10 @@ type Employee = {
   status: EmployeeStatus;
   tone: Tone;
   last: string;
+  photoUrl?: string | null;
+  // ⚠️ id بقى UUID مش رقم تسلسلي، فمينفعش نرتب بيه رقميًا زي الأول.
+  // بنستخدم created_at بدل كده في ترتيب "الأحدث إضافة".
+  createdAt: string;
 };
 
 const STATUS_TONE: Record<EmployeeStatus, Tone> = {
@@ -39,7 +55,6 @@ const STATUS_TONE: Record<EmployeeStatus, Tone> = {
   "غائب": "danger",
 };
 
-// تحقق مبسّط من صيغة الأرقام (مصري 01xxxxxxxxx / سعودي 05xxxxxxxx أو 9665xxxxxxxx)
 const EGYPT_PHONE_RE = /^01[0125][0-9]{8}$/;
 const SAUDI_PHONE_RE = /^(?:\+?966|00966|0)?5[0-9]{8}$/;
 
@@ -88,6 +103,7 @@ type FormState = {
   name: string;
   englishName: string;
   dept: string;
+  position: string;
   branch: string;
   personalPhone: string;
   workPhone: string;
@@ -97,7 +113,7 @@ type FormState = {
 };
 
 const emptyForm: FormState = {
-  name: "", englishName: "", dept: "", branch: "",
+  name: "", englishName: "", dept: "", position: "", branch: "",
   personalPhone: "", workPhone: "", saudiPhone: "", email: "", password: "",
 };
 
@@ -106,35 +122,48 @@ export default function EmployeesPage() {
 
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
+  const [positions, setPositions] = useState<PositionRecord[]>([]);
+  const [branches, setBranches] = useState<BranchRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+
   useEffect(() => {
     async function loadData() {
       try {
-        const [depts, emps] = await Promise.all([
+        const [depts, emps, poss, brs] = await Promise.all([
           getDepartments(),
           getEmployees(),
+          getAllPositions(),
+          getAllBranches(),
         ]);
 
         setDepartments(depts);
+        setPositions(poss);
+        setBranches(brs);
 
-        // نحول شكل البيانات من الباك لشكل الـ Employee اللي الصفحة متوقعاه
-        // الأرقام (personalPhone/workPhone/saudiPhone) بقت جايه حقيقي من جدول phone
         const mapped: Employee[] = emps.map((e) => ({
           id: e.id,
           name: e.full_name,
           dept: e.department?.name ?? "-",
+          deptId: e.department?.id,
+          position: e.position?.title ?? "-",
+          positionId: e.position?.id,
           branch: e.branch?.city ?? "-",
+          branchId: e.branch?.id,
           personalPhone: e.personalPhone,
           workPhone: e.workPhone,
           saudiPhone: e.saudiPhone,
           email: e.email,
           password: "", // مش هيترجع من الباك لأسباب أمنية
           status: (e.emp_status as EmployeeStatus) || "نشط",
-          tone: STATUS_TONE[(e.emp_status as EmployeeStatus) || "نشط"],
+          tone: STATUS_TONE[(e.emp_status as EmployeeStatus) || "نشط"] ?? "muted",
           last: "-",
+          photoUrl: e.photo_url ?? null,
+          createdAt: e.created_at ?? "",
         }));
 
         setEmployees(mapped);
@@ -176,7 +205,9 @@ export default function EmployeesPage() {
       return true;
     });
     list = [...list].sort((a, b) => {
-      if (sortBy === "newest") return Number(b.id) - Number(a.id);
+      if (sortBy === "newest") {
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      }
       if (sortBy === "name") return a.name.localeCompare(b.name, "ar");
       return 0;
     });
@@ -196,19 +227,30 @@ export default function EmployeesPage() {
     setErrors({});
     setEmailTouched(false);
     setShowPassword(false);
+    setPhotoFile(null);
+    setPhotoPreview(null);
     setModalOpen(true);
   }
 
   function openEditModal(emp: Employee) {
     setEditingId(emp.id);
     setForm({
-      name: emp.name, englishName: "", dept: emp.dept, branch: emp.branch,
-      personalPhone: emp.personalPhone, workPhone: emp.workPhone, saudiPhone: emp.saudiPhone,
-      email: emp.email, password: emp.password,
+      name: emp.name,
+      englishName: "",
+      dept: emp.dept,
+      position: emp.position,
+      branch: emp.branch,
+      personalPhone: emp.personalPhone,
+      workPhone: emp.workPhone,
+      saudiPhone: emp.saudiPhone,
+      email: emp.email,
+      password: emp.password,
     });
     setErrors({});
     setEmailTouched(true);
     setShowPassword(false);
+    setPhotoFile(null);
+    setPhotoPreview(emp.photoUrl ?? null);
     setModalOpen(true);
     setOpenMenuId(null);
   }
@@ -240,6 +282,18 @@ export default function EmployeesPage() {
     setEmailTouched(false);
   }
 
+  function handlePhotoChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0] ?? null;
+    setPhotoFile(file);
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = () => setPhotoPreview(reader.result as string);
+      reader.readAsDataURL(file);
+    } else {
+      setPhotoPreview(null);
+    }
+  }
+
   function validate(): boolean {
     const next: Partial<Record<keyof FormState, string>> = {};
 
@@ -247,6 +301,8 @@ export default function EmployeesPage() {
       next.name = "اكتب اسم الموظف كامل (3 أحرف على الأقل)";
     }
     if (!form.dept) next.dept = "اختر القسم";
+    if (!form.position) next.position = "اختر الوظيفة";
+    if (!form.branch) next.branch = "اختر الفرع";
 
     const personal = normalizePhone(form.personalPhone);
     if (!personal) next.personalPhone = "رقم التلفون الشخصي مطلوب";
@@ -265,7 +321,9 @@ export default function EmployeesPage() {
     else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) next.email = "صيغة الإيميل غير صحيحة";
     else if (employees.some((e) => e.email === form.email.trim() && e.id !== editingId)) next.email = "الإيميل ده مستخدم بالفعل";
 
-    if (!form.password || form.password.length < 6) next.password = "الباسورد لازم 6 خانات على الأقل";
+    if (!editingId && (!form.password || form.password.length < 6)) {
+      next.password = "الباسورد لازم 6 خانات على الأقل";
+    }
 
     const allPhones = [personal, work, saudi].filter(Boolean);
     const phoneTaken = employees.some((e) => {
@@ -287,34 +345,63 @@ export default function EmployeesPage() {
       return;
     }
 
-    // --- التعديل: لسه شغال في الذاكرة بس، هنربطه بالباك في خطوة تانية ---
-    if (editingId) {
-      setEmployees((list) => list.map((emp) => emp.id === editingId ? {
-        ...emp,
-        name: form.name.trim(),
-        dept: form.dept,
-        branch: form.branch.trim() || emp.branch,
-        personalPhone: normalizePhone(form.personalPhone),
-        workPhone: normalizePhone(form.workPhone),
-        saudiPhone: normalizePhone(form.saudiPhone),
-        email: form.email.trim(),
-        password: form.password,
-      } : emp));
-      showToast("success", `تم تحديث بيانات ${form.name}`);
-      setModalOpen(false);
+    const selectedDept = departments.find((d) => d.name === form.dept);
+    const selectedPos = positions.find((p) => p.title === form.position);
+    const selectedBranch = branches.find((b) => b.city === form.branch);
+
+    if (!selectedDept || !selectedPos || !selectedBranch) {
+      showToast("error", "القسم أو الوظيفة أو الفرع المختار غير صحيح");
       return;
     }
 
-    // --- الإضافة الحقيقية عن طريق create-user Edge Function ---
+    // --- تعديل بيانات موظف موجود (متصل بالباك — update-user) ---
+    if (editingId) {
+      setSubmitting(true);
+      try {
+        await updateEmployee({
+          user_id: editingId,
+          full_name: form.name.trim(),
+          department_id: selectedDept.id,
+          position_id: selectedPos.id,
+          branch_id: selectedBranch.id,
+          phone_numbers: [
+            normalizePhone(form.personalPhone),
+            normalizePhone(form.workPhone),
+            normalizePhone(form.saudiPhone),
+          ].filter(Boolean),
+          photo: photoFile,
+        });
+
+        setEmployees((list) => list.map((emp) => emp.id === editingId ? {
+          ...emp,
+          name: form.name.trim(),
+          dept: form.dept,
+          deptId: selectedDept.id,
+          position: form.position,
+          positionId: selectedPos.id,
+          branch: form.branch,
+          branchId: selectedBranch.id,
+          personalPhone: normalizePhone(form.personalPhone),
+          workPhone: normalizePhone(form.workPhone),
+          saudiPhone: normalizePhone(form.saudiPhone),
+          email: form.email.trim(),
+          photoUrl: photoPreview ?? emp.photoUrl,
+        } : emp));
+
+        showToast("success", `تم تحديث بيانات ${form.name}`);
+        setModalOpen(false);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "حصل خطأ غير متوقع";
+        showToast("error", `فشل تحديث بيانات الموظف: ${message}`);
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
+
+    // --- إضافة موظف جديد — create-user Edge Function ---
     setSubmitting(true);
     try {
-      const selectedDept = departments.find((d) => d.name === form.dept);
-      if (!selectedDept) {
-        showToast("error", "القسم المختار غير صحيح");
-        setSubmitting(false);
-        return;
-      }
-
       const result = await createEmployee({
         full_name: form.name.trim(),
         email: form.email.trim(),
@@ -325,8 +412,9 @@ export default function EmployeesPage() {
           normalizePhone(form.saudiPhone),
         ].filter(Boolean),
         department_id: selectedDept.id,
-        position_id: 1, // مؤقت لحد ما نضيف Dropdown حقيقي للوظائف
-        branch_id: 1,   // مؤقت لحد ما نضيف Dropdown حقيقي للفروع
+        position_id: selectedPos.id,
+        branch_id: selectedBranch.id,
+        photo: photoFile,
       });
 
       showToast("success", `تم إضافة ${form.name} بنجاح — إيميل الدخول: ${form.email}`);
@@ -338,7 +426,11 @@ export default function EmployeesPage() {
         id: typedResult?.user?.id || String(Date.now()),
         name: form.name.trim(),
         dept: form.dept,
-        branch: form.branch.trim() || "-",
+        deptId: selectedDept.id,
+        position: form.position,
+        positionId: selectedPos.id,
+        branch: form.branch,
+        branchId: selectedBranch.id,
         personalPhone: normalizePhone(form.personalPhone),
         workPhone: normalizePhone(form.workPhone),
         saudiPhone: normalizePhone(form.saudiPhone),
@@ -347,6 +439,8 @@ export default function EmployeesPage() {
         status: "نشط",
         tone: "success",
         last: "لم يسجل الدخول بعد",
+        photoUrl: photoPreview,
+        createdAt: new Date().toISOString(),
       };
       setEmployees((list) => [newEmployee, ...list]);
       setModalOpen(false);
@@ -358,17 +452,28 @@ export default function EmployeesPage() {
     }
   }
 
-  function toggleStatus(emp: Employee) {
+  // ✅ متصلة بالباك (update-user بحقل emp_status)
+  // ⚠️ الباك بيرجع/بياخد القيمة بالإنجليزي (active/inactive)
+  async function toggleStatus(emp: Employee) {
     const nextStatus: EmployeeStatus = emp.status === "معطل" ? "نشط" : "معطل";
-    setEmployees((list) => list.map((e) => e.id === emp.id ? { ...e, status: nextStatus, tone: STATUS_TONE[nextStatus] } : e));
-    showToast("success", nextStatus === "معطل" ? `تم تعطيل حساب ${emp.name}` : `تم تفعيل حساب ${emp.name}`);
+    const backendStatus: "active" | "inactive" = nextStatus === "معطل" ? "inactive" : "active";
+
+    try {
+      await updateEmployeeStatus(emp.id, backendStatus);
+      setEmployees((list) => list.map((e) => e.id === emp.id ? { ...e, status: nextStatus, tone: STATUS_TONE[nextStatus] } : e));
+      showToast("success", nextStatus === "معطل" ? `تم تعطيل حساب ${emp.name}` : `تم تفعيل حساب ${emp.name}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "حصل خطأ غير متوقع";
+      showToast("error", `فشل تغيير حالة الموظف: ${message}`);
+    }
     setOpenMenuId(null);
   }
 
+  // ⚠️ لسه شغالة محلي بس — مفيش endpoint حذف موظف (delete-user) في دوك الباك حاليًا
   function deleteEmployee(emp: Employee) {
     if (!window.confirm(`متأكد إنك عايز تحذف ${emp.name}؟ الإجراء ده مش هيتراجع.`)) return;
     setEmployees((list) => list.filter((e) => e.id !== emp.id));
-    showToast("success", `تم حذف ${emp.name}`);
+    showToast("success", `تم حذف ${emp.name} (محليًا فقط — مفيش endpoint حذف من الباك لسه)`);
     setOpenMenuId(null);
   }
 
@@ -381,20 +486,20 @@ export default function EmployeesPage() {
     const rows = filtered.map((e) => ({
       "الاسم": e.name,
       "القسم": e.dept,
+      "الوظيفة": e.position,
       "الفرع": e.branch,
       "الهاتف الشخصي": e.personalPhone,
       "هاتف الشغل": e.workPhone,
       "الهاتف السعودي": e.saudiPhone,
       "الإيميل": e.email,
-      "الباسورد": e.password,
       "الحالة": e.status,
       "آخر حضور": e.last,
     }));
 
     const worksheet = XLSX.utils.json_to_sheet(rows);
     worksheet["!cols"] = [
-      { wch: 20 }, { wch: 15 }, { wch: 14 }, { wch: 15 },
-      { wch: 15 }, { wch: 15 }, { wch: 26 }, { wch: 14 }, { wch: 12 }, { wch: 16 },
+      { wch: 20 }, { wch: 15 }, { wch: 15 }, { wch: 14 }, { wch: 15 },
+      { wch: 15 }, { wch: 15 }, { wch: 26 }, { wch: 12 }, { wch: 16 },
     ];
 
     const workbook = XLSX.utils.book_new();
@@ -413,18 +518,12 @@ export default function EmployeesPage() {
         subtitle="إدارة كاملة لبيانات الموظفين والأداء."
         actions={
           <div className="flex items-center gap-3">
-            <button
-              onClick={handleExportExcel}
-              className="inline-flex items-center gap-2 rounded-xl bg-success px-4 py-2 text-sm font-semibold text-success-foreground shadow-warm hover:opacity-90"
-            >
+            <Button onClick={handleExportExcel} variant="secondary" className="bg-success text-success-foreground hover:opacity-90">
               <FileSpreadsheet className="size-4" /> تصدير Excel
-            </button>
-            <button
-              onClick={openAddModal}
-              className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-warm hover:bg-primary-dark"
-            >
+            </Button>
+            <Button onClick={openAddModal}>
               <Plus className="size-4" /> إضافة موظف جديد
-            </button>
+            </Button>
           </div>
         }
       />
@@ -436,11 +535,11 @@ export default function EmployeesPage() {
         <StatCard dense label="متأخر/غائب" value={stats.lateAbsent} tone="warning" />
       </div>
 
-      <Card className="!p-4">
+      <Card className="p-4">
         <div className="flex flex-wrap items-center gap-3">
-          <div className="relative min-w-[220px] flex-1">
+          <div className="relative min-w-55 flex-1">
             <Search className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-            <input
+            <Input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="h-10 w-full rounded-xl border border-border bg-background pr-10 pl-4 text-sm outline-none focus:border-primary/50"
@@ -448,33 +547,33 @@ export default function EmployeesPage() {
             />
           </div>
 
-          <select
+          <Select
             value={deptFilter}
             onChange={(e) => setDeptFilter(e.target.value)}
-            className="rounded-xl border border-border bg-background px-3 py-2 text-xs text-muted-foreground outline-none hover:bg-accent"
+            className="h-10 rounded-xl border border-border bg-background px-3 py-2 text-xs text-muted-foreground outline-none hover:bg-accent"
           >
             <option value="">كل الأقسام</option>
             {departments.map((d) => <option key={d.id} value={d.name}>{d.name}</option>)}
-          </select>
+          </Select>
 
-          <select
+          <Select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            className="rounded-xl border border-border bg-background px-3 py-2 text-xs text-muted-foreground outline-none hover:bg-accent"
+            className="h-10 rounded-xl border border-border bg-background px-3 py-2 text-xs text-muted-foreground outline-none hover:bg-accent"
           >
             <option value="">كل الحالات</option>
             {(["نشط", "في إجازة", "متأخر", "غائب", "معطل"] as const).map((s) => <option key={s} value={s}>{s}</option>)}
-          </select>
+          </Select>
 
           <div className="mr-auto">
-            <select
+            <Select
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value)}
               className="h-10 rounded-xl border border-border bg-background px-3 text-xs outline-none"
             >
               <option value="newest">ترتيب: الأحدث إضافة</option>
               <option value="name">الاسم (أ-ي)</option>
-            </select>
+            </Select>
           </div>
         </div>
       </Card>
@@ -482,12 +581,12 @@ export default function EmployeesPage() {
       {loading && <p className="text-sm text-muted-foreground p-4">جاري تحميل بيانات الموظفين...</p>}
       {loadError && <p className="text-sm text-destructive p-4">خطأ: {loadError}</p>}
 
-      <Card className="!p-0 overflow-hidden">
-        <div className="overflow-x-auto">
+      <Card className="overflow-hidden p-0">
+        <TableShell>
           <table className="w-full text-sm">
             <thead className="bg-accent/40 text-xs text-muted-foreground">
               <tr className="[&>th]:px-4 [&>th]:py-3 [&>th]:text-right">
-                <th>الموظف</th><th>رقم التلفون</th><th>القسم</th><th>الفرع</th><th>الحالة</th><th>آخر حضور</th><th></th>
+                <th>الموظف</th><th>رقم التلفون</th><th>القسم</th><th>الوظيفة</th><th>الفرع</th><th>الحالة</th><th>آخر حضور</th><th></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -495,12 +594,17 @@ export default function EmployeesPage() {
                 <tr key={e.id} className="row-hover hover:row-hover-active">
                   <td className="px-4 py-3">
                     <Link href={`/manager/employees/${e.id}`} className="flex items-center gap-3">
-                      <Avatar name={e.name} />
+                      {e.photoUrl ? (
+                        <img src={e.photoUrl} alt={e.name} className="size-9 shrink-0 rounded-full object-cover" />
+                      ) : (
+                        <Avatar name={e.name} />
+                      )}
                       <span className="font-semibold hover:text-primary">{e.name}</span>
                     </Link>
                   </td>
                   <td className="px-4 py-3 text-xs tabular text-muted-foreground" dir="ltr">{e.personalPhone || "—"}</td>
                   <td className="px-4 py-3 text-muted-foreground">{e.dept}</td>
+                  <td className="px-4 py-3 text-muted-foreground">{e.position}</td>
                   <td className="px-4 py-3 text-muted-foreground">{e.branch}</td>
                   <td className="px-4 py-3"><Pill tone={e.tone}>{e.status}</Pill></td>
                   <td className="px-4 py-3 text-xs text-muted-foreground">{e.last}</td>
@@ -532,14 +636,14 @@ export default function EmployeesPage() {
               ))}
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-4 py-10 text-center text-sm text-muted-foreground">
+                  <td colSpan={8} className="px-4 py-10 text-center text-sm text-muted-foreground">
                     مفيش نتائج مطابقة للبحث/الفلتر
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
-        </div>
+        </TableShell>
       </Card>
 
       {modalOpen && (
@@ -557,7 +661,7 @@ export default function EmployeesPage() {
 
             <form onSubmit={handleSubmit} className="space-y-4" noValidate>
               <Field label="الاسم بالكامل" error={errors.name} required>
-                <input
+                <Input
                   value={form.name}
                   onChange={(e) => updateField("name", e.target.value)}
                   className={inputClass(!!errors.name)}
@@ -566,7 +670,7 @@ export default function EmployeesPage() {
               </Field>
 
               <Field label="الاسم بالإنجليزي (اختياري — لتوليد إيميل أدق)">
-                <input
+                <Input
                   value={form.englishName}
                   onChange={(e) => updateField("englishName", e.target.value)}
                   className={inputClass(false)}
@@ -575,19 +679,45 @@ export default function EmployeesPage() {
                 />
               </Field>
 
-              <Field label="القسم" error={errors.dept} required>
-                <select value={form.dept} onChange={(e) => updateField("dept", e.target.value)} className={inputClass(!!errors.dept)}>
-                  <option value="">اختر القسم</option>
-                  {departments.map((d) => <option key={d.id} value={d.name}>{d.name}</option>)}
-                </select>
+              <Field label="صورة الموظف (اختياري)">
+                <div className="flex items-center gap-3">
+                  {photoPreview ? (
+                    <img src={photoPreview} alt="" className="size-14 rounded-full object-cover border border-border" />
+                  ) : (
+                    <div className="size-14 rounded-full bg-accent grid place-items-center text-xs text-muted-foreground">صورة</div>
+                  )}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handlePhotoChange}
+                    className="text-xs file:ml-2 file:rounded-lg file:border-0 file:bg-accent file:px-3 file:py-1.5 file:text-xs"
+                  />
+                </div>
               </Field>
 
-              <Field label="الفرع (اختياري)">
-                <input value={form.branch} onChange={(e) => updateField("branch", e.target.value)} className={inputClass(false)} placeholder="مثال: القاهرة" />
+              <Field label="القسم" error={errors.dept} required>
+                <Select value={form.dept} onChange={(e) => updateField("dept", e.target.value)} className={inputClass(!!errors.dept)}>
+                  <option value="">اختر القسم</option>
+                  {departments.map((d) => <option key={d.id} value={d.name}>{d.name}</option>)}
+                </Select>
+              </Field>
+
+              <Field label="الوظيفة" error={errors.position} required>
+                <Select value={form.position} onChange={(e) => updateField("position", e.target.value)} className={inputClass(!!errors.position)}>
+                  <option value="">اختر الوظيفة</option>
+                  {positions.map((p) => <option key={p.id} value={p.title}>{p.title}</option>)}
+                </Select>
+              </Field>
+
+              <Field label="الفرع" error={errors.branch} required>
+                <Select value={form.branch} onChange={(e) => updateField("branch", e.target.value)} className={inputClass(!!errors.branch)}>
+                  <option value="">اختر الفرع</option>
+                  {branches.map((b) => <option key={b.id} value={b.city}>{b.city}</option>)}
+                </Select>
               </Field>
 
               <Field label="رقم التلفون الشخصي" error={errors.personalPhone} required>
-                <input
+                <Input
                   value={form.personalPhone}
                   onChange={(e) => updateField("personalPhone", e.target.value)}
                   className={inputClass(!!errors.personalPhone)}
@@ -597,7 +727,7 @@ export default function EmployeesPage() {
               </Field>
 
               <Field label="رقم تلفون الشغل" error={errors.workPhone} required>
-                <input
+                <Input
                   value={form.workPhone}
                   onChange={(e) => updateField("workPhone", e.target.value)}
                   className={inputClass(!!errors.workPhone)}
@@ -607,7 +737,7 @@ export default function EmployeesPage() {
               </Field>
 
               <Field label="رقم السعودي" error={errors.saudiPhone} required>
-                <input
+                <Input
                   value={form.saudiPhone}
                   onChange={(e) => updateField("saudiPhone", e.target.value)}
                   className={inputClass(!!errors.saudiPhone)}
@@ -618,7 +748,7 @@ export default function EmployeesPage() {
 
               <Field label="إيميل الدخول" error={errors.email} required>
                 <div className="flex gap-2">
-                  <input
+                  <Input
                     value={form.email}
                     onChange={(e) => { setEmailTouched(true); updateField("email", e.target.value); }}
                     className={inputClass(!!errors.email)}
@@ -636,42 +766,49 @@ export default function EmployeesPage() {
                 </div>
               </Field>
 
-              <Field label="باسورد الدخول" error={errors.password} required>
-                <div className="flex gap-2">
-                  <div className="relative flex-1">
-                    <input
-                      type={showPassword ? "text" : "password"}
-                      value={form.password}
-                      onChange={(e) => updateField("password", e.target.value)}
-                      className={inputClass(!!errors.password) + " pl-10"}
-                      placeholder="8 خانات على الأقل"
-                      dir="ltr"
-                    />
+              {!editingId && (
+                <Field label="باسورد الدخول" error={errors.password} required>
+                  <div className="flex gap-2">
+                    <div className="relative flex-1">
+                      <Input
+                        type={showPassword ? "text" : "password"}
+                        value={form.password}
+                        onChange={(e) => updateField("password", e.target.value)}
+                        className={inputClass(!!errors.password) + " pl-10"}
+                        placeholder="8 خانات على الأقل"
+                        dir="ltr"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword((v) => !v)}
+                        className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      >
+                        {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                      </button>
+                    </div>
+                    <button type="button" onClick={regeneratePassword} className="grid size-10 shrink-0 place-items-center rounded-xl border border-border hover:bg-accent" title="توليد باسورد جديد">
+                      <RefreshCw className="size-4" />
+                    </button>
                     <button
                       type="button"
-                      onClick={() => setShowPassword((v) => !v)}
-                      className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      onClick={() => { navigator.clipboard.writeText(form.password); showToast("success", "تم نسخ الباسورد"); }}
+                      className="grid size-10 shrink-0 place-items-center rounded-xl border border-border hover:bg-accent"
+                      title="نسخ"
                     >
-                      {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                      <Copy className="size-4" />
                     </button>
                   </div>
-                  <button type="button" onClick={regeneratePassword} className="grid size-10 shrink-0 place-items-center rounded-xl border border-border hover:bg-accent" title="توليد باسورد جديد">
-                    <RefreshCw className="size-4" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { navigator.clipboard.writeText(form.password); showToast("success", "تم نسخ الباسورد"); }}
-                    className="grid size-10 shrink-0 place-items-center rounded-xl border border-border hover:bg-accent"
-                    title="نسخ"
-                  >
-                    <Copy className="size-4" />
-                  </button>
-                </div>
-              </Field>
+                </Field>
+              )}
 
               {!editingId && (
                 <p className="rounded-xl bg-accent/50 p-3 text-xs text-muted-foreground">
                   هيتولد للموظف إيميل وباسورد تلقائي بمجرد كتابة الاسم، وتقدر تعدّلهم قبل الحفظ. سجّل الباسورد ده وابعته للموظف — مش هيتحفظ في صورة واضحة بعد كده.
+                </p>
+              )}
+              {editingId && (
+                <p className="rounded-xl bg-accent/50 p-3 text-xs text-muted-foreground">
+                  تعديل الإيميل أو الباسورد بيتم من مكان تاني (auth.updateUser) — مش من الفورم ده حاليًا.
                 </p>
               )}
 

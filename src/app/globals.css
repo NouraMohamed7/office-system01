@@ -56,6 +56,10 @@
 
   --shadow-warm: 0 1px 2px rgba(201, 106, 69, 0.04), 0 8px 24px -8px rgba(201, 106, 69, 0.08);
   --shadow-warm-lg: 0 4px 12px rgba(201, 106, 69, 0.06), 0 24px 48px -16px rgba(201, 106, 69, 0.12);
+  --shadow-soft: 0 10px 30px -16px rgba(15, 23, 42, 0.14);
+  --shadow-panel: 0 16px 42px -24px rgba(201, 106, 69, 0.22);
+  --radius-card: 1.25rem;
+  --spacing-page: 1.5rem;
 }
 
 :root {
@@ -63,6 +67,9 @@
 
   --background: oklch(0.978 0.008 60);
   --foreground: oklch(0.24 0.015 45);
+  --text: oklch(0.24 0.015 45);
+  --surface: oklch(0.995 0.005 60);
+  --surface-strong: oklch(0.99 0.008 60);
 
   --card: oklch(1 0 0);
   --card-foreground: oklch(0.24 0.015 45);
@@ -135,6 +142,56 @@
   h1, h2, h3, h4, h5, h6 {
     font-weight: 700;
     letter-spacing: -0.01em;
+  }
+}
+
+@layer components {
+  .card-shell {
+    border-radius: var(--radius-card);
+    border: 1px solid var(--color-border);
+    background-color: var(--color-card);
+    box-shadow: var(--shadow-warm);
+  }
+
+  .surface-card {
+    border-radius: var(--radius-card);
+    border: 1px solid var(--color-border);
+    background-color: var(--surface);
+    box-shadow: var(--shadow-soft);
+  }
+
+  .input-shell {
+    width: 100%;
+    height: 2.75rem;
+    border-radius: 0.875rem;
+    border: 1px solid var(--color-border);
+    background-color: color-mix(in srgb, var(--color-background) 82%, white 18%);
+    padding: 0 0.9rem;
+    font-size: 0.95rem;
+    color: var(--color-foreground);
+    outline: none;
+    transition: border-color 180ms ease, box-shadow 180ms ease, background-color 180ms ease;
+  }
+
+  .input-shell:focus {
+    border-color: color-mix(in srgb, var(--color-primary) 58%, var(--color-border));
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-primary) 16%, transparent);
+    background-color: var(--color-card);
+  }
+
+  .page-shell {
+    width: 100%;
+    max-width: 1400px;
+    margin-inline: auto;
+    padding-inline: 1rem;
+  }
+
+  .table-shell {
+    overflow-x: auto;
+    border-radius: 1.25rem;
+    border: 1px solid var(--color-border);
+    background-color: var(--color-card);
+    box-shadow: var(--shadow-warm);
   }
 }
 

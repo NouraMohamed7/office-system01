@@ -1,7 +1,7 @@
 // src/components/manager/primitives.tsx
 "use client";
 
-import type { ReactNode } from "react";
+import type { InputHTMLAttributes, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes } from "react";
 import type { LucideIcon } from "lucide-react";
 import { Check, X, Pencil, MessageCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -53,6 +53,45 @@ export function PageHeader({
   );
 }
 
+/* ---------------- Button ---------------- */
+export function Button({
+  className,
+  variant = "default",
+  children,
+  ...props
+}: {
+  className?: string;
+  variant?: "default" | "secondary" | "outline" | "danger";
+  children: ReactNode;
+} & React.ButtonHTMLAttributes<HTMLButtonElement>) {
+  const base = "inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-60";
+  const variants = {
+    default: "bg-primary text-primary-foreground shadow-warm hover:bg-primary-dark",
+    secondary: "bg-secondary text-foreground hover:bg-accent",
+    outline: "border border-border bg-card text-foreground hover:bg-accent",
+    danger: "bg-destructive text-destructive-foreground hover:opacity-90",
+  };
+
+  return (
+    <button className={cn(base, variants[variant], className)} {...props}>
+      {children}
+    </button>
+  );
+}
+
+/* ---------------- Input / Textarea / Select ---------------- */
+export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
+  return <input className={cn("input-shell", className)} {...props} />;
+}
+
+export function Textarea({ className, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  return <textarea className={cn("input-shell min-h-28 resize-y py-3", className)} {...props} />;
+}
+
+export function Select({ className, ...props }: SelectHTMLAttributes<HTMLSelectElement>) {
+  return <select className={cn("input-shell appearance-none pr-10", className)} {...props} />;
+}
+
 /* ---------------- Card ---------------- */
 export function Card({
   className,
@@ -64,13 +103,18 @@ export function Card({
   return (
     <div
       className={cn(
-        "rounded-2xl border border-border bg-card p-5 shadow-warm",
+        "card-shell p-5",
         className,
       )}
     >
       {children}
     </div>
   );
+}
+
+/* ---------------- Table wrapper ---------------- */
+export function TableShell({ className, children }: { className?: string; children: ReactNode }) {
+  return <div className={cn("table-shell", className)}>{children}</div>;
 }
 
 /* ---------------- SectionTitle ---------------- */
@@ -169,7 +213,7 @@ export function StatCard({
               dense ? "size-10" : "size-11",
             )}
           >
-            <Icon className={dense ? "size-[18px]" : "size-5"} strokeWidth={1.75} />
+            <Icon className={dense ? "size-4.5" : "size-5"} strokeWidth={1.75} />
           </div>
         )}
       </div>

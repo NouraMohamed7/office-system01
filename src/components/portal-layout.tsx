@@ -13,7 +13,7 @@ import {
 type NavItem = { to: string; ar: string; en: string; icon: React.ComponentType<{ className?: string }> };
 
 const NAV: NavItem[] = [
-  { to: "/employee", ar: "الرئيسية", en: "Dashboard", icon: LayoutDashboard },
+  { to: "/employee/dashboard", ar: "الرئيسية", en: "Dashboard", icon: LayoutDashboard },
   { to: "/employee/attendance", ar: "الحضور", en: "Attendance", icon: Clock },
   { to: "/employee/tasks", ar: "المهام", en: "Tasks", icon: ListTodo },
   { to: "/employee/reports", ar: "التقارير اليومية", en: "Daily Reports", icon: FileText },
@@ -35,7 +35,7 @@ export function PortalLayout({ children, title, subtitle }: { children: ReactNod
     <div className="min-h-screen bg-background">
       {/* Sidebar (RTL: right side) */}
       <aside
-        className={`fixed top-0 bottom-0 right-0 z-40 bg-card border-l border-border transition-all duration-300
+        className={`fixed top-0 bottom-0 right-0 z-40 border-l border-border bg-card/95 shadow-warm backdrop-blur transition-all duration-300
           ${collapsed ? "w-20" : "w-72"}
           ${mobileOpen ? "translate-x-0" : "translate-x-full lg:translate-x-0"}`}
       >
@@ -67,7 +67,7 @@ export function PortalLayout({ children, title, subtitle }: { children: ReactNod
 
           <nav className="flex-1 overflow-y-auto scrollbar-thin p-3 space-y-1">
             {NAV.map((item) => {
-              const active = item.to === "/employee" ? pathname === "/employee" : pathname.startsWith(item.to);
+              const active = item.to === "/employee/dashboard" ? pathname === "/employee/dashboard" : pathname.startsWith(item.to);
               const Icon = item.icon;
               return (
                 <Link
@@ -109,8 +109,8 @@ export function PortalLayout({ children, title, subtitle }: { children: ReactNod
       )}
 
       <div className={`transition-all duration-300 ${collapsed ? "lg:mr-20" : "lg:mr-72"}`}>
-        <header className="sticky top-0 z-20 bg-background/85 backdrop-blur border-b border-border">
-          <div className="flex items-center gap-3 px-4 lg:px-8 h-16">
+        <header className="sticky top-0 z-20 border-b border-border bg-background/90 backdrop-blur">
+          <div className="flex h-16 items-center gap-3 px-4 lg:px-8">
             <button className="lg:hidden p-2 -mr-2" onClick={() => setMobileOpen((o) => !o)}>
               {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
             </button>
@@ -144,7 +144,7 @@ export function PortalLayout({ children, title, subtitle }: { children: ReactNod
           {subtitle && <div className="px-4 lg:px-8 pb-3 text-sm text-muted-foreground">{subtitle}</div>}
         </header>
 
-        <main className="p-4 lg:p-8 max-w-[1400px] mx-auto">{children}</main>
+        <main className="page-shell py-4 lg:py-8">{children}</main>
       </div>
     </div>
   );

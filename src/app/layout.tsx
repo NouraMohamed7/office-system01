@@ -1,11 +1,10 @@
-// src/app/layout.tsx
 import type { Metadata } from "next";
 import { ToastProvider } from "@/components/toast";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "بوابة الموظف | Employee Portal",
-  description: "بوابة الموظف — منصة إدارية متكاملة لفرق التسويق وخدمة العملاء والمناديب.",
+  title: "بوابة الشركة | Company Portal",
+  description: "منصة إدارية متكاملة لفرق التسويق وخدمة العملاء والمناديب.",
 };
 
 export default function RootLayout({
