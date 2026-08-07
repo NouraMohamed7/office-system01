@@ -5,6 +5,7 @@ import type {
   LeaveType,
   LeaveStatus as LeaveStatusFull,
 } from "@/lib/attendance-labels";
+import type { LeaveRequest } from "@/types/attendance";
 
 // ============================================================
 // Types
@@ -17,8 +18,8 @@ export type AttendanceTodayRow = {
   check_in_at: string | null;
   check_out_at: string | null;
   late_minutes: number | null;
-  // ⚠️ الدوك بيوصف الفورمات بتاعها كـ "text" مش public.attendance_type مباشرة.
-  // لحد ما نتأكد من شكل القيمة الفعلية الراجعة (شغّل select('status') وشوف
+  // ⚠️ الدوك بيوصف الفورمات بتاعها كـ "text" مش public.attendance_type
+  // مباشرة. لحد ما نتأكد من شكل القيمة الفعلية الراجعة (شغّل select('status') وشوف
   // النتيجة)، بنسيبها string عشان منكسرش لو رجعت حاجة غير متوقعة، وبنعمل
   // narrowing يدوي في mapTodayRowToRow في صفحة المدير.
   status: string | null;
@@ -90,6 +91,16 @@ export type AttendanceSettingsInput = {
 /** حالة طلب الإجازة اللي المدير بيقدر يحطها عبر check_leave_status (public.leave_status) */
 export type LeaveStatus = Extract<LeaveStatusFull, "accepted" | "rejected" | "cancelled">;
 
+/** فلاتر سجل الحضور (مستخدمة في getAttendanceHistory) */
+export type AttendanceHistoryFilters = {
+  userId?: string;
+  from?: string; // YYYY-MM-DD
+  to?: string; // YYYY-MM-DD
+  status?: string; // نص عام عشان نستقبل أي نوع status من فوق من غير تعارض types
+  page?: number;
+  pageSize?: number;
+};
+
 // ============================================================
 // Helpers
 // ============================================================
@@ -114,12 +125,51 @@ function currentMonthRange(): { firstDay: string; lastDay: string } {
 
 // ============================================================
 // Manager: كل موظفين اليوم (attendance_today view)
+// filters.userIds اختياري — لو اتبعت، بنفلتر بيه، وإلا بنرجع الكل
 // ============================================================
 
-export async function getAttendanceToday(): Promise<AttendanceTodayRow[]> {
-  const { data, error } = await supabase.from("attendance_today").select("*");
+export async function getAttendanceToday(
+  filters?: { userIds?: string[] }
+): Promise<AttendanceTodayRow[]> {
+  let query = supabase.from("attendance_today").select("*");
+
+  if (filters?.userIds && filters.userIds.length > 0) {
+    query = query.in("users_id", filters.userIds);
+  }
+
+  const { data, error } = await query;
   if (error) throw error;
   return data ?? [];
+}
+
+// ============================================================
+// Manager: سجل الحضور لأي موظف (أو كل الموظفين) بفلاتر ورقم صفحة
+// ⚠️ ده استعلام على جدول attendance مباشرة (مش view)، فيحترم RLS
+// المطبقة على الجدول ده — لازم يكون عند المدير صلاحية قراءة سجلات
+// غير سجلاته الشخصية.
+// ============================================================
+
+export async function getAttendanceHistory(
+  filters: AttendanceHistoryFilters = {}
+): Promise<{ data: AttendanceRecord[]; count: number }> {
+  let query = supabase.from("attendance").select("*", { count: "exact" });
+
+  if (filters.userId) query = query.eq("users_id", filters.userId);
+  if (filters.from) query = query.gte("attendance_date", filters.from);
+  if (filters.to) query = query.lte("attendance_date", filters.to);
+  if (filters.status) query = query.eq("status", filters.status);
+
+  const page = filters.page ?? 1;
+  const pageSize = filters.pageSize ?? 20;
+  const start = (page - 1) * pageSize;
+  const end = start + pageSize - 1;
+
+  const { data, error, count } = await query
+    .order("attendance_date", { ascending: false })
+    .range(start, end);
+
+  if (error) throw error;
+  return { data: (data ?? []) as AttendanceRecord[], count: count ?? 0 };
 }
 
 // ============================================================
@@ -343,6 +393,22 @@ export async function endLeaveEarly(p_leave_id: number): Promise<unknown> {
   const { data, error } = await supabase.rpc("end_leave_early", { p_leave_id });
   if (error) throw error;
   return data;
+}
+
+// ============================================================
+// Manager: قراءة طلبات الإجازة — ⚠️ [محلي/Mock — لسه مش متاح فعليًا]
+// مفيش جدول أو view في الباك دلوقتي نقدر نقرا منه طلبات الإجازة.
+// الدالة دي موجودة بس عشان تفضل الأنواع (types) متوافقة مع الـ hook
+// اللي بيستخدمها؛ بترمي خطأ واضح لحد ما الباك يوفر endpoint حقيقي
+// (مثلاً جدول public.leaves أو view leave_requests). لما يتوفر،
+// استبدل جسم الدالة بنداء select حقيقي زي getAttendanceHistory فوق.
+// ============================================================
+
+export async function getLeaveRequests(_filters: {
+  userId?: string;
+  status?: string;
+}): Promise<LeaveRequest[]> {
+  throw new Error("قراءة طلبات الإجازة مش متاحة من الباك لسه");
 }
 
 // ============================================================

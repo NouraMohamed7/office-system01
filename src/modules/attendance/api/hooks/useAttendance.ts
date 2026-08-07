@@ -1,4 +1,4 @@
-// src/modules/attendance/hooks/useAttendance.ts
+// src/modules/attendance/api/hooks/useAttendance.ts
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
@@ -13,7 +13,8 @@ import {
   deleteLeave,
   endLeaveEarly,
   checkLeaveStatus,
-} from '../api/attendance.api'
+  type LeaveStatus as ApiLeaveStatus,
+} from '../attendance.api'
 import type {
   AttendanceFilters,
   AttendanceRecord,
@@ -104,7 +105,7 @@ export function useAttendanceHistory(filters: AttendanceFilters) {
     setError(null)
     try {
       const result = await getAttendanceHistory(filters)
-      setData(result.data)
+      setData(result.data as unknown as AttendanceRecord[])
       setCount(result.count)
     } catch (e) {
       setError(getErrorMessage(e, 'تعذر تحميل سجل الحضور'))
@@ -122,6 +123,9 @@ export function useAttendanceHistory(filters: AttendanceFilters) {
 
 // ------------------------------------------------------------
 // طلبات الإجازة (قراءة + إدارة)
+// ⚠️ getLeaveRequests لسه مش متاحة فعليًا من الباك — الدالة بترمي
+// خطأ واضح لحد ما يتوفر endpoint قراءة حقيقي. الـ hook هنا بيتعامل
+// مع الخطأ ده زي أي error عادي (بيظهر في error state).
 // ------------------------------------------------------------
 export function useLeaveRequests(filters: { userId?: string; status?: LeaveStatus }) {
   const [data, setData] = useState<LeaveRequest[]>([])
@@ -184,10 +188,14 @@ export function useLeaveActions() {
       run(() => deleteLeave(leaveId), 'فشل حذف طلب الإجازة'),
     endEarly: (leaveId: number) =>
       run(() => endLeaveEarly(leaveId), 'فشل إنهاء الإجازة مبكرًا'),
-    // مدير
-    setLeaveStatus: (leaveId: number, newStatus: LeaveStatus) =>
+    // مدير — الباك بيقبل بس accepted/rejected/cancelled (public.leave_status)
+    setLeaveStatus: (leaveId: number, newStatus: Extract<LeaveStatus, 'accepted' | 'rejected' | 'cancelled'>) =>
       run(
-        () => checkLeaveStatus(leaveId, newStatus),
+        () =>
+          checkLeaveStatus({
+            p_leave_id: leaveId,
+            p_new_status: newStatus as ApiLeaveStatus,
+          }),
         'فشل تحديث حالة طلب الإجازة'
       ),
   }
