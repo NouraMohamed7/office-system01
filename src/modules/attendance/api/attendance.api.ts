@@ -101,6 +101,17 @@ export type AttendanceHistoryFilters = {
   pageSize?: number;
 };
 
+/** صف من جدول breaks (استراحة واحدة مرتبطة بسجل حضور معين) */
+export type BreakRecord = {
+  id: number;
+  created_at: string;
+  updated_at: string;
+  attendance_id: number;
+  start_time: string;
+  end_time: string | null;
+  break_mins: number | null;
+};
+
 // ============================================================
 // Helpers
 // ============================================================
@@ -140,6 +151,22 @@ export async function getAttendanceToday(
   const { data, error } = await query;
   if (error) throw error;
   return data ?? [];
+}
+
+// ============================================================
+// Manager: سجلات جدول attendance الخام لليوم الحالي (فيها id)
+// ⚠️ view attendance_today مفيهوش عمود id، فمحتاجينها عشان نربط
+// كل موظف بسجل الحضور بتاعه اليوم ده وبالتالي بجدول breaks
+// (اللي بياخد attendance_id مش users_id).
+// ============================================================
+
+export async function getTodayAttendanceRecords(): Promise<AttendanceRecord[]> {
+  const { data, error } = await supabase
+    .from("attendance")
+    .select("*")
+    .eq("attendance_date", todayISODate());
+  if (error) throw error;
+  return (data ?? []) as AttendanceRecord[];
 }
 
 // ============================================================
@@ -298,6 +325,65 @@ export async function getMyMonthSummary(): Promise<MonthSummary> {
     absentDays: rows.filter((r) => r.status === "absent").length,
     lateDays: rows.filter((r) => r.status === "late").length,
     totalDays: rows.length,
+  };
+}
+
+// ============================================================
+// البريك (breaks) — [مربوط بالباك بالكامل]
+// ⚠️ start_break / end_break من غير أي باراميترز، يعني بيشتغلوا على
+// سجل حضور المستخدم المسجّل دخول حاليًا بس. المدير مش يقدر يبدأ/
+// ينهي استراحة نيابة عن موظف تاني من هنا — لو الباك يضيف endpoint
+// بباراميتر (زي p_attendance_id) لاحقًا، نضيف دالة مدير منفصلة.
+// ============================================================
+
+export async function startBreak(): Promise<unknown> {
+  const { data, error } = await supabase.rpc("start_break");
+  if (error) throw error;
+  return data;
+}
+
+export async function endBreak(): Promise<unknown> {
+  const { data, error } = await supabase.rpc("end_break");
+  if (error) throw error;
+  return data;
+}
+
+/** كل استراحات سجل حضور معين (موظف واحد، يوم واحد) */
+export async function getBreaksByAttendanceId(attendanceId: number): Promise<BreakRecord[]> {
+  const { data, error } = await supabase
+    .from("breaks")
+    .select("*")
+    .eq("attendance_id", attendanceId)
+    .order("start_time", { ascending: true });
+  if (error) throw error;
+  return data ?? [];
+}
+
+/** كل استراحات مجموعة سجلات حضور (مستخدمة في صفحة المدير — كل الموظفين اليوم) */
+export async function getBreaksByAttendanceIds(attendanceIds: number[]): Promise<BreakRecord[]> {
+  if (attendanceIds.length === 0) return [];
+  const { data, error } = await supabase
+    .from("breaks")
+    .select("*")
+    .in("attendance_id", attendanceIds)
+    .order("start_time", { ascending: true });
+  if (error) throw error;
+  return data ?? [];
+}
+
+/** اشتراك لايف على أي تغيير في جدول breaks (يفيد بورتال المدير) */
+export function subscribeToBreaks(onChange: () => void) {
+  const channel = supabase
+    .channel("breaks-changes")
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "breaks" },
+      () => onChange()
+    )
+    .subscribe();
+
+  return () => {
+    supabase.removeChannel(channel);
   };
 }
 

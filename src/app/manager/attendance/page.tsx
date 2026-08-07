@@ -1,16 +1,19 @@
 // src/app/manager/attendance/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { Avatar, Card, PageHeader, Pill, StatCard } from "@/components/manager/primitives";
 import { useToast } from "@/components/toast";
 import {
   Users, UserCheck, Clock, UserX, Palmtree, ClipboardX,
   Download, MoreVertical, LogIn, LogOut, User, Loader2,
-  Settings, Save, CheckCircle2, XCircle, Ban, Coffee, CupSoda,
+  Settings, Save, CheckCircle2, XCircle, Ban,
 } from "lucide-react";
 import {
   getAttendanceToday,
+  getTodayAttendanceRecords,
+  getBreaksByAttendanceIds,
+  subscribeToBreaks,
   getCompanyMonthSummary,
   getAttendanceSettings,
   createAttendanceSettings,
@@ -20,6 +23,7 @@ import {
   type CompanyMonthSummary,
   type AttendanceSettings,
   type LeaveStatus,
+  type BreakRecord,
 } from "@/modules/attendance/api/attendance.api";
 import { getEmployees } from "@/modules/employees/api/employees.api";
 import { getDepartments, type Department } from "@/modules/department/api/department.api";
@@ -50,23 +54,16 @@ type Row = {
   st: Status;
   tone: Tone;
   // ============================================================
-  // [محلي بالكامل — Mock] البريك
-  // الباك لسه معندوش أي جدول/عمود لتخزين بداية/نهاية البريك.
-  // القيم دي بتتصفر أول ما تعمل refresh للصفحة، ومش بتوصل لأي
-  // موظف تاني أو تتخزن في حاجة حقيقية — دي واجهة جاهزة بس عشان
-  // نربطها بالباك بسهولة لما يوفر endpoint حقيقي (مثلاً:
-  // break_started_at / break_ended_at في جدول attendance، أو
-  // جدول attendance_breaks منفصل لو ممكن ياخد أكتر من بريك في اليوم).
+  // [مربوط بالباك] البريك — جاي من جدول breaks الحقيقي عبر
+  // attendance.id بتاع سجل اليوم للموظف ده. آخر بريك بس هو
+  // اللي بيتعرض في عمود "الاستراحة".
+  // ⚠️ قراءة فقط: المدير مش يقدر يبدأ/ينهي بريك نيابة عن موظف
+  // تاني، لأن start_break/end_break بتشتغل على المستخدم المسجل
+  // دخول حاليًا بس (من غير باراميتر attendance_id).
   // ============================================================
   breakStartISO: string | null;
   breakEndISO: string | null;
 };
-
-// [محلي] بيرجع الوقت الحالي كنص عربي — مستخدمة بس لعرض تقريبي، مش للحساب
-function nowTime() {
-  const d = new Date();
-  return d.toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit", hour12: false });
-}
 
 // [محلي] تنسيق وقت ISO كنص عربي للعرض فقط — لا يُستخدم في أي حساب
 function formatTimeAr(iso: string | null) {
@@ -94,7 +91,7 @@ function formatMinutesAsHours(mins: number | null): string {
   return `${h}:${String(m).padStart(2, "0")}`;
 }
 
-// [محلي — Mock] نص عمود "الاستراحة": بيحسب المدة لو البريك خلص،
+// [مربوط بالباك] نص عمود "الاستراحة": بيحسب المدة لو البريك خلص،
 // وبيوضح "جاري الآن..." لو لسه شغال، و"—" لو مفيش بريك أصلاً
 function formatBreakCell(breakStartISO: string | null, breakEndISO: string | null): string {
   if (!breakStartISO) return "—";
@@ -109,6 +106,8 @@ function formatBreakCell(breakStartISO: string | null, breakEndISO: string | nul
 // check_out_at, status, late_minutes) جايه من الـ view attendance_today
 // deptMap: خريطة users_id -> اسم القسم (جايه من جدول users + department،
 // لأن attendance_today مفيهوش قسم)
+// breakMap: خريطة users_id -> آخر بريك (جايه من جدول breaks عبر
+// attendance.id بتاع سجل اليوم)
 //
 // ⚠️ عمود status في الـ view موثق في الدوك كـ "text" مش public.attendance_type
 // مباشرة. بنفترض هنا إنه بيرجّع نفس القيم الإنجليزية بتاعة جدول attendance
@@ -116,7 +115,11 @@ function formatBreakCell(breakStartISO: string | null, breakEndISO: string | nul
 // attendance_today ولقيت شكل مختلف، عدّل المقارنات هنا بس — الباقي كله
 // هيفضل شغال زي ما هو.
 // ============================================================
-function mapTodayRowToRow(r: AttendanceTodayRow, deptMap: Map<string, string>): Row {
+function mapTodayRowToRow(
+  r: AttendanceTodayRow,
+  deptMap: Map<string, string>,
+  breakMap: Map<string, BreakRecord>
+): Row {
   const inTime = formatTimeAr(r.check_in_at);
   const outTime = formatTimeAr(r.check_out_at);
   const workMinutes = computeMinutesBetween(r.check_in_at, r.check_out_at);
@@ -127,6 +130,8 @@ function mapTodayRowToRow(r: AttendanceTodayRow, deptMap: Map<string, string>): 
   } else if (r.check_in_at) {
     status = r.late_minutes && r.late_minutes > 0 ? "late" : "present";
   }
+
+  const lastBreak = breakMap.get(r.users_id);
 
   return {
     id: r.users_id,
@@ -139,9 +144,8 @@ function mapTodayRowToRow(r: AttendanceTodayRow, deptMap: Map<string, string>): 
     hrs: formatMinutesAsHours(workMinutes),
     st: status,
     tone: ATTENDANCE_STATUS_TONE[status],
-    // [محلي — Mock] الباك مفيهوش داتا بريك، فبنبدأ دايمًا من صفر عند التحميل
-    breakStartISO: null,
-    breakEndISO: null,
+    breakStartISO: lastBreak?.start_time ?? null,
+    breakEndISO: lastBreak?.end_time ?? null,
   };
 }
 
@@ -232,33 +236,60 @@ export default function AttendancePage() {
   const [leaveStatus, setLeaveStatus] = useState<LeaveStatus>("accepted");
   const [leaveSubmitting, setLeaveSubmitting] = useState(false);
 
-  // [مربوط بالباك] تحميل بيانات الحضور، الموظفين، الأقسام، وملخص الشهر
-  useEffect(() => {
-    async function load() {
-      try {
-        const [todayRows, employees, depts, summary] = await Promise.all([
-          getAttendanceToday(),
-          getEmployees(), // مستخدمينها هنا بس عشان نجيب قسم كل موظف (users_id -> department)
-          getDepartments(),
-          getCompanyMonthSummary(),
-        ]);
+  // [مربوط بالباك] تحميل بيانات الحضور + الاستراحات + الموظفين + الأقسام + ملخص الشهر
+  const load = useCallback(async () => {
+    try {
+      const [todayRows, employees, depts, summary, attendanceRecords] = await Promise.all([
+        getAttendanceToday(),
+        getEmployees(), // مستخدمينها هنا بس عشان نجيب قسم كل موظف (users_id -> department)
+        getDepartments(),
+        getCompanyMonthSummary(),
+        getTodayAttendanceRecords(), // فيها id — محتاجينه عشان نربط بجدول breaks
+      ]);
 
-        const deptMap = new Map<string, string>();
-        for (const e of employees) {
-          if (e.department?.name) deptMap.set(e.id, e.department.name);
-        }
-
-        setRows(todayRows.map((r) => mapTodayRowToRow(r, deptMap)));
-        setDepartments(depts);
-        setMonthSummary(summary);
-      } catch (err) {
-        setLoadError(err instanceof Error ? err.message : "حصل خطأ في تحميل بيانات الحضور");
-      } finally {
-        setLoading(false);
+      const deptMap = new Map<string, string>();
+      for (const e of employees) {
+        if (e.department?.name) deptMap.set(e.id, e.department.name);
       }
+
+      // users_id -> attendance.id بتاع سجل اليوم
+      const attendanceIdByUser = new Map<string, number>();
+      for (const rec of attendanceRecords) {
+        attendanceIdByUser.set(rec.users_id, rec.id);
+      }
+      const attendanceIds = attendanceRecords.map((rec) => rec.id);
+
+      // نجيب كل البريكات المرتبطة بسجلات اليوم دفعة واحدة
+      const allBreaks = attendanceIds.length > 0 ? await getBreaksByAttendanceIds(attendanceIds) : [];
+      const attendanceIdToUser = new Map<number, string>();
+      for (const rec of attendanceRecords) attendanceIdToUser.set(rec.id, rec.users_id);
+
+      // آخر بريك لكل موظف (breaks راجعة مرتبة تصاعديًا بالـ start_time)
+      const breakMap = new Map<string, BreakRecord>();
+      for (const b of allBreaks) {
+        const uid = attendanceIdToUser.get(b.attendance_id);
+        if (uid) breakMap.set(uid, b);
+      }
+
+      setRows(todayRows.map((r) => mapTodayRowToRow(r, deptMap, breakMap)));
+      setDepartments(depts);
+      setMonthSummary(summary);
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : "حصل خطأ في تحميل بيانات الحضور");
+    } finally {
+      setLoading(false);
     }
-    load();
   }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  // [مربوط بالباك] لايف: أي تغيير في جدول breaks (بدء/إنهاء استراحة لأي موظف) بيحدّث الجدول فورًا
+  useEffect(() => {
+    const unsubscribe = subscribeToBreaks(() => load());
+    return unsubscribe;
+  }, [load]);
 
   // [محلي] فلترة/بحث على الداتا اللي أصلاً محملة في الذاكرة
   const filtered = useMemo(() => {
@@ -299,8 +330,6 @@ export default function AttendancePage() {
       hrs: "—",
       st: "present",
       tone: ATTENDANCE_STATUS_TONE.present,
-      breakStartISO: null,
-      breakEndISO: null,
     });
     showToast("success", `تم تسجيل حضور ${r.name} (محليًا فقط — لسه مش متصل بالباك)`);
     setOpenMenuId(null);
@@ -332,46 +361,8 @@ export default function AttendancePage() {
       hrs: "—",
       st: "absent",
       tone: ATTENDANCE_STATUS_TONE.absent,
-      breakStartISO: null,
-      breakEndISO: null,
     });
     showToast("success", `تم تسجيل ${r.name} كغائب (محليًا فقط — لسه مش متصل بالباك)`);
-    setOpenMenuId(null);
-  }
-
-  // ============================================================
-  // [محلي بالكامل — Mock] بداية/نهاية البريك
-  // TODO: لما الباك يوفر endpoint (RPC أو update على عمود حقيقي)،
-  // استبدل الـ updateRow جوا الدالتين دول بنداء API، بنفس الشكل
-  // اللي اتعمل بيه markCheckIn/markCheckOut فوق.
-  // ============================================================
-
-  function startBreak(r: Row) {
-    if (!r.inISO || r.outISO) {
-      showToast("error", `${r.name} لازم يكون حاضر عشان يبدأ استراحة`);
-      setOpenMenuId(null);
-      return;
-    }
-    if (r.breakStartISO && !r.breakEndISO) {
-      showToast("error", `${r.name} أصلاً في استراحة دلوقتي`);
-      setOpenMenuId(null);
-      return;
-    }
-    const nowISO = new Date().toISOString();
-    updateRow(r.id, { breakStartISO: nowISO, breakEndISO: null });
-    showToast("success", `تم تسجيل بداية استراحة ${r.name} (محليًا فقط — لسه مش متصل بالباك)`);
-    setOpenMenuId(null);
-  }
-
-  function endBreak(r: Row) {
-    if (!r.breakStartISO || r.breakEndISO) {
-      showToast("error", `${r.name} مش في استراحة دلوقتي`);
-      setOpenMenuId(null);
-      return;
-    }
-    const nowISO = new Date().toISOString();
-    updateRow(r.id, { breakEndISO: nowISO });
-    showToast("success", `تم تسجيل نهاية استراحة ${r.name} (محليًا فقط — لسه مش متصل بالباك)`);
     setOpenMenuId(null);
   }
 
@@ -536,12 +527,12 @@ export default function AttendancePage() {
         <StatCard dense label="لم يسجلوا" value={stats.notMarked} icon={ClipboardX} tone="muted" />
       </div>
 
-      <Card className="!p-4">
+      <Card className="p-4!">
         <div className="flex flex-wrap items-center gap-3">
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="h-10 min-w-[220px] flex-1 rounded-xl border border-border bg-background px-4 text-sm outline-none transition focus:border-primary/50"
+            className="h-10 min-w-55 flex-1 rounded-xl border border-border bg-background px-4 text-sm outline-none transition focus:border-primary/50"
             placeholder="اسم الموظف..."
           />
           <select
@@ -557,7 +548,7 @@ export default function AttendancePage() {
 
       {loading && <p className="text-sm text-muted-foreground p-4">جاري تحميل بيانات الحضور...</p>}
 
-      <Card className="!p-0 overflow-hidden">
+      <Card className="p-0! overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-accent/40 text-xs text-muted-foreground">
@@ -607,15 +598,6 @@ export default function AttendancePage() {
                           <button onClick={() => markCheckOut(r)} className="flex w-full items-center gap-2 px-3.5 py-2.5 text-right text-sm transition hover:bg-accent">
                             <LogOut className="size-4 text-teal" /> تسجيل انصراف الآن
                           </button>
-                          {r.breakStartISO && !r.breakEndISO ? (
-                            <button onClick={() => endBreak(r)} className="flex w-full items-center gap-2 px-3.5 py-2.5 text-right text-sm transition hover:bg-accent">
-                              <CupSoda className="size-4 text-warning" /> إنهاء الاستراحة
-                            </button>
-                          ) : (
-                            <button onClick={() => startBreak(r)} className="flex w-full items-center gap-2 px-3.5 py-2.5 text-right text-sm transition hover:bg-accent">
-                              <Coffee className="size-4 text-warning" /> بدء استراحة
-                            </button>
-                          )}
                           <button onClick={() => markAbsent(r)} className="flex w-full items-center gap-2 px-3.5 py-2.5 text-right text-sm text-destructive transition hover:bg-destructive/10">
                             <UserX className="size-4" /> تسجيل غياب
                           </button>

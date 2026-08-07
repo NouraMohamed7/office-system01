@@ -6,7 +6,6 @@ import { supabase } from "@/lib/supabase/client";
 // ==========================================================
 
 /**
- * TODO: تأكدي من القيمة الافتراضية الحقيقية لـ public.report_type
  * قبل ما يتم مراجعة التقرير من المدير. افترضت "pending" هنا.
  */
 export type ReportBackendStatus =
@@ -196,7 +195,7 @@ export async function getReportComments(reportId: number) {
     .from("comments")
     .select("*")
     .eq("attachable_id", reportId)
-    // .eq("type", "daily_report") // TODO: فعّليها بعد تأكيد القيمة من الباك
+    // .eq("type", "daily_report")
     .order("created_at", { ascending: false });
   if (error) throw error;
   return data ?? [];
@@ -211,11 +210,16 @@ export interface DailyReportHistoryWithName extends DailyReportHistory {
   name: string;
 }
 
+type UserNameRow = {
+  id: string;
+  name: string | null;
+};
+
 async function getUsersNameMap(): Promise<Record<string, string>> {
   const { data, error } = await supabase.from("users_with_email").select("id,name");
   if (error) throw error;
   const map: Record<string, string> = {};
-  (data ?? []).forEach((u: any) => {
+  ((data ?? []) as UserNameRow[]).forEach((u) => {
     if (u.id) map[u.id] = u.name ?? "—";
   });
   return map;

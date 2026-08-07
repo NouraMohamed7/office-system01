@@ -15,8 +15,12 @@ import {
   updateLeave,
   deleteLeave,
   endLeaveEarly,
+  startBreak as apiStartBreak,
+  endBreak as apiEndBreak,
+  getBreaksByAttendanceId,
   type AttendanceRecord,
   type MonthSummary,
+  type BreakRecord,
 } from "@/modules/attendance/api/attendance.api";
 import {
   ATTENDANCE_STATUS_LABEL,
@@ -24,8 +28,6 @@ import {
   LEAVE_TYPE_OPTIONS,
   type LeaveType,
 } from "@/lib/attendance-labels";
-
-type BreakRecord = { start: string; end: string | null; startMs: number; endMs: number | null };
 
 // ============================================================
 // طلبات الإجازة — Session-only
@@ -60,6 +62,12 @@ function formatTime(iso: string | null): string {
   return new Date(iso).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
+function computeSecondsBetween(startISO: string, endISO: string | null): number {
+  const start = new Date(startISO).getTime();
+  const end = endISO ? new Date(endISO).getTime() : Date.now();
+  return Math.max(0, Math.floor((end - start) / 1000));
+}
+
 export default function AttendancePage() {
   const showToast = useToast();
   // Start as null on both server and client so the initial render matches.
@@ -72,9 +80,9 @@ export default function AttendancePage() {
   const [loadingToday, setLoadingToday] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
-  // ---- البريك: لسه محلي بالكامل (مفيش endpoint ليه في الباك) ----
-  const [isOnBreak, setIsOnBreak] = useState(false);
+  // ---- البريك: [مربوط بالباك بالكامل] جدول breaks + RPC start_break/end_break ----
   const [breaks, setBreaks] = useState<BreakRecord[]>([]);
+  const [breakSubmitting, setBreakSubmitting] = useState(false);
   const [breakElapsedSec, setBreakElapsedSec] = useState(0);
 
   // ---- طلبات الإجازة (session-only، شوف الملاحظة فوق) ----
@@ -95,12 +103,15 @@ export default function AttendancePage() {
   });
 
   useEffect(() => {
-    setNow(new Date());
+    const raf = requestAnimationFrame(() => setNow(new Date()));
     const t = setInterval(() => setNow(new Date()), 1000);
-    return () => clearInterval(t);
+    return () => {
+      cancelAnimationFrame(raf);
+      clearInterval(t);
+    };
   }, []);
 
-  // تحميل حالة اليوم + السجل السابق + ملخص الشهر أول ما الصفحة تفتح
+  // تحميل حالة اليوم + البريكات + السجل السابق + ملخص الشهر أول ما الصفحة تفتح
   useEffect(() => {
     async function load() {
       try {
@@ -112,6 +123,11 @@ export default function AttendancePage() {
         setRecord(todayRec);
         setHistory(hist);
         setMonthSummary(summary);
+
+        if (todayRec) {
+          const todayBreaks = await getBreaksByAttendanceId(todayRec.id);
+          setBreaks(todayBreaks);
+        }
       } catch (err) {
         showToast("error", err instanceof Error ? err.message : "حصل خطأ في تحميل بيانات الحضور");
       } finally {
@@ -122,16 +138,17 @@ export default function AttendancePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Tick the current break's elapsed time while on break
+  const currentBreak = breaks.length > 0 ? breaks[breaks.length - 1] : null;
+  const isOnBreak = !!currentBreak && currentBreak.end_time === null;
+
+  // عداد وقت البريك الجاري (تحديث كل ثانية)
   useEffect(() => {
-    if (!isOnBreak) return;
-    const current = breaks[breaks.length - 1];
-    if (!current) return;
-    const tick = () => setBreakElapsedSec(Math.floor((Date.now() - current.startMs) / 1000));
+    if (!isOnBreak || !currentBreak) return;
+    const tick = () => setBreakElapsedSec(computeSecondsBetween(currentBreak.start_time, null));
     tick();
     const t = setInterval(tick, 1000);
     return () => clearInterval(t);
-  }, [isOnBreak, breaks]);
+  }, [isOnBreak, currentBreak]);
 
   const mounted = now !== null;
   const time = now ? now.toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—:—:—";
@@ -142,6 +159,11 @@ export default function AttendancePage() {
   const checkOutTime = formatTime(record?.check_out_at ?? null);
   const hasCheckedIn = !!record?.check_in_at;
   const hasCheckedOut = !!record?.check_out_at;
+
+  async function refreshBreaks(attendanceId: number) {
+    const fresh = await getBreaksByAttendanceId(attendanceId);
+    setBreaks(fresh);
+  }
 
   async function handleCheckIn() {
     if (!mounted || submitting) return;
@@ -182,38 +204,43 @@ export default function AttendancePage() {
     }
   }
 
-  // ---- البريك (محلي زي ما هو بالظبط) ----
-  const handleStartBreak = () => {
-    if (!now) return;
-    const exactTime = now.toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-    setBreaks((prev) => [...prev, { start: exactTime, end: null, startMs: Date.now(), endMs: null }]);
-    setBreakElapsedSec(0);
-    setIsOnBreak(true);
-    showToast("success", `بدأت البريك الساعة ${exactTime}`);
-  };
+  // ---- البريك — [مربوط بالباك] ----
+  async function handleStartBreak() {
+    if (breakSubmitting) return;
+    setBreakSubmitting(true);
+    try {
+      await apiStartBreak();
+      if (record) await refreshBreaks(record.id);
+      setBreakElapsedSec(0);
+      showToast("success", `بدأت البريك الساعة ${time}`);
+    } catch (err) {
+      showToast("error", err instanceof Error ? err.message : "تعذر بدء البريك");
+    } finally {
+      setBreakSubmitting(false);
+    }
+  }
 
-  const handleEndBreak = () => {
-    if (!now) return;
-    const exactTime = now.toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-    setBreaks((prev) => {
-      const updated = [...prev];
-      const last = updated[updated.length - 1];
-      if (last && last.end === null) {
-        updated[updated.length - 1] = { ...last, end: exactTime, endMs: Date.now() };
-      }
-      return updated;
-    });
-    setIsOnBreak(false);
-    setBreakElapsedSec(0);
-    showToast("success", `انتهت البريك الساعة ${exactTime}`);
-  };
+  async function handleEndBreak() {
+    if (breakSubmitting) return;
+    setBreakSubmitting(true);
+    try {
+      await apiEndBreak();
+      if (record) await refreshBreaks(record.id);
+      setBreakElapsedSec(0);
+      showToast("success", `انتهت البريك الساعة ${time}`);
+    } catch (err) {
+      showToast("error", err instanceof Error ? err.message : "تعذر إنهاء البريك");
+    } finally {
+      setBreakSubmitting(false);
+    }
+  }
 
   const todayStatus = record?.status ?? null;
 
   const totalBreakSeconds = breaks.reduce((sum, b) => {
-    if (b.endMs) return sum + Math.floor((b.endMs - b.startMs) / 1000);
-    if (isOnBreak) return sum + breakElapsedSec;
-    return sum;
+    if (b.break_mins !== null) return sum + b.break_mins * 60;
+    if (b.end_time === null) return sum + breakElapsedSec; // البريك الجاري دلوقتي
+    return sum + computeSecondsBetween(b.start_time, b.end_time);
   }, 0);
 
   const formatDuration = (totalSec: number) => {
@@ -362,7 +389,7 @@ export default function AttendancePage() {
 
           {!loadingToday && !hasCheckedIn && (
             <button onClick={handleCheckIn} disabled={!mounted || submitting}
-              className="inline-flex items-center gap-3 bg-primary text-primary-foreground rounded-2xl px-8 py-4 font-bold text-lg hover:bg-[color:var(--primary-dark)] transition shadow-warm disabled:opacity-40 disabled:cursor-not-allowed">
+              className="inline-flex items-center gap-3 bg-primary text-primary-foreground rounded-2xl px-8 py-4 font-bold text-lg hover:bg-primary-dark transition shadow-warm disabled:opacity-40 disabled:cursor-not-allowed">
               {submitting ? <Loader2 className="h-6 w-6 animate-spin" /> : <LogIn className="h-6 w-6" />}
               تسجيل الحضور
             </button>
@@ -394,16 +421,16 @@ export default function AttendancePage() {
 
               <div className="flex flex-wrap items-center justify-center gap-3">
                 {!isOnBreak && (
-                  <button onClick={handleStartBreak}
-                    className="inline-flex items-center gap-2 bg-warning/15 text-warning rounded-2xl px-6 py-3 font-bold hover:bg-warning/25 transition">
-                    <Coffee className="h-5 w-5" />
+                  <button onClick={handleStartBreak} disabled={breakSubmitting}
+                    className="inline-flex items-center gap-2 bg-warning/15 text-warning rounded-2xl px-6 py-3 font-bold hover:bg-warning/25 transition disabled:opacity-50">
+                    {breakSubmitting ? <Loader2 className="h-5 w-5 animate-spin" /> : <Coffee className="h-5 w-5" />}
                     بدء البريك
                   </button>
                 )}
                 {isOnBreak && (
-                  <button onClick={handleEndBreak}
-                    className="inline-flex items-center gap-2 bg-success/15 text-success rounded-2xl px-6 py-3 font-bold hover:bg-success/25 transition">
-                    <PlayCircle className="h-5 w-5" />
+                  <button onClick={handleEndBreak} disabled={breakSubmitting}
+                    className="inline-flex items-center gap-2 bg-success/15 text-success rounded-2xl px-6 py-3 font-bold hover:bg-success/25 transition disabled:opacity-50">
+                    {breakSubmitting ? <Loader2 className="h-5 w-5 animate-spin" /> : <PlayCircle className="h-5 w-5" />}
                     إنهاء البريك
                   </button>
                 )}
@@ -527,12 +554,12 @@ export default function AttendancePage() {
               <h4 className="text-sm font-semibold text-foreground mb-3">تفاصيل البريكات</h4>
               <div className="space-y-2">
                 {breaks.map((b, i) => (
-                  <div key={i} className="flex items-center justify-between text-sm bg-warning/5 rounded-xl px-4 py-2">
+                  <div key={b.id} className="flex items-center justify-between text-sm bg-warning/5 rounded-xl px-4 py-2">
                     <span className="flex items-center gap-2 text-warning font-semibold">
                       <Coffee className="h-4 w-4" /> بريك {i + 1}
                     </span>
                     <span className="tabular-nums text-muted-foreground">
-                      {b.start} — {b.end ?? "جارية الآن"}
+                      {formatTime(b.start_time)} — {b.end_time ? formatTime(b.end_time) : "جارية الآن"}
                     </span>
                   </div>
                 ))}
