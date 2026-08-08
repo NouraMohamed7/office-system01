@@ -113,29 +113,30 @@ export default function TasksPage() {
     }
   };
 
-const handleAddTask = async (data: {
-  title: string;
-  description: string;
-  priority: TaskPriority;
-  endDate: string;
-}) => {
-  setSubmitting(true);
-  try {
-    const res = await createMyOwnTask({
-      title: data.title,
-      description: data.description || undefined,
-      end_date: data.endDate || undefined,
-      priority: data.priority,
-    });
-    showToast("success", res.message || "تم إضافة المهمة");
-    setIsAddOpen(false);
-    loadTasks();
-  } catch (err) {
-    showToast("error", err instanceof Error ? err.message : "تعذر إضافة المهمة");
-  } finally {
-    setSubmitting(false);
-  }
-};
+  const handleAddTask = async (data: {
+    title: string;
+    description: string;
+    priority: TaskPriority;
+    endDate: string;
+  }) => {
+    setSubmitting(true);
+    try {
+      const res = await createMyOwnTask({
+        title: data.title,
+        description: data.description || undefined,
+        start_date: todayInputValue(),
+        end_date: data.endDate || undefined,
+        priority: data.priority,
+      });
+      showToast("success", res.message || "تم إضافة المهمة");
+      setIsAddOpen(false);
+      loadTasks();
+    } catch (err) {
+      showToast("error", err instanceof Error ? err.message : "تعذر إضافة المهمة");
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   return (
     <PortalLayout title="المهام" subtitle="المهام الموكلة إليك من المدير، والمهام الشخصية اللي بتضيفها لنفسك">
@@ -236,12 +237,12 @@ const handleAddTask = async (data: {
           )}
 
           {isAddOpen && (
-  <AddTaskModal
-    submitting={submitting}
-    onClose={() => setIsAddOpen(false)}
-    onSubmit={handleAddTask}
-  />
-)}
+            <AddTaskModal
+              submitting={submitting}
+              onClose={() => setIsAddOpen(false)}
+              onSubmit={handleAddTask}
+            />
+          )}
         </>
       )}
     </PortalLayout>
@@ -300,7 +301,6 @@ function PriorityDot({ p }: { p: TaskPriority }) {
   return <span className={`h-2.5 w-2.5 rounded-full ${PRIORITY_DOT[p]} shrink-0 mt-1.5`} title={TASK_PRIORITY_LABEL_AR[p]} />;
 }
 
-// ⬇️ استبدل الكومبوننت AddTaskModal بالكامل بده
 function AddTaskModal({
   submitting,
   onClose,

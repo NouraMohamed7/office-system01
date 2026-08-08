@@ -174,7 +174,7 @@ export default function TasksPage() {
         title: form.title.trim(),
         description: form.description.trim() || undefined,
         department_id: Number(form.departmentId),
-        start_date: form.startDate || undefined,
+        start_date: form.startDate,
         end_date: form.endDate || undefined,
         priority: form.priority,
         files: form.files,
