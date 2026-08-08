@@ -44,7 +44,11 @@ export interface AttendanceSettings {
   created_at: string
   updated_at: string
   late_tolerance_minutes: number
-  notify_manager_on_late: boolean
+  // ⚠️ العمود ده مش موجود فعليًا في جدول attendance_settings عند الباك دلوقتي
+  // (مفيش ذكر له في الدوك، والـ insert/update كانوا بيرموا PGRST204).
+  // سايبينه optional هنا عشان لو الباك ضافه يشتغل من غير ما نغير type،
+  // لكن الفرونت النهاردة مش بيبعته ولا بيعرضه في أي فورم.
+  notify_manager_on_late?: boolean
   branch_id: number
   effective_from: string
   effective_to: string | null
@@ -63,6 +67,11 @@ export interface LeaveRequest {
   reason: string
   created_at: string
   updated_at: string
+  // ⚠️ افتراض (مش مؤكد من الدوك) — مبني على نفس pattern جدول daily_reports
+  // اللي فيه reviewed_by/reviewed_at. لو جدول leaves عند الباك باسم
+  // أعمدة مختلف، عدّل هنا وفي attendance.api.ts (getLeaveRequests).
+  reviewed_by?: string | null
+  reviewed_at?: string | null
 }
 
 export interface AttendanceFilters {

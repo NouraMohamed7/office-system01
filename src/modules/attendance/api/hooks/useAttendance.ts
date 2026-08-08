@@ -7,7 +7,8 @@ import {
   checkOut,
   getAttendanceHistory,
   getAttendanceToday,
-  getLeaveRequests,
+  getMyLeaveRequests,
+  getAllLeaveRequests,
   requestLeave,
   updateLeave,
   deleteLeave,
@@ -122,12 +123,9 @@ export function useAttendanceHistory(filters: AttendanceFilters) {
 }
 
 // ------------------------------------------------------------
-// طلبات الإجازة (قراءة + إدارة)
-// ⚠️ getLeaveRequests لسه مش متاحة فعليًا من الباك — الدالة بترمي
-// خطأ واضح لحد ما يتوفر endpoint قراءة حقيقي. الـ hook هنا بيتعامل
-// مع الخطأ ده زي أي error عادي (بيظهر في error state).
+// موظف: طلبات إجازتي أنا — مربوط بالكامل بجدول leaves في الباك
 // ------------------------------------------------------------
-export function useLeaveRequests(filters: { userId?: string; status?: LeaveStatus }) {
+export function useMyLeaveRequests() {
   const [data, setData] = useState<LeaveRequest[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -136,13 +134,13 @@ export function useLeaveRequests(filters: { userId?: string; status?: LeaveStatu
     setLoading(true)
     setError(null)
     try {
-      setData(await getLeaveRequests(filters))
+      setData(await getMyLeaveRequests())
     } catch (e) {
       setError(getErrorMessage(e, 'تعذر تحميل طلبات الإجازة'))
     } finally {
       setLoading(false)
     }
-  }, [JSON.stringify(filters)])
+  }, [])
 
   useEffect(() => {
     refresh()
@@ -151,6 +149,37 @@ export function useLeaveRequests(filters: { userId?: string; status?: LeaveStatu
   return { data, loading, error, refresh }
 }
 
+// ------------------------------------------------------------
+// مدير: كل طلبات الإجازة (ممكن فلترة بالحالة، مثلاً 'pending')
+// من غير فلتر بترجع كل الطلبات بكل الحالات
+// ------------------------------------------------------------
+export function useManagerLeaveRequests(status?: LeaveStatus) {
+  const [data, setData] = useState<LeaveRequest[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const refresh = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      setData(await getAllLeaveRequests(status))
+    } catch (e) {
+      setError(getErrorMessage(e, 'تعذر تحميل طلبات الإجازة'))
+    } finally {
+      setLoading(false)
+    }
+  }, [status])
+
+  useEffect(() => {
+    refresh()
+  }, [refresh])
+
+  return { data, loading, error, refresh }
+}
+
+// ------------------------------------------------------------
+// إدارة طلبات الإجازة (كتابة — RPC)
+// ------------------------------------------------------------
 export function useLeaveActions() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)

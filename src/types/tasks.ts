@@ -1,35 +1,23 @@
 // src/types/tasks.ts
-//
-// الأنواع الخاصة بالمهام — مبنية على الدوكيومنتيشن اللي وصلت من الباك
-// (جدول tasks + edge functions create-task/update-task + RPCs).
-//
-// ⚠️ ASSUMPTIONS محتاجة تأكيد من الباك (الدوك ماكانش فيه تفاصيلها):
-// 1) القيم الفعلية لـ enum: public.task_status  → افتراضيًا حطيت
-//    "new" | "in_progress" | "paused" | "done" | "cancelled"
-// 2) القيم الفعلية لـ enum: public.priority_task → افتراضيًا حطيت
-//    "low" | "medium" | "high" | "urgent"
-// 3) القيمة اللي المفروض تتبعت في عمود "type" بجدول comments لما التعليق
-//    يكون على مهمة (public.comment_type) → افتراضيًا حطيت "task"
-// تقدر تتأكد منها بسرعة بالسؤال ده في الـ SQL editor بتاع Supabase:
-//   select enum_range(null::task_status);
-//   select enum_range(null::priority_task);
-//   select enum_range(null::comment_type);
-// وبعدين تظبط القيم في الملف ده + tasks.api.ts.
+// مبني على enums الداتابيز الحقيقية:
+//   task_status:    pending, processing, completed, late, cancelled
+//   priority_task:  low, medium, high, urgent
+//   comment_type:   tasks, files_approval, daily_reports
 
 export type TaskStatus =
-  | "new"
-  | "in_progress"
-  | "paused"
-  | "done"
+  | "pending"
+  | "processing"
+  | "completed"
+  | "late"
   | "cancelled";
 
 export type TaskPriority = "low" | "medium" | "high" | "urgent";
 
 export const TASK_STATUS_LABEL_AR: Record<TaskStatus, string> = {
-  new: "جديدة",
-  in_progress: "جاري التنفيذ",
-  paused: "متوقفة",
-  done: "مكتملة",
+  pending: "لسه هتبدأ",
+  processing: "جاري التنفيذ",
+  completed: "مكتملة",
+  late: "متأخرة",
   cancelled: "ملغية",
 };
 
@@ -47,16 +35,15 @@ export interface TaskRow {
   updated_at: string;
   title: string;
   description: string | null;
-  assigned_to: string; // uuid — موظف واحد بس، الباك مبيدعمش تعدد مكلفين حاليًا
+  assigned_to: string; // uuid — موظف واحد بس لكل صف
   department_id: number;
   completion_percent: number | null;
-  start_date: string; // date
-  end_date: string; // date
+  start_date: string;
+  end_date: string;
   status: TaskStatus;
   priority: TaskPriority;
 }
 
-/** ملف مرفق (من جدول files) */
 export interface TaskFile {
   id: number;
   name: string;
@@ -67,7 +54,6 @@ export interface TaskFile {
   users_id?: string;
 }
 
-/** تعليق على مهمة (من جدول comments) */
 export interface TaskComment {
   id: number;
   created_at: string;
@@ -78,11 +64,17 @@ export interface TaskComment {
   type: string;
 }
 
-/** بيانات بسيطة عن المستخدم — بنجيبها من view users_with_email لعرض الأسماء */
+/**
+ * ⚠️ department_id هنا مش موثق رسميًا في users_with_email view (الدوك بيرجع
+ * بس id, name, photo_url, role_id, emp_status, email, phones). لو الباك
+ * ضافه هيتلقط تلقائيًا، ولو لسه مش موجود هيفضل undefined والفلترة حسب
+ * القسم في صفحة المدير هترجع كل الموظفين كـ fallback.
+ */
 export interface UserLite {
   id: string;
   name: string;
   photo_url: string | null;
+  department_id?: number | null;
 }
 
 export interface DepartmentLite {
@@ -95,9 +87,9 @@ export interface DepartmentLite {
 export interface CreateTaskPayload {
   title: string;
   description?: string;
-  assigned_to?: string;
+  assigned_to: string;
   department_id?: number | string;
-  start_date?: string;
+  start_date: string;
   end_date?: string;
   priority?: TaskPriority;
   files?: File[];

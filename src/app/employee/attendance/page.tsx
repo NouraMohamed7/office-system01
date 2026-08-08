@@ -11,10 +11,6 @@ import {
   getMyAttendanceToday,
   getMyAttendanceHistory,
   getMyMonthSummary,
-  requestLeave,
-  updateLeave,
-  deleteLeave,
-  endLeaveEarly,
   startBreak as apiStartBreak,
   endBreak as apiEndBreak,
   getBreaksByAttendanceId,
@@ -22,39 +18,23 @@ import {
   type MonthSummary,
   type BreakRecord,
 } from "@/modules/attendance/api/attendance.api";
+import { useMyLeaveRequests, useLeaveActions } from "@/modules/attendance/api/hooks/useAttendance";
 import {
   ATTENDANCE_STATUS_LABEL,
   LEAVE_TYPE_LABEL,
   LEAVE_TYPE_OPTIONS,
+  LEAVE_STATUS_LABEL,
   type LeaveType,
 } from "@/lib/attendance-labels";
 
-// ============================================================
-// طلبات الإجازة — Session-only
-// ⚠️ الباك مفيهوش endpoint لقراءة/عرض طلبات الإجازة (زي attendance_today
-// بالنسبة للحضور)، فبنحتفظ بالطلبات هنا محليًا لحد ما تختفي بعد
-// refresh للصفحة. لما الباك يوفر جدول/view قراءة، هنستبدل الـ state ده
-// بنداء API حقيقي في useEffect زي باقي البيانات.
-// ============================================================
-type LeaveRequest = {
-  // ⚠️ الـ id ده جاي من رجوع RPC (لو رجع). لو مش موجود، الطلب بيتسجل
-  // بس من غير إمكانية تعديل/إلغاء لأننا مش عارفين رقمه.
-  id: number | null;
-  start_date: string;
-  end_date: string;
-  leave_type: LeaveType;
-  reason: string;
-};
-
-// بيحاول يطلع رقم الطلب من شكل رجوع الـ RPC (مش موثق بدقة في الدوك)
-function extractLeaveId(data: unknown): number | null {
-  if (data && typeof data === "object") {
-    const obj = data as Record<string, unknown>;
-    if (typeof obj.id === "number") return obj.id;
-    if (typeof obj.leave_id === "number") return obj.leave_id;
-  }
-  if (typeof data === "number") return data;
-  return null;
+// ⚠️ قواعد مؤكدة فعليًا من الباك (اتفحصت مباشرة عبر الـ RPCs):
+// - update_leave / delete_leave: بيرفضوا برسالة "Cannot update/delete a leave
+//   that has already started" لو start_date <= النهاردة، بغض النظر عن الحالة.
+// - end_leave_early: بيرفض برسالة "Only accepted leaves can be ended early"
+//   لو الحالة مش accepted.
+function isLeaveStarted(startDate: string): boolean {
+  const today = new Date().toISOString().slice(0, 10);
+  return startDate <= today;
 }
 
 function formatTime(iso: string | null): string {
@@ -70,7 +50,6 @@ function computeSecondsBetween(startISO: string, endISO: string | null): number 
 
 export default function AttendancePage() {
   const showToast = useToast();
-  // Start as null on both server and client so the initial render matches.
   const [now, setNow] = useState<Date | null>(null);
 
   // ---- بيانات حقيقية من الباك ----
@@ -80,15 +59,20 @@ export default function AttendancePage() {
   const [loadingToday, setLoadingToday] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
-  // ---- البريك: [مربوط بالباك بالكامل] جدول breaks + RPC start_break/end_break ----
+  // ---- البريك: جدول breaks + RPC start_break/end_break ----
   const [breaks, setBreaks] = useState<BreakRecord[]>([]);
   const [breakSubmitting, setBreakSubmitting] = useState(false);
   const [breakElapsedSec, setBreakElapsedSec] = useState(0);
 
-  // ---- طلبات الإجازة (session-only، شوف الملاحظة فوق) ----
+  // ---- طلبات الإجازة — مباشرة من جدول leaves في الباك ----
+  const {
+    data: leaves,
+    loading: loadingLeaves,
+    refresh: refreshLeaves,
+  } = useMyLeaveRequests();
+  const leaveActions = useLeaveActions();
+
   const [leaveOpen, setLeaveOpen] = useState(false);
-  const [myLeaves, setMyLeaves] = useState<LeaveRequest[]>([]);
-  const [leaveSubmitting, setLeaveSubmitting] = useState(false);
   const [editingLeaveId, setEditingLeaveId] = useState<number | null>(null);
   const [leaveForm, setLeaveForm] = useState<{
     start_date: string;
@@ -141,7 +125,6 @@ export default function AttendancePage() {
   const currentBreak = breaks.length > 0 ? breaks[breaks.length - 1] : null;
   const isOnBreak = !!currentBreak && currentBreak.end_time === null;
 
-  // عداد وقت البريك الجاري (تحديث كل ثانية)
   useEffect(() => {
     if (!isOnBreak || !currentBreak) return;
     const tick = () => setBreakElapsedSec(computeSecondsBetween(currentBreak.start_time, null));
@@ -204,7 +187,6 @@ export default function AttendancePage() {
     }
   }
 
-  // ---- البريك — [مربوط بالباك] ----
   async function handleStartBreak() {
     if (breakSubmitting) return;
     setBreakSubmitting(true);
@@ -239,7 +221,7 @@ export default function AttendancePage() {
 
   const totalBreakSeconds = breaks.reduce((sum, b) => {
     if (b.break_mins !== null) return sum + b.break_mins * 60;
-    if (b.end_time === null) return sum + breakElapsedSec; // البريك الجاري دلوقتي
+    if (b.end_time === null) return sum + breakElapsedSec;
     return sum + computeSecondsBetween(b.start_time, b.end_time);
   }, 0);
 
@@ -249,7 +231,6 @@ export default function AttendancePage() {
     return `${m}:${s}`;
   };
 
-  // نسب ملخص الشهر (بناءً على إجمالي الأيام المسجّلة الشهر ده)
   const summaryPct = (count: number) =>
     monthSummary && monthSummary.totalDays > 0 ? Math.round((count / monthSummary.totalDays) * 100) : 0;
 
@@ -268,8 +249,7 @@ export default function AttendancePage() {
     setLeaveOpen(true);
   }
 
-  function openEditLeaveForm(l: LeaveRequest) {
-    if (l.id === null) return; // مش عارفين رقمه، مش هنقدر نعدله
+  function openEditLeaveForm(l: (typeof leaves)[number]) {
     setEditingLeaveId(l.id);
     setLeaveForm({
       start_date: l.start_date,
@@ -289,73 +269,45 @@ export default function AttendancePage() {
       showToast("error", "اكتب سبب الإجازة");
       return;
     }
-    setLeaveSubmitting(true);
     try {
       if (editingLeaveId !== null) {
-        await updateLeave({
+        await leaveActions.editLeave({
           p_leave_id: editingLeaveId,
           p_start_date: leaveForm.start_date,
           p_end_date: leaveForm.end_date,
           p_reason: leaveForm.reason,
         });
-        setMyLeaves((list) =>
-          list.map((l) =>
-            l.id === editingLeaveId
-              ? { ...l, start_date: leaveForm.start_date, end_date: leaveForm.end_date, reason: leaveForm.reason }
-              : l
-          )
-        );
         showToast("success", "تم تعديل طلب الإجازة");
       } else {
-        const result = await requestLeave({
+        await leaveActions.submitLeave({
           p_start_date: leaveForm.start_date,
           p_end_date: leaveForm.end_date,
           p_leave_type: leaveForm.leave_type,
           p_reason: leaveForm.reason,
         });
-        const newId = extractLeaveId(result);
-        setMyLeaves((list) => [
-          {
-            id: newId,
-            start_date: leaveForm.start_date,
-            end_date: leaveForm.end_date,
-            leave_type: leaveForm.leave_type as LeaveType,
-            reason: leaveForm.reason,
-          },
-          ...list,
-        ]);
         showToast("success", "تم إرسال طلب الإجازة بنجاح");
       }
+      await refreshLeaves();
       setLeaveOpen(false);
     } catch (err) {
       showToast("error", err instanceof Error ? err.message : "تعذر إرسال طلب الإجازة");
-    } finally {
-      setLeaveSubmitting(false);
     }
   }
 
-  async function cancelLeave(l: LeaveRequest) {
-    if (l.id === null) {
-      showToast("error", "مش قادرين نلغي الطلب ده — رقمه مش معروف (راجع الملاحظة في الكود)");
-      return;
-    }
+  async function cancelLeave(leaveId: number) {
     try {
-      await deleteLeave(l.id);
-      setMyLeaves((list) => list.filter((x) => x.id !== l.id));
+      await leaveActions.removeLeave(leaveId);
+      await refreshLeaves();
       showToast("success", "تم إلغاء طلب الإجازة");
     } catch (err) {
       showToast("error", err instanceof Error ? err.message : "تعذر إلغاء طلب الإجازة");
     }
   }
 
-  async function endLeaveNow(l: LeaveRequest) {
-    if (l.id === null) {
-      showToast("error", "مش قادرين ننهي الإجازة دي — رقمها مش معروف");
-      return;
-    }
+  async function endLeaveNow(leaveId: number) {
     try {
-      await endLeaveEarly(l.id);
-      setMyLeaves((list) => list.filter((x) => x.id !== l.id));
+      await leaveActions.endEarly(leaveId);
+      await refreshLeaves();
       showToast("success", "تم إنهاء الإجازة بدري");
     } catch (err) {
       showToast("error", err instanceof Error ? err.message : "تعذر إنهاء الإجازة");
@@ -478,41 +430,60 @@ export default function AttendancePage() {
       </Card>
 
       {/* ============================================================
-          طلبات الإجازة (session-only)
+          طلبات الإجازة — مباشرة من جدول leaves في الباك
       ============================================================ */}
-      {myLeaves.length > 0 && (
+      {(leaves.length > 0 || loadingLeaves) && (
         <Card className="p-6 mb-6 border-2 border-teal/20">
           <h3 className="font-bold text-foreground mb-1 flex items-center gap-2">
-            <Palmtree className="h-4 w-4 text-teal" /> طلبات الإجازة (الجلسة الحالية)
+            <Palmtree className="h-4 w-4 text-teal" /> طلبات الإجازة
           </h3>
-          <p className="text-xs text-muted-foreground mb-4">
-            ⚠️ الطلبات دي بتتفقد لو عملت refresh للصفحة — لسه معندناش endpoint لعرض السجل الدائم من الباك.
-          </p>
+          {loadingLeaves && <p className="text-xs text-muted-foreground mb-4">جاري التحميل...</p>}
           <div className="space-y-2">
-            {myLeaves.map((l, i) => (
-              <div key={l.id ?? `tmp-${i}`} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border p-3 text-sm">
-                <div>
-                  <div className="font-semibold">{LEAVE_TYPE_LABEL[l.leave_type]} — {l.start_date} إلى {l.end_date}</div>
-                  <div className="text-muted-foreground text-xs">{l.reason}</div>
-                  {l.id === null && (
-                    <div className="text-warning text-xs mt-1">تم الإرسال، بس رقم الطلب مش معروف من رجوع الـ API — التعديل/الإلغاء معطلين لحد ما نتأكد من شكل الرد</div>
+            {leaves.map((l) => {
+              const started = isLeaveStarted(l.start_date);
+              // تعديل/إلغاء: متاحين بس لو الإجازة لسه ما بدأتش (مطابق لرسالة الباك)
+              const canEditOrCancel = !started;
+              // إنهاء بدري: متاح بس لو الحالة accepted (مطابق لرسالة الباك)
+              const canEndEarly = l.status === "accepted";
+              const hasAnyAction = canEditOrCancel || canEndEarly;
+
+              return (
+                <div key={l.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border p-3 text-sm">
+                  <div>
+                    <div className="font-semibold flex items-center gap-2 flex-wrap">
+                      {LEAVE_TYPE_LABEL[l.leave_type]} — {l.start_date} إلى {l.end_date}
+                      <StatusPill tone={l.status === "accepted" ? "success" : l.status === "rejected" ? "danger" : l.status === "pending" ? "warning" : "muted"}>
+                        {LEAVE_STATUS_LABEL[l.status]}
+                      </StatusPill>
+                    </div>
+                    <div className="text-muted-foreground text-xs">{l.reason}</div>
+                  </div>
+                  {hasAnyAction ? (
+                    <div className="flex items-center gap-2 shrink-0">
+                      {canEditOrCancel && (
+                        <button onClick={() => openEditLeaveForm(l)} className="rounded-lg border border-border p-2 hover:bg-accent" title="تعديل">
+                          <Pencil className="h-4 w-4" />
+                        </button>
+                      )}
+                      {canEndEarly && (
+                        <button onClick={() => endLeaveNow(l.id)} className="rounded-lg border border-border p-2 hover:bg-accent" title="إنهاء بدري">
+                          <StopCircle className="h-4 w-4 text-warning" />
+                        </button>
+                      )}
+                      {canEditOrCancel && (
+                        <button onClick={() => cancelLeave(l.id)} className="rounded-lg border border-border p-2 hover:bg-destructive/10" title="إلغاء">
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <span className="text-xs text-muted-foreground shrink-0">
+                      {started ? "بدأت الإجازة — لا يمكن التعديل" : "لا يوجد إجراء متاح"}
+                    </span>
                   )}
                 </div>
-                {l.id !== null && (
-                  <div className="flex items-center gap-2 shrink-0">
-                    <button onClick={() => openEditLeaveForm(l)} className="rounded-lg border border-border p-2 hover:bg-accent" title="تعديل">
-                      <Pencil className="h-4 w-4" />
-                    </button>
-                    <button onClick={() => endLeaveNow(l)} className="rounded-lg border border-border p-2 hover:bg-accent" title="إنهاء بدري">
-                      <StopCircle className="h-4 w-4 text-warning" />
-                    </button>
-                    <button onClick={() => cancelLeave(l)} className="rounded-lg border border-border p-2 hover:bg-destructive/10" title="إلغاء">
-                      <Trash2 className="h-4 w-4 text-destructive" />
-                    </button>
-                  </div>
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
         </Card>
       )}
@@ -652,9 +623,6 @@ export default function AttendancePage() {
                 </label>
               </div>
 
-              {/* نوع الإجازة: القيم دلوقتي مضبوطة على public.leave_type الحقيقي
-                  (vacation / sick / permission) — راجع src/lib/attendance-labels.ts.
-                  تعديل الحقل ده ممنوع بعد الإرسال لأن update_leave مبيقبلش p_leave_type. */}
               <label className="text-xs space-y-1 block">
                 <span className="text-muted-foreground">نوع الإجازة</span>
                 <select
@@ -682,10 +650,10 @@ export default function AttendancePage() {
 
               <button
                 onClick={submitLeaveForm}
-                disabled={leaveSubmitting}
+                disabled={leaveActions.loading}
                 className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-60"
               >
-                {leaveSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Palmtree className="h-4 w-4" />}
+                {leaveActions.loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Palmtree className="h-4 w-4" />}
                 {editingLeaveId !== null ? "حفظ التعديل" : "إرسال الطلب"}
               </button>
             </div>

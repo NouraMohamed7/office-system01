@@ -6,7 +6,7 @@ import { Avatar, Card, PageHeader, Pill, StatCard } from "@/components/manager/p
 import { useToast } from "@/components/toast";
 import {
   Users, UserCheck, Clock, UserX, Palmtree, ClipboardX,
-  Download, MoreVertical, LogIn, LogOut, User, Loader2,
+  Download, Loader2,
   Settings, Save, CheckCircle2, XCircle, Ban,
 } from "lucide-react";
 import {
@@ -14,76 +14,94 @@ import {
   getTodayAttendanceRecords,
   getBreaksByAttendanceIds,
   subscribeToBreaks,
-  getCompanyMonthSummary,
+  subscribeToLeaves,
   getAttendanceSettings,
   createAttendanceSettings,
   updateAttendanceSettings,
-  checkLeaveStatus,
   type AttendanceTodayRow,
-  type CompanyMonthSummary,
   type AttendanceSettings,
-  type LeaveStatus,
   type BreakRecord,
 } from "@/modules/attendance/api/attendance.api";
+import {
+  useManagerLeaveRequests,
+  useLeaveActions,
+} from "@/modules/attendance/api/hooks/useAttendance";
 import { getEmployees } from "@/modules/employees/api/employees.api";
 import { getDepartments, type Department } from "@/modules/department/api/department.api";
 import { getBranches, type Branch } from "@/modules/branch/api/branch.api";
 import {
   ATTENDANCE_STATUS_LABEL,
   ATTENDANCE_STATUS_TONE,
-  MANAGER_LEAVE_DECISIONS,
+  LEAVE_TYPE_LABEL,
+  LEAVE_STATUS_LABEL,
   type AttendanceStatus,
   type Tone,
+  type LeaveType,
+  type LeaveStatus,
 } from "@/lib/attendance-labels";
 
 type Status = AttendanceStatus;
+// قرارات المدير الوحيدة اللي check_leave_status بيقبلها فعليًا
+type LeaveDecision = Extract<LeaveStatus, "accepted" | "rejected" | "cancelled">;
 
-// ============================================================
-// [محلي] شكل الصف اللي الجدول بيعرضه — in/out نص للعرض بالعربي،
-// inISO/outISO القيم الخام اللي بنحسب بيها الوقت (عشان منقعش في NaN)
-// ============================================================
+const KNOWN_STATUSES: Status[] = ["present", "absent", "late", "on_leave", "not_checked_in", "leave_early"];
+
 type Row = {
   id: string;
   name: string;
   dept: string;
-  in: string;      // نص معروض (عربي)
-  out: string;      // نص معروض (عربي)
-  inISO: string | null;   // خام — ده اللي بنحسب بيه
-  outISO: string | null;  // خام — ده اللي بنحسب بيه
-  hrs: string;
+  in: string;
+  out: string;
+  inISO: string | null;
+  outISO: string | null;
   st: Status;
   tone: Tone;
-  // ============================================================
-  // [مربوط بالباك] البريك — جاي من جدول breaks الحقيقي عبر
-  // attendance.id بتاع سجل اليوم للموظف ده. آخر بريك بس هو
-  // اللي بيتعرض في عمود "الاستراحة".
-  // ⚠️ قراءة فقط: المدير مش يقدر يبدأ/ينهي بريك نيابة عن موظف
-  // تاني، لأن start_break/end_break بتشتغل على المستخدم المسجل
-  // دخول حاليًا بس (من غير باراميتر attendance_id).
-  // ============================================================
   breakStartISO: string | null;
   breakEndISO: string | null;
 };
 
-// [محلي] تنسيق وقت ISO كنص عربي للعرض فقط — لا يُستخدم في أي حساب
+// جدول طلبات الإجازة الدائم في صفحة المدير — كل الحالات (pending / accepted / rejected / cancelled)
+type LeaveRow = {
+  id: number;
+  employeeName: string;
+  leave_type: LeaveType;
+  start_date: string;
+  end_date: string;
+  reason: string;
+  status: LeaveStatus;
+};
+
+const LEAVE_STATUS_TONE: Record<LeaveStatus, Tone> = {
+  pending: "warning",
+  accepted: "success",
+  rejected: "danger",
+  cancelled: "muted",
+  end_leave_early: "teal",
+};
+
+// ⚠️ مؤكد فعليًا من الباك: check_leave_status بالإلغاء (cancelled) بيرفض
+// برسالة "Cannot cancel a leave that has already started" لو start_date <=
+// النهاردة، حتى لو الحالة لسه pending. القبول/الرفض مش موثقين بنفس القيد.
+function isLeaveStarted(startDate: string): boolean {
+  const today = new Date().toISOString().slice(0, 10);
+  return startDate <= today;
+}
+
 function formatTimeAr(iso: string | null) {
   if (!iso) return "—";
   return new Date(iso).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
-// [محلي] الحساب الحقيقي لساعات العمل — بيشتغل على ISO timestamps خام
-// (مش على النص العربي)، عشان كده بيتفادى مشكلة NaN:NaN
 function computeMinutesBetween(startISO: string | null, endISO: string | null): number | null {
   if (!startISO || !endISO) return null;
   const start = new Date(startISO).getTime();
   const end = new Date(endISO).getTime();
   if (Number.isNaN(start) || Number.isNaN(end)) return null;
   let mins = Math.round((end - start) / 60000);
-  if (mins < 0) mins += 24 * 60; // احتياطي لو الانصراف عدى منتصف الليل
+  if (mins < 0) mins += 24 * 60;
   return mins;
 }
 
-// [محلي] تنسيق عدد الدقائق كـ "س:د" للعرض
 function formatMinutesAsHours(mins: number | null): string {
   if (mins === null) return "—";
   const h = Math.floor(mins / 60);
@@ -91,8 +109,6 @@ function formatMinutesAsHours(mins: number | null): string {
   return `${h}:${String(m).padStart(2, "0")}`;
 }
 
-// [مربوط بالباك] نص عمود "الاستراحة": بيحسب المدة لو البريك خلص،
-// وبيوضح "جاري الآن..." لو لسه شغال، و"—" لو مفيش بريك أصلاً
 function formatBreakCell(breakStartISO: string | null, breakEndISO: string | null): string {
   if (!breakStartISO) return "—";
   if (!breakEndISO) return "جاري الآن...";
@@ -100,21 +116,6 @@ function formatBreakCell(breakStartISO: string | null, breakEndISO: string | nul
   return formatMinutesAsHours(mins);
 }
 
-// ============================================================
-// [مربوط بالباك] نحول شكل بيانات attendance_today (من الباك) لشكل
-// Row اللي الصفحة متوقعاه. البيانات الأصلية (check_in_at,
-// check_out_at, status, late_minutes) جايه من الـ view attendance_today
-// deptMap: خريطة users_id -> اسم القسم (جايه من جدول users + department،
-// لأن attendance_today مفيهوش قسم)
-// breakMap: خريطة users_id -> آخر بريك (جايه من جدول breaks عبر
-// attendance.id بتاع سجل اليوم)
-//
-// ⚠️ عمود status في الـ view موثق في الدوك كـ "text" مش public.attendance_type
-// مباشرة. بنفترض هنا إنه بيرجّع نفس القيم الإنجليزية بتاعة جدول attendance
-// الأصلي (present/absent/late/on_leave/...). لو شغّلت select('status') من
-// attendance_today ولقيت شكل مختلف، عدّل المقارنات هنا بس — الباقي كله
-// هيفضل شغال زي ما هو.
-// ============================================================
 function mapTodayRowToRow(
   r: AttendanceTodayRow,
   deptMap: Map<string, string>,
@@ -122,13 +123,14 @@ function mapTodayRowToRow(
 ): Row {
   const inTime = formatTimeAr(r.check_in_at);
   const outTime = formatTimeAr(r.check_out_at);
-  const workMinutes = computeMinutesBetween(r.check_in_at, r.check_out_at);
 
-  let status: Status = "not_checked_in";
-  if (r.status === "absent" || r.status === "on_leave") {
-    status = r.status;
+  let status: Status;
+  if (r.status && (KNOWN_STATUSES as string[]).includes(r.status)) {
+    status = r.status as Status;
   } else if (r.check_in_at) {
     status = r.late_minutes && r.late_minutes > 0 ? "late" : "present";
+  } else {
+    status = "not_checked_in";
   }
 
   const lastBreak = breakMap.get(r.users_id);
@@ -141,7 +143,6 @@ function mapTodayRowToRow(
     out: outTime,
     inISO: r.check_in_at,
     outISO: r.check_out_at,
-    hrs: formatMinutesAsHours(workMinutes),
     st: status,
     tone: ATTENDANCE_STATUS_TONE[status],
     breakStartISO: lastBreak?.start_time ?? null,
@@ -149,16 +150,14 @@ function mapTodayRowToRow(
   };
 }
 
-// [محلي] تصدير CSV — بيشتغل على الداتا اللي أصلاً في الذاكرة (state)، مفيهوش نداء للباك
 function exportRowsToCsv(rows: Row[]) {
-  const header = ["الموظف", "القسم", "وقت الحضور", "وقت الانصراف", "ساعات العمل", "الاستراحة", "الحالة"];
+  const header = ["الموظف", "القسم", "وقت الحضور", "وقت الانصراف", "الاستراحة", "الحالة"];
   const csvRows = [header.join(",")].concat(
     rows.map((r) => [
       r.name,
       r.dept,
       r.in,
       r.out,
-      r.hrs,
       formatBreakCell(r.breakStartISO, r.breakEndISO),
       ATTENDANCE_STATUS_LABEL[r.st],
     ].join(","))
@@ -175,14 +174,35 @@ function exportRowsToCsv(rows: Row[]) {
   URL.revokeObjectURL(url);
 }
 
-// شكل فورم إعدادات الحضور — [مربوط بالباك] عبر attendance_settings API
+function exportLeaveRowsToCsv(rows: LeaveRow[]) {
+  const header = ["الموظف", "نوع الإجازة", "من", "إلى", "السبب", "الحالة"];
+  const csvRows = [header.join(",")].concat(
+    rows.map((l) =>
+      [
+        l.employeeName,
+        LEAVE_TYPE_LABEL[l.leave_type],
+        l.start_date,
+        l.end_date,
+        `"${(l.reason ?? "").replace(/"/g, '""')}"`,
+        LEAVE_STATUS_LABEL[l.status],
+      ].join(",")
+    )
+  );
+  const csv = "\uFEFF" + csvRows.join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "تقرير_الإجازات.csv";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 type SettingsForm = {
   branch_id: string;
   late_tolerance_minutes: string;
-  // ⚠️ notify_manager_on_late اتشالت مؤقتًا من الفورم — الباك لسه مضافهاش
-  // كعمود حقيقي في attendance_settings (PGRST204: schema cache مش شايفها).
-  // لما الباك يأكد إضافتها، رجّع الحقل هنا وفي EMPTY_SETTINGS_FORM
-  // وفي startEditSettings وفي payload بتاع saveSettings تحت.
   effective_from: string;
   effective_to: string;
   start_time: string;
@@ -208,15 +228,16 @@ export default function AttendancePage() {
   const showToast = useToast();
   const [rows, setRows] = useState<Row[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
-  const [monthSummary, setMonthSummary] = useState<CompanyMonthSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [deptFilter, setDeptFilter] = useState("");
-  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
 
-  // ---- إعدادات الحضور (attendance_settings) — [مربوط بالباك] ----
+  // خريطة اسم الموظف (id -> name) — مستخدمة في جدول الإجازات لعرض اسم صاحب الطلب
+  const [employeeNameMap, setEmployeeNameMap] = useState<Map<string, string>>(new Map());
+
+  // ---- إعدادات الحضور (attendance_settings) ----
   const [settingsList, setSettingsList] = useState<AttendanceSettings[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsLoading, setSettingsLoading] = useState(false);
@@ -224,47 +245,53 @@ export default function AttendancePage() {
   const [editingSettingsId, setEditingSettingsId] = useState<number | null>(null);
   const [savingSettings, setSavingSettings] = useState(false);
 
-  // ---- الفروع (لاختيار branch_id بدل ما يتكتب يدوي) — [مربوط بالباك] ----
+  // ---- الفروع ----
   const [branches, setBranches] = useState<Branch[]>([]);
   const branchMap = useMemo(() => new Map(branches.map((b) => [b.id, b])), [branches]);
 
-  // ---- أداة يدوية للموافقة/رفض إجازة — [مربوط بالباك عبر RPC] ----
-  // ⚠️ مؤقتة: لسه معندناش endpoint لعرض قائمة الطلبات المعلقة،
-  // فالمدير بيدخل رقم الطلب يدويًا لحد ما يتوفر جدول/view قراءة.
-  const [leaveOpen, setLeaveOpen] = useState(false);
-  const [leaveId, setLeaveId] = useState("");
-  const [leaveStatus, setLeaveStatus] = useState<LeaveStatus>("accepted");
-  const [leaveSubmitting, setLeaveSubmitting] = useState(false);
+  // ---- طلبات الإجازة — كل الحالات، مباشرة من جدول leaves في الباك ----
+  const {
+    data: leaves,
+    loading: leavesLoading,
+    refresh: refreshLeaves,
+  } = useManagerLeaveRequests();
+  const leaveActions = useLeaveActions();
 
-  // [مربوط بالباك] تحميل بيانات الحضور + الاستراحات + الموظفين + الأقسام + ملخص الشهر
   const load = useCallback(async () => {
     try {
-      const [todayRows, employees, depts, summary, attendanceRecords] = await Promise.all([
+      const [todayRowsRaw, employees, depts, attendanceRecords] = await Promise.all([
         getAttendanceToday(),
-        getEmployees(), // مستخدمينها هنا بس عشان نجيب قسم كل موظف (users_id -> department)
+        getEmployees(),
         getDepartments(),
-        getCompanyMonthSummary(),
-        getTodayAttendanceRecords(), // فيها id — محتاجينه عشان نربط بجدول breaks
+        getTodayAttendanceRecords(),
       ]);
 
+      // ⚠️ dedupe: لو موظف عنده أكتر من سجل attendance في نفس اليوم (مثلاً
+      // check-in/check-out متكررين أثناء الاختبار)، view attendance_today
+      // بترجع صف لكل سجل، فبيتكرر users_id وده بيكسر الـ key في الجدول.
+      // بنسيب بس آخر سجل (أحدث check_in_at) لكل موظف.
+      const dedupedByUser = new Map<string, AttendanceTodayRow>();
+      for (const r of todayRowsRaw) {
+        const existing = dedupedByUser.get(r.users_id);
+        if (!existing || (r.check_in_at ?? "") >= (existing.check_in_at ?? "")) {
+          dedupedByUser.set(r.users_id, r);
+        }
+      }
+      const todayRows = Array.from(dedupedByUser.values());
+
       const deptMap = new Map<string, string>();
+      const nameMap = new Map<string, string>();
       for (const e of employees) {
         if (e.department?.name) deptMap.set(e.id, e.department.name);
+        if (e.full_name) nameMap.set(e.id, e.full_name);
       }
+      setEmployeeNameMap(nameMap);
 
-      // users_id -> attendance.id بتاع سجل اليوم
-      const attendanceIdByUser = new Map<string, number>();
-      for (const rec of attendanceRecords) {
-        attendanceIdByUser.set(rec.users_id, rec.id);
-      }
       const attendanceIds = attendanceRecords.map((rec) => rec.id);
-
-      // نجيب كل البريكات المرتبطة بسجلات اليوم دفعة واحدة
       const allBreaks = attendanceIds.length > 0 ? await getBreaksByAttendanceIds(attendanceIds) : [];
       const attendanceIdToUser = new Map<number, string>();
       for (const rec of attendanceRecords) attendanceIdToUser.set(rec.id, rec.users_id);
 
-      // آخر بريك لكل موظف (breaks راجعة مرتبة تصاعديًا بالـ start_time)
       const breakMap = new Map<string, BreakRecord>();
       for (const b of allBreaks) {
         const uid = attendanceIdToUser.get(b.attendance_id);
@@ -273,7 +300,6 @@ export default function AttendancePage() {
 
       setRows(todayRows.map((r) => mapTodayRowToRow(r, deptMap, breakMap)));
       setDepartments(depts);
-      setMonthSummary(summary);
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : "حصل خطأ في تحميل بيانات الحضور");
     } finally {
@@ -285,13 +311,33 @@ export default function AttendancePage() {
     load();
   }, [load]);
 
-  // [مربوط بالباك] لايف: أي تغيير في جدول breaks (بدء/إنهاء استراحة لأي موظف) بيحدّث الجدول فورًا
   useEffect(() => {
     const unsubscribe = subscribeToBreaks(() => load());
     return unsubscribe;
   }, [load]);
 
-  // [محلي] فلترة/بحث على الداتا اللي أصلاً محملة في الذاكرة
+  useEffect(() => {
+    const unsubscribe = subscribeToLeaves(() => refreshLeaves());
+    return unsubscribe;
+  }, [refreshLeaves]);
+
+  // جدول طلبات الإجازة مبني مباشرة من بيانات الباك (كل الحالات)
+  const leaveRows: LeaveRow[] = useMemo(
+    () =>
+      leaves
+        .map((l) => ({
+          id: l.id,
+          employeeName: employeeNameMap.get(l.users_id) || "—",
+          leave_type: l.leave_type,
+          start_date: l.start_date,
+          end_date: l.end_date,
+          reason: l.reason,
+          status: l.status,
+        }))
+        .sort((a, b) => b.id - a.id),
+    [leaves, employeeNameMap]
+  );
+
   const filtered = useMemo(() => {
     return rows.filter((r) => {
       if (search.trim() && !r.name.includes(search.trim())) return false;
@@ -300,7 +346,6 @@ export default function AttendancePage() {
     });
   }, [rows, search, deptFilter]);
 
-  // [محلي] إحصائيات مبنية على الداتا الموجودة في الذاكرة
   const stats = useMemo(() => ({
     total: rows.length,
     present: rows.filter((r) => r.st === "present").length,
@@ -310,69 +355,6 @@ export default function AttendancePage() {
     notMarked: rows.filter((r) => r.st === "not_checked_in").length,
   }), [rows]);
 
-  function updateRow(id: string, patch: Partial<Row>) {
-    setRows((list) => list.map((r) => (r.id === id ? { ...r, ...patch } : r)));
-  }
-
-  // ============================================================
-  // [محلي بالكامل] — الأزرار دي لسه محلية بس؛ الباك لسه مفيهوش endpoint
-  // يسمح للمدير يعدّل حضور موظف تاني نيابة عنه. لما تتوفر، هنستبدل
-  // الكود جوا كل دالة بنداء API حقيقي.
-  // ============================================================
-
-  function markCheckIn(r: Row) {
-    const nowISO = new Date().toISOString();
-    updateRow(r.id, {
-      in: formatTimeAr(nowISO),
-      inISO: nowISO,
-      out: "—",
-      outISO: null,
-      hrs: "—",
-      st: "present",
-      tone: ATTENDANCE_STATUS_TONE.present,
-    });
-    showToast("success", `تم تسجيل حضور ${r.name} (محليًا فقط — لسه مش متصل بالباك)`);
-    setOpenMenuId(null);
-  }
-
-  function markCheckOut(r: Row) {
-    if (!r.inISO) {
-      showToast("error", `${r.name} لسه ما سجلش حضور`);
-      setOpenMenuId(null);
-      return;
-    }
-    const nowISO = new Date().toISOString();
-    const mins = computeMinutesBetween(r.inISO, nowISO);
-    updateRow(r.id, {
-      out: formatTimeAr(nowISO),
-      outISO: nowISO,
-      hrs: formatMinutesAsHours(mins),
-    });
-    showToast("success", `تم تسجيل انصراف ${r.name} (محليًا فقط — لسه مش متصل بالباك)`);
-    setOpenMenuId(null);
-  }
-
-  function markAbsent(r: Row) {
-    updateRow(r.id, {
-      in: "—",
-      out: "—",
-      inISO: null,
-      outISO: null,
-      hrs: "—",
-      st: "absent",
-      tone: ATTENDANCE_STATUS_TONE.absent,
-    });
-    showToast("success", `تم تسجيل ${r.name} كغائب (محليًا فقط — لسه مش متصل بالباك)`);
-    setOpenMenuId(null);
-  }
-
-  // [محلي بالكامل] لسه مفيهوش صفحة ملف شخصي فعلية
-  function viewProfile(r: Row) {
-    showToast("success", `الملف الشخصي لـ ${r.name} — قريباً`);
-    setOpenMenuId(null);
-  }
-
-  // [محلي] بيصدّر الداتا الموجودة في الذاكرة، مفيش نداء للباك هنا
   function handleExport() {
     setExporting(true);
     setTimeout(() => {
@@ -382,8 +364,17 @@ export default function AttendancePage() {
     }, 600);
   }
 
+  function handleExportLeaves() {
+    if (leaveRows.length === 0) {
+      showToast("error", "مفيش طلبات إجازة عشان تتصدّر");
+      return;
+    }
+    exportLeaveRowsToCsv(leaveRows);
+    showToast("success", "تم تصدير تقرير الإجازات بنجاح");
+  }
+
   // ============================================================
-  // إعدادات الحضور — [مربوط بالباك بالكامل: CRUD حقيقي]
+  // إعدادات الحضور
   // ============================================================
 
   async function openSettings() {
@@ -456,28 +447,21 @@ export default function AttendancePage() {
   }
 
   // ============================================================
-  // أداة يدوية: موافقة/رفض إجازة برقم الطلب — [مربوط بالباك عبر RPC]
+  // طلبات الإجازة — قرار المدير (قبول / رفض / إلغاء)
   // ============================================================
 
-  async function submitLeaveDecision() {
-    const id = Number(leaveId);
-    if (!id) {
-      showToast("error", "دخّل رقم طلب صحيح");
-      return;
-    }
-    setLeaveSubmitting(true);
+  async function decideOnLeave(leaveId: number, status: LeaveDecision) {
     try {
-      await checkLeaveStatus({ p_leave_id: id, p_new_status: leaveStatus });
-      showToast("success", `تم تحديث حالة طلب الإجازة رقم ${id}`);
-      setLeaveId("");
+      await leaveActions.setLeaveStatus(leaveId, status);
+      showToast("success", `تم تحديث حالة طلب الإجازة رقم ${leaveId}`);
+      await refreshLeaves();
     } catch (err) {
       showToast("error", err instanceof Error ? err.message : "تعذر تحديث حالة الإجازة");
-    } finally {
-      setLeaveSubmitting(false);
     }
   }
 
   const todayLabel = new Date().toLocaleDateString("ar-EG", { day: "numeric", month: "long", year: "numeric" });
+  const pendingCount = leaveRows.filter((l) => l.status === "pending").length;
 
   return (
     <div className="space-y-6">
@@ -486,13 +470,6 @@ export default function AttendancePage() {
         subtitle={`حضور الشركة بالكامل — اليوم ${todayLabel}.`}
         actions={
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => setLeaveOpen(true)}
-              className="inline-flex items-center gap-2 rounded-xl border border-border bg-background px-3.5 py-2 text-sm font-semibold transition-all duration-200 hover:bg-accent active:scale-95"
-            >
-              <Palmtree className="size-4" />
-              طلبات الإجازة
-            </button>
             <button
               onClick={openSettings}
               className="inline-flex items-center gap-2 rounded-xl border border-border bg-background px-3.5 py-2 text-sm font-semibold transition-all duration-200 hover:bg-accent active:scale-95"
@@ -506,7 +483,7 @@ export default function AttendancePage() {
               className="inline-flex items-center gap-2 rounded-xl border border-border bg-background px-3.5 py-2 text-sm font-semibold transition-all duration-200 hover:bg-accent active:scale-95 disabled:opacity-70"
             >
               {exporting ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
-              {exporting ? "جاري التصدير..." : "تصدير"}
+              {exporting ? "جاري التصدير..." : "تصدير الحضور"}
             </button>
           </div>
         }
@@ -553,7 +530,7 @@ export default function AttendancePage() {
           <table className="w-full text-sm">
             <thead className="bg-accent/40 text-xs text-muted-foreground">
               <tr className="[&>th]:px-4 [&>th]:py-3 [&>th]:text-right">
-                <th>الموظف</th><th>القسم</th><th>وقت الحضور</th><th>وقت الانصراف</th><th>ساعات العمل</th><th>الاستراحة</th><th>الحالة</th><th></th>
+                <th>الموظف</th><th>القسم</th><th>وقت الحضور</th><th>وقت الانصراف</th><th>الاستراحة</th><th>الحالة</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -572,7 +549,6 @@ export default function AttendancePage() {
                   <td className="px-4 py-3 text-muted-foreground">{r.dept}</td>
                   <td className="px-4 py-3 tabular">{r.in}</td>
                   <td className="px-4 py-3 tabular">{r.out}</td>
-                  <td className="px-4 py-3 tabular">{r.hrs}</td>
                   <td className="px-4 py-3 tabular text-muted-foreground">
                     {formatBreakCell(r.breakStartISO, r.breakEndISO)}
                   </td>
@@ -581,38 +557,11 @@ export default function AttendancePage() {
                       <Pill tone={r.tone}>{ATTENDANCE_STATUS_LABEL[r.st]}</Pill>
                     </span>
                   </td>
-                  <td className="relative px-4 py-3">
-                    <button
-                      onClick={() => setOpenMenuId(openMenuId === r.id ? null : r.id)}
-                      className="grid size-8 place-items-center rounded-lg transition hover:bg-accent active:scale-90"
-                    >
-                      <MoreVertical className="size-4" />
-                    </button>
-                    {openMenuId === r.id && (
-                      <>
-                        <div className="fixed inset-0 z-10" onClick={() => setOpenMenuId(null)} />
-                        <div className="absolute left-4 top-full z-20 mt-1 w-48 origin-top-left overflow-hidden rounded-xl border border-border bg-card shadow-warm animate-in fade-in zoom-in-95 duration-150">
-                          <button onClick={() => markCheckIn(r)} className="flex w-full items-center gap-2 px-3.5 py-2.5 text-right text-sm transition hover:bg-accent">
-                            <LogIn className="size-4 text-success" /> تسجيل حضور الآن
-                          </button>
-                          <button onClick={() => markCheckOut(r)} className="flex w-full items-center gap-2 px-3.5 py-2.5 text-right text-sm transition hover:bg-accent">
-                            <LogOut className="size-4 text-teal" /> تسجيل انصراف الآن
-                          </button>
-                          <button onClick={() => markAbsent(r)} className="flex w-full items-center gap-2 px-3.5 py-2.5 text-right text-sm text-destructive transition hover:bg-destructive/10">
-                            <UserX className="size-4" /> تسجيل غياب
-                          </button>
-                          <button onClick={() => viewProfile(r)} className="flex w-full items-center gap-2 px-3.5 py-2.5 text-right text-sm transition hover:bg-accent">
-                            <User className="size-4 text-primary" /> عرض الملف
-                          </button>
-                        </div>
-                      </>
-                    )}
-                  </td>
                 </tr>
               ))}
               {!loading && filtered.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-4 py-10 text-center text-sm text-muted-foreground">
+                  <td colSpan={6} className="px-4 py-10 text-center text-sm text-muted-foreground">
                     مفيش نتائج مطابقة للبحث/الفلتر
                   </td>
                 </tr>
@@ -622,12 +571,103 @@ export default function AttendancePage() {
         </div>
       </Card>
 
-      <div className="grid gap-6 lg:grid-cols-4">
-        <StatCard label="أيام الحضور" value={String(monthSummary?.avgPresentDays ?? 0)} sub="متوسط للموظف" tone="success" />
-        <StatCard label="أيام الغياب" value={String(monthSummary?.avgAbsentDays ?? 0)} sub="متوسط للموظف" tone="danger" />
-        <StatCard label="نسبة الالتزام" value={`${monthSummary?.compliancePct ?? 0}%`} tone="primary" />
-        <StatCard label="إجمالي ساعات العمل" value={(monthSummary?.totalWorkHours ?? 0).toLocaleString("ar-EG")} tone="teal" />
-      </div>
+      {/* ============================================================
+          جدول طلبات الإجازة — مباشرة من جدول leaves في الباك (كل الحالات)
+      ============================================================ */}
+      <Card className="p-0! overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
+          <h3 className="text-sm font-bold flex items-center gap-2">
+            <Palmtree className="size-4 text-teal" /> طلبات الإجازة
+            {pendingCount > 0 && (
+              <span className="rounded-full bg-warning/20 px-1.5 py-0.5 text-[10px] font-bold text-warning">
+                {pendingCount} معلّق
+              </span>
+            )}
+          </h3>
+          <button
+            onClick={handleExportLeaves}
+            className="inline-flex items-center gap-2 rounded-xl border border-border bg-background px-3.5 py-2 text-sm font-semibold transition hover:bg-accent active:scale-95"
+          >
+            <Download className="size-4" />
+            تصدير الإجازات
+          </button>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-accent/40 text-xs text-muted-foreground">
+              <tr className="[&>th]:px-4 [&>th]:py-3 [&>th]:text-right">
+                <th>الموظف</th><th>نوع الإجازة</th><th>من</th><th>إلى</th><th>السبب</th><th>الحالة</th><th>إجراء</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {leavesLoading && leaveRows.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="px-4 py-8 text-center text-sm text-muted-foreground">
+                    جاري تحميل طلبات الإجازة...
+                  </td>
+                </tr>
+              )}
+              {!leavesLoading && leaveRows.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="px-4 py-8 text-center text-sm text-muted-foreground">
+                    مفيش طلبات إجازة لسه
+                  </td>
+                </tr>
+              )}
+              {leaveRows.map((l) => (
+                <tr key={l.id} className="row-hover hover:row-hover-active">
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-3">
+                      <Avatar name={l.employeeName} />
+                      <span className="font-semibold">{l.employeeName}</span>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-muted-foreground">{LEAVE_TYPE_LABEL[l.leave_type]}</td>
+                  <td className="px-4 py-3 tabular">{l.start_date}</td>
+                  <td className="px-4 py-3 tabular">{l.end_date}</td>
+                  <td className="px-4 py-3 text-muted-foreground max-w-60 truncate" title={l.reason}>{l.reason}</td>
+                  <td className="px-4 py-3">
+                    <Pill tone={LEAVE_STATUS_TONE[l.status]}>{LEAVE_STATUS_LABEL[l.status]}</Pill>
+                  </td>
+                  <td className="px-4 py-3">
+                    {l.status === "pending" ? (
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => decideOnLeave(l.id, "accepted")}
+                          disabled={leaveActions.loading}
+                          className="inline-flex items-center gap-1 rounded-lg bg-success/15 px-2.5 py-1.5 text-xs font-semibold text-success hover:bg-success/25 disabled:opacity-50"
+                        >
+                          <CheckCircle2 className="size-3.5" /> قبول
+                        </button>
+                        <button
+                          onClick={() => decideOnLeave(l.id, "rejected")}
+                          disabled={leaveActions.loading}
+                          className="inline-flex items-center gap-1 rounded-lg bg-destructive/15 px-2.5 py-1.5 text-xs font-semibold text-destructive hover:bg-destructive/25 disabled:opacity-50"
+                        >
+                          <XCircle className="size-3.5" /> رفض
+                        </button>
+                        {/* الإلغاء ممنوع لو الإجازة بدأت فعلاً (رسالة الباك) */}
+                        {!isLeaveStarted(l.start_date) && (
+                          <button
+                            onClick={() => decideOnLeave(l.id, "cancelled")}
+                            disabled={leaveActions.loading}
+                            className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold hover:bg-accent disabled:opacity-50"
+                          >
+                            <Ban className="size-3.5" /> إلغاء
+                          </button>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">تم اتخاذ القرار</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
 
       {/* ============================================================
           مودال: إعدادات الحضور
@@ -752,8 +792,6 @@ export default function AttendancePage() {
                         className="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary/50"
                       />
                     </label>
-                    {/* ⚠️ "إشعار المدير عند التأخير" اتشالت مؤقتًا لحد ما الباك
-                        يضيف عمود notify_manager_on_late فعليًا في attendance_settings */}
                   </div>
 
                   <div className="flex items-center gap-2 pt-2">
@@ -777,71 +815,6 @@ export default function AttendancePage() {
                 </div>
               </div>
             )}
-          </div>
-        </>
-      )}
-
-      {/* ============================================================
-          مودال: طلبات الإجازة (أداة يدوية مؤقتة)
-      ============================================================ */}
-      {leaveOpen && (
-        <>
-          <div className="fixed inset-0 z-40 bg-black/40" onClick={() => setLeaveOpen(false)} />
-          <div className="fixed inset-x-4 top-1/2 z-50 mx-auto max-w-md -translate-y-1/2 rounded-2xl border border-border bg-card p-6 shadow-warm">
-            <div className="mb-4 flex items-center justify-between">
-              <h3 className="text-lg font-bold flex items-center gap-2">
-                <Palmtree className="size-5 text-teal" /> طلبات الإجازة
-              </h3>
-              <button onClick={() => setLeaveOpen(false)} className="text-muted-foreground hover:text-foreground">✕</button>
-            </div>
-
-            <div className="mb-4 rounded-xl bg-warning/10 p-3 text-xs text-warning-foreground/80 leading-relaxed">
-              ⚠️ لسه معندناش endpoint لعرض قائمة الطلبات المعلقة تلقائيًا.
-              دخّل رقم الطلب (leave_id) يدويًا لحد ما يتوفر جدول/view قراءة من الباك.
-            </div>
-
-            <div className="space-y-3">
-              <label className="text-xs space-y-1 block">
-                <span className="text-muted-foreground">رقم طلب الإجازة</span>
-                <input
-                  type="number"
-                  value={leaveId}
-                  onChange={(e) => setLeaveId(e.target.value)}
-                  placeholder="مثال: 13"
-                  className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary/50"
-                />
-              </label>
-
-              <label className="text-xs space-y-1 block">
-                <span className="text-muted-foreground">القرار</span>
-                <select
-                  value={leaveStatus}
-                  onChange={(e) => setLeaveStatus(e.target.value as LeaveStatus)}
-                  className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary/50"
-                >
-                  {MANAGER_LEAVE_DECISIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>{opt.label}</option>
-                  ))}
-                </select>
-              </label>
-
-              <button
-                onClick={submitLeaveDecision}
-                disabled={leaveSubmitting}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-60"
-              >
-                {leaveSubmitting ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : leaveStatus === "accepted" ? (
-                  <CheckCircle2 className="size-4" />
-                ) : leaveStatus === "rejected" ? (
-                  <XCircle className="size-4" />
-                ) : (
-                  <Ban className="size-4" />
-                )}
-                تأكيد القرار
-              </button>
-            </div>
           </div>
         </>
       )}

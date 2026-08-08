@@ -18,10 +18,6 @@ export type AttendanceTodayRow = {
   check_in_at: string | null;
   check_out_at: string | null;
   late_minutes: number | null;
-  // ⚠️ الدوك بيوصف الفورمات بتاعها كـ "text" مش public.attendance_type
-  // مباشرة. لحد ما نتأكد من شكل القيمة الفعلية الراجعة (شغّل select('status') وشوف
-  // النتيجة)، بنسيبها string عشان منكسرش لو رجعت حاجة غير متوقعة، وبنعمل
-  // narrowing يدوي في mapTodayRowToRow في صفحة المدير.
   status: string | null;
 };
 
@@ -33,7 +29,7 @@ export type AttendanceRecord = {
   users_id: string;
   late_minutes: number;
   total_work_minutes: number | null;
-  status: AttendanceStatus; // public.attendance_type — القيم الإنجليزية الحقيقية
+  status: AttendanceStatus; // public.attendance_type
   check_in_at: string;
   check_out_at: string | null;
   attendance_date: string; // YYYY-MM-DD
@@ -50,7 +46,7 @@ export type MonthSummary = {
 export type CompanyMonthSummary = {
   avgPresentDays: number;
   avgAbsentDays: number;
-  compliancePct: number; // نسبة الالتزام = أيام الحضور من إجمالي السجلات
+  compliancePct: number;
   totalWorkHours: number;
 };
 
@@ -60,12 +56,6 @@ export type AttendanceSettings = {
   created_at: string;
   updated_at: string;
   late_tolerance_minutes: number;
-  // ⚠️ اختياري مؤقتًا: العمود ده لسه مش موجود فعليًا في جدول
-  // attendance_settings عند الباك (PGRST204 - "Could not find the
-  // 'notify_manager_on_late' column ... in the schema cache").
-  // رجّعه Required (شيل الـ ?) لما الباك يأكد إضافة العمود ويعمل
-  // reload للـ schema cache.
-  notify_manager_on_late?: boolean;
   branch_id: number;
   effective_from: string; // YYYY-MM-DD
   effective_to: string | null; // YYYY-MM-DD
@@ -77,10 +67,6 @@ export type AttendanceSettings = {
 export type AttendanceSettingsInput = {
   branch_id: number;
   late_tolerance_minutes: number;
-  // ⚠️ نفس الملاحظة اللي فوق — اختياري مؤقتًا لحد ما الباك يضيف العمود.
-  // طول ما الحقل مش موجود في الـ payload، مش هيتبعت في insert/update
-  // خالص، فمش هيسبب PGRST204 تاني.
-  notify_manager_on_late?: boolean;
   effective_from: string;
   effective_to?: string | null;
   start_time: string;
@@ -96,7 +82,7 @@ export type AttendanceHistoryFilters = {
   userId?: string;
   from?: string; // YYYY-MM-DD
   to?: string; // YYYY-MM-DD
-  status?: string; // نص عام عشان نستقبل أي نوع status من فوق من غير تعارض types
+  status?: string;
   page?: number;
   pageSize?: number;
 };
@@ -136,7 +122,6 @@ function currentMonthRange(): { firstDay: string; lastDay: string } {
 
 // ============================================================
 // Manager: كل موظفين اليوم (attendance_today view)
-// filters.userIds اختياري — لو اتبعت، بنفلتر بيه، وإلا بنرجع الكل
 // ============================================================
 
 export async function getAttendanceToday(
@@ -155,9 +140,8 @@ export async function getAttendanceToday(
 
 // ============================================================
 // Manager: سجلات جدول attendance الخام لليوم الحالي (فيها id)
-// ⚠️ view attendance_today مفيهوش عمود id، فمحتاجينها عشان نربط
-// كل موظف بسجل الحضور بتاعه اليوم ده وبالتالي بجدول breaks
-// (اللي بياخد attendance_id مش users_id).
+// محتاجينها عشان نربط كل موظف بسجل الحضور بتاعه اليوم ده وبالتالي
+// بجدول breaks (اللي بياخد attendance_id مش users_id).
 // ============================================================
 
 export async function getTodayAttendanceRecords(): Promise<AttendanceRecord[]> {
@@ -171,9 +155,6 @@ export async function getTodayAttendanceRecords(): Promise<AttendanceRecord[]> {
 
 // ============================================================
 // Manager: سجل الحضور لأي موظف (أو كل الموظفين) بفلاتر ورقم صفحة
-// ⚠️ ده استعلام على جدول attendance مباشرة (مش view)، فيحترم RLS
-// المطبقة على الجدول ده — لازم يكون عند المدير صلاحية قراءة سجلات
-// غير سجلاته الشخصية.
 // ============================================================
 
 export async function getAttendanceHistory(
@@ -219,7 +200,6 @@ export async function getCompanyMonthSummary(): Promise<CompanyMonthSummary> {
     return { avgPresentDays: 0, avgAbsentDays: 0, compliancePct: 0, totalWorkHours: 0 };
   }
 
-  // نجمع لكل موظف عدد أيام الحضور/الغياب عشان نحسب المتوسط بشكل صحيح
   const byUser = new Map<string, { present: number; absent: number }>();
   let presentCount = 0;
   let totalMinutes = 0;
@@ -266,7 +246,7 @@ export async function checkOut(): Promise<unknown> {
 }
 
 // ============================================================
-// Employee: حالة اليوم بتاعي (عشان لو عملت refresh للصفحة)
+// Employee: حالة اليوم بتاعي
 // ============================================================
 
 export async function getMyAttendanceToday(): Promise<AttendanceRecord | null> {
@@ -329,11 +309,7 @@ export async function getMyMonthSummary(): Promise<MonthSummary> {
 }
 
 // ============================================================
-// البريك (breaks) — [مربوط بالباك بالكامل]
-// ⚠️ start_break / end_break من غير أي باراميترز، يعني بيشتغلوا على
-// سجل حضور المستخدم المسجّل دخول حاليًا بس. المدير مش يقدر يبدأ/
-// ينهي استراحة نيابة عن موظف تاني من هنا — لو الباك يضيف endpoint
-// بباراميتر (زي p_attendance_id) لاحقًا، نضيف دالة مدير منفصلة.
+// البريك (breaks)
 // ============================================================
 
 export async function startBreak(): Promise<unknown> {
@@ -348,7 +324,6 @@ export async function endBreak(): Promise<unknown> {
   return data;
 }
 
-/** كل استراحات سجل حضور معين (موظف واحد، يوم واحد) */
 export async function getBreaksByAttendanceId(attendanceId: number): Promise<BreakRecord[]> {
   const { data, error } = await supabase
     .from("breaks")
@@ -359,7 +334,6 @@ export async function getBreaksByAttendanceId(attendanceId: number): Promise<Bre
   return data ?? [];
 }
 
-/** كل استراحات مجموعة سجلات حضور (مستخدمة في صفحة المدير — كل الموظفين اليوم) */
 export async function getBreaksByAttendanceIds(attendanceIds: number[]): Promise<BreakRecord[]> {
   if (attendanceIds.length === 0) return [];
   const { data, error } = await supabase
@@ -371,7 +345,6 @@ export async function getBreaksByAttendanceIds(attendanceIds: number[]): Promise
   return data ?? [];
 }
 
-/** اشتراك لايف على أي تغيير في جدول breaks (يفيد بورتال المدير) */
 export function subscribeToBreaks(onChange: () => void) {
   const channel = supabase
     .channel("breaks-changes")
@@ -389,7 +362,6 @@ export function subscribeToBreaks(onChange: () => void) {
 
 // ============================================================
 // Manager: إعدادات الحضور (attendance_settings) — CRUD كامل
-// موثقة بالكامل في الدوك (select/insert/update/delete)
 // ============================================================
 
 export async function getAttendanceSettings(branchId?: number): Promise<AttendanceSettings[]> {
@@ -437,14 +409,7 @@ export async function deleteAttendanceSettings(id: number): Promise<void> {
 }
 
 // ============================================================
-// Employee: طلبات الإجازة (leave) — RPC فقط
-// ⚠️ ملاحظة مهمة: الباك حاليًا مفيهوش جدول/view نقدر نقرا منه
-// طلبات الإجازة (زي attendance_today بالنسبة للحضور). يعني مش
-// هنقدر نعرض "طلباتي" أو "الطلبات المعلقة" بعد إعادة تحميل
-// الصفحة لحد ما الباك يوفر endpoint قراءة (مثلاً جدول leaves).
-// الدوال دي شغالة وبتتصل بالـ RPC الصح، بس الصفحة بتحتفظ
-// بنتيجة الطلب محليًا في نفس الجلسة بس عشان تسمح بالتعديل/الإلغاء
-// المباشر بعد الإرسال.
+// Employee: طلبات الإجازة (leave) — RPC للكتابة
 // ============================================================
 
 export async function requestLeave(payload: {
@@ -482,26 +447,55 @@ export async function endLeaveEarly(p_leave_id: number): Promise<unknown> {
 }
 
 // ============================================================
-// Manager: قراءة طلبات الإجازة — ⚠️ [محلي/Mock — لسه مش متاح فعليًا]
-// مفيش جدول أو view في الباك دلوقتي نقدر نقرا منه طلبات الإجازة.
-// الدالة دي موجودة بس عشان تفضل الأنواع (types) متوافقة مع الـ hook
-// اللي بيستخدمها؛ بترمي خطأ واضح لحد ما الباك يوفر endpoint حقيقي
-// (مثلاً جدول public.leaves أو view leave_requests). لما يتوفر،
-// استبدل جسم الدالة بنداء select حقيقي زي getAttendanceHistory فوق.
+// قراءة طلبات الإجازة — جدول public.leaves
+// (مؤكد وجوده: الـ enum public.leave_status اللي عمود status فيه
+// بيستخدمه ظاهر فعليًا في الداتابيز pending/accepted/rejected/
+// cancelled/end_leave_early — نفس القيم اللي الكود ده متبني عليها)
 // ============================================================
 
-export async function getLeaveRequests(_filters: {
+export async function getLeaveRequests(filters: {
   userId?: string;
-  status?: string;
-}): Promise<LeaveRequest[]> {
-  throw new Error("قراءة طلبات الإجازة مش متاحة من الباك لسه");
+  status?: LeaveStatusFull;
+} = {}): Promise<LeaveRequest[]> {
+  let query = supabase.from("leaves").select("*").order("created_at", { ascending: false });
+
+  if (filters.userId) query = query.eq("users_id", filters.userId);
+  if (filters.status) query = query.eq("status", filters.status);
+
+  const { data, error } = await query;
+  if (error) throw error;
+  return (data ?? []) as LeaveRequest[];
+}
+
+/** طلبات إجازتي أنا بس (موظف) */
+export async function getMyLeaveRequests(): Promise<LeaveRequest[]> {
+  const userId = await getCurrentUserId();
+  return getLeaveRequests({ userId });
+}
+
+/** كل طلبات الإجازة (مدير) — ممكن تتفلتر بالحالة */
+export async function getAllLeaveRequests(status?: LeaveStatusFull): Promise<LeaveRequest[]> {
+  return getLeaveRequests(status ? { status } : {});
+}
+
+/** اشتراك لايف على أي تغيير في جدول leaves */
+export function subscribeToLeaves(onChange: () => void) {
+  const channel = supabase
+    .channel("leaves-changes")
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "leaves" },
+      () => onChange()
+    )
+    .subscribe();
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
 }
 
 // ============================================================
 // Manager: الموافقة/الرفض على طلب إجازة
-// ⚠️ محتاجة p_leave_id — لسه معندناش endpoint لعرض قائمة
-// الطلبات المعلقة، فالمدير محتاج يعرف رقم الطلب من مصدر تاني
-// (زي الإشعارات) لحد ما نضيف جدول/view قراءة حقيقي.
 // ============================================================
 
 export async function checkLeaveStatus(payload: {
