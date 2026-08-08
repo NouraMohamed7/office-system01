@@ -215,7 +215,7 @@ type UserNameRow = {
   name: string | null;
 };
 
-async function getUsersNameMap(): Promise<Record<string, string>> {
+export async function getUsersNameMap(): Promise<Record<string, string>> {
   const { data, error } = await supabase.from("users_with_email").select("id,name");
   if (error) throw error;
   const map: Record<string, string> = {};

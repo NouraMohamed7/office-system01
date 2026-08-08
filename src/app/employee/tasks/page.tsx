@@ -9,9 +9,9 @@ import {
 import { useEffect, useMemo, useState, useCallback } from "react";
 import {
   getMyTasks, updateTaskStatus, getTaskComments, addTaskComment,
-  getDepartments, subscribeToTasks, createMyOwnTask,
+  getDepartments, getUsersMap, subscribeToTasks, createMyOwnTask,
 } from "@/modules/tasks/api/tasks.api";
-import type { TaskRow, TaskComment, TaskStatus, TaskPriority, DepartmentLite } from "@/types/tasks";
+import type { TaskRow, TaskComment, TaskStatus, TaskPriority, DepartmentLite, UserLite } from "@/types/tasks";
 import { TASK_PRIORITY_LABEL_AR } from "@/types/tasks";
 
 // الموظف بيحدد حالته بنفسه بين التلاتة دول بس.
@@ -63,6 +63,7 @@ export default function TasksPage() {
   const showToast = useToast();
   const [tasks, setTasks] = useState<TaskRow[]>([]);
   const [departments, setDepartments] = useState<DepartmentLite[]>([]);
+  const [usersMap, setUsersMap] = useState<Record<string, UserLite>>({});
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<"board" | "list">("board");
   const [selected, setSelected] = useState<TaskRow | null>(null);
@@ -88,6 +89,7 @@ export default function TasksPage() {
   useEffect(() => {
     loadTasks();
     getDepartments().then(setDepartments).catch(() => {});
+    getUsersMap().then(setUsersMap).catch(() => {});
     return subscribeToTasks(() => loadTasks());
   }, [loadTasks]);
 
@@ -233,7 +235,7 @@ export default function TasksPage() {
           )}
 
           {selected && (
-            <TaskDrawer task={selected} departmentName={departmentName(selected.department_id)} onClose={() => setSelected(null)} onStatusChange={(s) => updateStatus(selected.id, s)} />
+            <TaskDrawer task={selected} departmentName={departmentName(selected.department_id)} usersMap={usersMap} onClose={() => setSelected(null)} onStatusChange={(s) => updateStatus(selected.id, s)} />
           )}
 
           {isAddOpen && (
@@ -400,7 +402,15 @@ function AddTaskModal({
   );
 }
 
-function TaskDrawer({ task, departmentName, onClose, onStatusChange }: { task: TaskRow; departmentName: string; onClose: () => void; onStatusChange: (s: EmployeeStatus) => void }) {
+function TaskDrawer({
+  task, departmentName, usersMap, onClose, onStatusChange,
+}: {
+  task: TaskRow;
+  departmentName: string;
+  usersMap: Record<string, UserLite>;
+  onClose: () => void;
+  onStatusChange: (s: EmployeeStatus) => void;
+}) {
   const showToast = useToast();
   const [comments, setComments] = useState<TaskComment[]>([]);
   const [commentsLoading, setCommentsLoading] = useState(true);
@@ -426,6 +436,9 @@ function TaskDrawer({ task, departmentName, onClose, onStatusChange }: { task: T
       showToast("error", err instanceof Error ? err.message : "تعذر إرسال التعليق");
     }
   };
+
+  const senderName = (id: string) => usersMap[id]?.name ?? "مستخدم";
+  const senderInitial = (id: string) => (usersMap[id]?.name ?? "؟").trim().charAt(0) || "؟";
 
   return (
     <div className="fixed inset-0 z-50" dir="rtl">
@@ -463,7 +476,7 @@ function TaskDrawer({ task, departmentName, onClose, onStatusChange }: { task: T
             </div>
             <div>
               <div className="text-xs font-semibold text-muted-foreground mb-2">المرفقات المرسلة من المدير</div>
-              <p className="text-xs text-muted-foreground">عرض مرفقات المهام القديمة غير متاح حاليًا — محتاج جدول ربط من الباك بين المهام والملفات.</p>
+              <p className="text-xs text-muted-foreground">عرض مرفقات المهام القديمة غير متاح حاليًا — محتاج جدول ربط من الباك بين المهام والملفات (الدوك بيرجع الملفات وقت الإنشاء/التعديل بس، من غير endpoint لقراءتها لاحقًا).</p>
             </div>
           </section>
 
@@ -484,10 +497,10 @@ function TaskDrawer({ task, departmentName, onClose, onStatusChange }: { task: T
               {!commentsLoading && comments.length === 0 && <p className="text-xs text-muted-foreground">لا توجد تعليقات بعد.</p>}
               {comments.map((c) => (
                 <div key={c.id} className="flex gap-3">
-                  <div className="h-8 w-8 rounded-full bg-teal text-teal-foreground grid place-items-center text-xs font-bold shrink-0">؟</div>
+                  <div className="h-8 w-8 rounded-full bg-teal text-teal-foreground grid place-items-center text-xs font-bold shrink-0">{senderInitial(c.sender_id)}</div>
                   <div className="flex-1 bg-secondary/60 rounded-xl p-3">
                     <div className="flex items-center justify-between mb-1">
-                      <span className="text-xs font-semibold">مستخدم</span>
+                      <span className="text-xs font-semibold">{senderName(c.sender_id)}</span>
                       <span className="text-xs text-muted-foreground">{new Date(c.created_at).toLocaleString("ar-EG")}</span>
                     </div>
                     <div className="text-sm">{c.body}</div>

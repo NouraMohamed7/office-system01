@@ -60,7 +60,7 @@ export default function TasksPage() {
   const [activeTask, setActiveTask] = useState<TaskRow | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [form, setForm] = useState<FormState>(emptyForm);
-  const [errors, setErrors] = useState<{ title?: string; assignedTo?: string; departmentId?: string }>({});
+  const [errors, setErrors] = useState<{ title?: string; assignedTo?: string; departmentId?: string; endDate?: string }>({});
 
   const usersById = useMemo(() => {
     const map: Record<string, UserLite> = {};
@@ -165,6 +165,9 @@ export default function TasksPage() {
     if (!form.title.trim()) next.title = "اكتب عنوان المهمة";
     if (!form.departmentId) next.departmentId = "اختر القسم الأول";
     if (form.assignedTo.length === 0) next.assignedTo = "اختر موظف واحد على الأقل";
+    // ⚠️ end_date عليها NOT NULL فعليًا في جدول tasks بالباك، فلازم تتحدد
+    // قبل الإرسال بدل ما نعتمد على fallback صامت.
+    if (!form.endDate) next.endDate = "حدد الموعد النهائي للمهمة";
     setErrors(next);
     if (Object.keys(next).length > 0) return;
 
@@ -175,7 +178,7 @@ export default function TasksPage() {
         description: form.description.trim() || undefined,
         department_id: Number(form.departmentId),
         start_date: form.startDate,
-        end_date: form.endDate || undefined,
+        end_date: form.endDate,
         priority: form.priority,
         files: form.files,
         assigned_to: form.assignedTo,
@@ -425,8 +428,15 @@ export default function TasksPage() {
               </div>
 
               <div>
-                <label className="mb-1.5 block text-xs font-semibold">الموعد النهائي</label>
-                <input type="date" value={form.endDate} min={form.startDate} onChange={(e) => setForm((f) => ({ ...f, endDate: e.target.value }))} className="h-10 w-full rounded-xl border border-border bg-background px-3.5 text-sm outline-none focus:border-primary/50" />
+                <label className="mb-1.5 block text-xs font-semibold">الموعد النهائي *</label>
+                <input
+                  type="date"
+                  value={form.endDate}
+                  min={form.startDate}
+                  onChange={(e) => { setForm((f) => ({ ...f, endDate: e.target.value })); setErrors((er) => ({ ...er, endDate: undefined })); }}
+                  className={cn("h-10 w-full rounded-xl border bg-background px-3.5 text-sm outline-none transition", errors.endDate ? "border-destructive" : "border-border focus:border-primary/50")}
+                />
+                {errors.endDate && <p className="mt-1 text-[11px] text-destructive">{errors.endDate}</p>}
               </div>
 
               <div>

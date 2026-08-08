@@ -5,6 +5,7 @@ import {
   Home, Users, Clock, ListChecks, FileText, Truck, UploadCloud,
   MessageSquare, Wallet, Landmark, Gift, BookOpen, TrendingUp,
   Megaphone, Settings, User, LogOut, ChevronsLeft, ChevronsRight,
+  BarChart3,
 } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
@@ -15,7 +16,9 @@ const nav = [
   { to: "/manager/employees", icon: Users, ar: "الموظفون", en: "Employees" },
   { to: "/manager/attendance", icon: Clock, ar: "الحضور", en: "Attendance" },
   { to: "/manager/tasks", icon: ListChecks, ar: "المهام", en: "Tasks" },
-  { to: "/manager/reports", icon: FileText, ar: "التقارير اليومية", en: "Daily Reports" }, { to: "/manager/department", icon: Building2, ar: "شغل القسم", en: "Department Work" },
+  { to: "/manager/reports", icon: FileText, ar: "التقارير اليومية", en: "Daily Reports" },
+  { to: "/manager/reports-hub", icon: BarChart3, ar: "التقارير الشاملة", en: "Reports Hub" },
+  { to: "/manager/department", icon: Building2, ar: "شغل القسم", en: "Department Work" },
   { to: "/manager/representatives", icon: Truck, ar: "المناديب", en: "Representatives" },
   { to: "/manager/uploads", icon: UploadCloud, ar: "رفع الشيتات", en: "Upload Center" },
   // { to: "/manager/approvals", icon: CheckCircle2, ar: "الاعتمادات", en: "Approvals", badge: 14 },
@@ -26,7 +29,6 @@ const nav = [
   { to: "/manager/library", icon: BookOpen, ar: "المكتبة", en: "Library" },
   { to: "/manager/performance", icon: TrendingUp, ar: "الأداء", en: "Performance" },
   { to: "/manager/announcements", icon: Megaphone, ar: "الإعلانات", en: "Announcements" },
-  // { to: "/manager/reports-hub", icon: BarChart3, ar: "التقارير", en: "Reports" },
   { to: "/manager/settings", icon: Settings, ar: "الإعدادات", en: "Settings" },
   { to: "/manager/profile", icon: User, ar: "الملف الشخصي", en: "Profile" },
 ] as const;

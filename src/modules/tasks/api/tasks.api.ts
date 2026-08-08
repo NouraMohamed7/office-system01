@@ -86,7 +86,6 @@ export async function getDepartments(): Promise<DepartmentLite[]> {
    CREATE — مدير فقط — multipart/form-data
 ============================================================ */
 
-// createTask: department_id بقى اختياري في الفورم داتا مش إجباري
 export async function createTask(
   payload: CreateTaskPayload
 ): Promise<{ message: string; task: TaskRow; files: TaskFile[] }> {
@@ -98,7 +97,11 @@ export async function createTask(
     formData.append("department_id", String(payload.department_id));
   }
   if (payload.start_date) formData.append("start_date", payload.start_date);
-  if (payload.end_date) formData.append("end_date", payload.end_date);
+  // ⚠️ عمود end_date عليه NOT NULL في جدول tasks فعليًا (اتأكد من الخطأ اللي
+  // بيرجعه الباك: null value in column "end_date" violates not-null constraint)،
+  // رغم إن الدوك كاتبها اختياري. فبنبعتها دايمًا، ولو مش متحددة بنستخدم
+  // start_date كـ fallback بدل ما الطلب يفشل من الباك.
+  formData.append("end_date", payload.end_date || payload.start_date);
   if (payload.priority) formData.append("priority", payload.priority);
   (payload.files ?? []).forEach((f) => formData.append("file", f));
   if (payload.existing_file_ids?.length) {
@@ -111,13 +114,50 @@ export async function createTask(
 
 /**
  * الموظف بينشئ مهمة لنفسه فقط.
- * ✅ الباك بياخد department_id تلقائيًا من التوكن بتاع الموظف — مبنبعتوش من هنا.
+ *
+ * ⚠️ ملحوظة مهمة: endpoint "create-task" موثق رسميًا كـ "Auth: Manager only".
+ * يعني الموظف مش هيقدر ينده عليه. البديل هنا: insert مباشر في جدول tasks
+ * (بدل Edge Function)، والصلاحية بتتحدد بـ RLS على الباك. **محتاج تأكيد من
+ * الباك ديفلوبر إن فيه RLS policy بتسمح للموظف بعمل insert في tasks لما
+ * assigned_to = auth.uid()**، وإلا هيرجع خطأ صلاحيات (403 / RLS violation).
+ *
+ * كمان: مفيش رفع ملفات في المسار ده (الـ files بيتجاهلوا) لإن insert المباشر
+ * مش بيمر على منطق رفع الملفات اللي في الـ Edge Function.
  */
 export async function createMyOwnTask(
   payload: Omit<CreateTaskPayload, "assigned_to" | "department_id">
 ): Promise<{ message: string; task: TaskRow; files: TaskFile[] }> {
   const userId = await getCurrentUserId();
-  return createTask({ ...payload, assigned_to: userId });
+
+  const { data: me, error: meError } = await supabase
+    .from("users_with_email")
+    .select("department_id")
+    .eq("id", userId)
+    .maybeSingle();
+  if (meError) throw meError;
+
+  const departmentId = (me as any)?.department_id;
+  if (!departmentId) {
+    throw new Error("تعذر تحديد قسمك — تواصل مع المدير لضبط بيانات حسابك أولًا");
+  }
+
+  const { data, error } = await supabase
+    .from("tasks")
+    .insert({
+      title: payload.title,
+      description: payload.description ?? null,
+      assigned_to: userId,
+      department_id: departmentId,
+      start_date: payload.start_date,
+      end_date: payload.end_date || payload.start_date, // NOT NULL في الداتابيز
+      priority: payload.priority ?? "medium",
+      status: "pending",
+    })
+    .select()
+    .single();
+
+  if (error) throw error;
+  return { message: "تم إضافة المهمة بنجاح", task: data as TaskRow, files: [] };
 }
 
 /**
@@ -140,8 +180,6 @@ export async function createTaskForMultipleAssignees(
 
   return { successCount, failed };
 }
-
-
 
 /* ============================================================
    UPDATE — مدير فقط — multipart/form-data
@@ -180,6 +218,10 @@ export async function deleteTask(taskId: number | string): Promise<void> {
 
 /* ============================================================
    STATUS UPDATE — RPC
+   ⚠️ موثقة في الدوك باسم "update_task_status (emp)" فقط — ممكن يكون فيها
+   check داخلي إن الكولر لازم يكون هو صاحب المهمة (assigned_to). لو كده،
+   استخدام المدير للـ RPC ده في الـ Kanban (updateTaskStatusAsManager) ممكن
+   يرجع صلاحيات error. محتاج تأكيد/تعديل من الباك لو حصل كده.
 ============================================================ */
 
 /** الموظف بيحدّث حالته بنفسه — موثقة رسميًا */
@@ -191,7 +233,7 @@ export async function updateTaskStatus(taskId: number | string, status: TaskStat
   if (error) throw error;
 }
 
-/** المدير بينقل المهمة بين أعمدة الـ Kanban — بننادي نفس الـ RPC */
+/** المدير بينقل المهمة بين أعمدة الـ Kanban — بننادي نفس الـ RPC (راجع الملحوظة فوق) */
 export async function updateTaskStatusAsManager(
   taskId: number | string,
   status: TaskStatus
