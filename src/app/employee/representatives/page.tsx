@@ -5,7 +5,20 @@ import { PortalLayout, Card } from "@/components/portal-layout";
 import { useToast } from "@/components/toast";
 import { useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
-import { Truck, Phone, Plus, Search, X, ImagePlus, UserRound, Bike, Eye, FileSpreadsheet } from "lucide-react";
+import {
+  Truck,
+  Phone,
+  Plus,
+  Search,
+  X,
+  ImagePlus,
+  UserRound,
+  Bike,
+  Eye,
+  FileSpreadsheet,
+  Pencil,
+  Trash2,
+} from "lucide-react";
 
 type RepDocs = {
   photo?: string;
@@ -74,6 +87,8 @@ export default function RepresentativesPage() {
   const [search, setSearch] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [viewingId, setViewingId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const [form, setForm] = useState(emptyForm);
   const [formErrors, setFormErrors] = useState<{ name?: string; phone1?: string; phone2?: string; supervisor?: string }>({});
@@ -102,7 +117,43 @@ export default function RepresentativesPage() {
     [reps]
   );
 
-  const handleAddRep = () => {
+  const resetForm = () => {
+    setForm(emptyForm);
+    setFormErrors({});
+    setEditingId(null);
+    setShowForm(false);
+  };
+
+  const handleStartAdd = () => {
+    if (showForm && !editingId) {
+      resetForm();
+      return;
+    }
+    setForm(emptyForm);
+    setFormErrors({});
+    setEditingId(null);
+    setShowForm(true);
+  };
+
+  const handleStartEdit = (rep: Rep) => {
+    setForm({
+      name: rep.name,
+      phone1: rep.phone1,
+      phone2: rep.phone2,
+      supervisor: rep.supervisor,
+      hasMotorcycle: rep.hasMotorcycle,
+      photo: rep.docs.photo || "",
+      idFront: rep.docs.idFront || "",
+      idBack: rep.docs.idBack || "",
+      licenseFront: rep.docs.licenseFront || "",
+      licenseBack: rep.docs.licenseBack || "",
+    });
+    setFormErrors({});
+    setEditingId(rep.id);
+    setShowForm(true);
+  };
+
+  const handleSaveRep = () => {
     const errors: typeof formErrors = {};
     if (!form.name.trim()) errors.name = "الاسم مطلوب";
     if (!form.phone1.trim()) errors.phone1 = "رقم الهاتف الأول مطلوب";
@@ -114,25 +165,56 @@ export default function RepresentativesPage() {
       return;
     }
     setFormErrors({});
-    const newRep: Rep = {
-      id: `r-${Date.now()}`,
-      name: form.name.trim(),
-      phone1: form.phone1.trim(),
-      phone2: form.phone2.trim(),
-      supervisor: form.supervisor.trim(),
-      hasMotorcycle: form.hasMotorcycle,
-      docs: {
-        photo: form.photo || undefined,
-        idFront: form.idFront || undefined,
-        idBack: form.idBack || undefined,
-        licenseFront: form.licenseFront || undefined,
-        licenseBack: form.licenseBack || undefined,
-      },
+
+    const docs: RepDocs = {
+      photo: form.photo || undefined,
+      idFront: form.idFront || undefined,
+      idBack: form.idBack || undefined,
+      licenseFront: form.licenseFront || undefined,
+      licenseBack: form.licenseBack || undefined,
     };
-    setReps((prev) => [newRep, ...prev]);
-    setForm(emptyForm);
-    setShowForm(false);
-    showToast("success", `تم إضافة المندوب ${newRep.name}`);
+
+    if (editingId) {
+      setReps((prev) =>
+        prev.map((r) =>
+          r.id === editingId
+            ? {
+                ...r,
+                name: form.name.trim(),
+                phone1: form.phone1.trim(),
+                phone2: form.phone2.trim(),
+                supervisor: form.supervisor.trim(),
+                hasMotorcycle: form.hasMotorcycle,
+                docs,
+              }
+            : r
+        )
+      );
+      showToast("success", `تم حفظ تعديلات ${form.name.trim()}`);
+    } else {
+      const newRep: Rep = {
+        id: `r-${Date.now()}`,
+        name: form.name.trim(),
+        phone1: form.phone1.trim(),
+        phone2: form.phone2.trim(),
+        supervisor: form.supervisor.trim(),
+        hasMotorcycle: form.hasMotorcycle,
+        docs,
+      };
+      setReps((prev) => [newRep, ...prev]);
+      showToast("success", `تم إضافة المندوب ${newRep.name}`);
+    }
+
+    resetForm();
+  };
+
+  const handleConfirmDelete = () => {
+    const rep = reps.find((r) => r.id === deletingId);
+    if (!rep) return;
+    setReps((prev) => prev.filter((r) => r.id !== deletingId));
+    if (editingId === deletingId) resetForm();
+    setDeletingId(null);
+    showToast("success", `تم حذف المندوب ${rep.name}`);
   };
 
   const handleExportExcel = () => {
@@ -182,6 +264,7 @@ export default function RepresentativesPage() {
   };
 
   const viewingRep = reps.find((r) => r.id === viewingId) || null;
+  const deletingRep = reps.find((r) => r.id === deletingId) || null;
 
   return (
     <PortalLayout title="المناديب" subtitle="إدارة مناديب التوصيل في مصر ومتابعة بياناتهم">
@@ -204,18 +287,23 @@ export default function RepresentativesPage() {
             تصدير Excel
           </button>
           <button
-            onClick={() => setShowForm((s) => !s)}
+            onClick={handleStartAdd}
             className="inline-flex items-center gap-2 bg-primary text-primary-foreground rounded-xl px-5 py-2.5 text-sm font-semibold hover:bg-[color:var(--primary-dark)] transition"
           >
-            {showForm ? <X className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
-            {showForm ? "إغلاق" : "إضافة مندوب"}
+            {showForm && !editingId ? <X className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+            {showForm && !editingId ? "إغلاق" : "إضافة مندوب"}
           </button>
         </div>
       </div>
 
       {showForm && (
         <Card className="p-6 mb-6 border-2 border-primary/20">
-          <h3 className="font-bold text-foreground mb-4">مندوب جديد</h3>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-bold text-foreground">{editingId ? "تعديل بيانات المندوب" : "مندوب جديد"}</h3>
+            <button onClick={resetForm} className="text-muted-foreground hover:text-foreground transition">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
 
           <div className="grid md:grid-cols-3 gap-4">
             <div>
@@ -337,12 +425,20 @@ export default function RepresentativesPage() {
             </div>
           </div>
 
-          <button
-            onClick={handleAddRep}
-            className="mt-6 bg-primary text-primary-foreground rounded-xl px-6 py-2.5 text-sm font-semibold hover:bg-[color:var(--primary-dark)] transition"
-          >
-            حفظ المندوب
-          </button>
+          <div className="mt-6 flex items-center gap-3">
+            <button
+              onClick={handleSaveRep}
+              className="bg-primary text-primary-foreground rounded-xl px-6 py-2.5 text-sm font-semibold hover:bg-[color:var(--primary-dark)] transition"
+            >
+              {editingId ? "حفظ التعديلات" : "حفظ المندوب"}
+            </button>
+            <button
+              onClick={resetForm}
+              className="rounded-xl px-6 py-2.5 text-sm font-semibold text-muted-foreground hover:text-foreground border border-border transition"
+            >
+              إلغاء
+            </button>
+          </div>
         </Card>
       )}
 
@@ -369,12 +465,13 @@ export default function RepresentativesPage() {
                 <th className="pb-3 font-semibold">المشرف</th>
                 <th className="pb-3 font-semibold">موتوسيكل</th>
                 <th className="pb-3 font-semibold">الصور</th>
+                <th className="pb-3 font-semibold">إجراءات</th>
               </tr>
             </thead>
             <tbody>
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="py-6 text-center text-muted-foreground">
+                  <td colSpan={7} className="py-6 text-center text-muted-foreground">
                     مفيش نتائج مطابقة
                   </td>
                 </tr>
@@ -421,6 +518,22 @@ export default function RepresentativesPage() {
                       <Eye className="h-3.5 w-3.5" /> عرض الصور
                     </button>
                   </td>
+                  <td className="py-3">
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={() => handleStartEdit(r)}
+                        className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline"
+                      >
+                        <Pencil className="h-3.5 w-3.5" /> تعديل
+                      </button>
+                      <button
+                        onClick={() => setDeletingId(r.id)}
+                        className="inline-flex items-center gap-1.5 text-xs font-semibold text-destructive hover:underline"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" /> حذف
+                      </button>
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -449,6 +562,37 @@ export default function RepresentativesPage() {
               <DocPreview label="البطاقة (ضهر)" src={viewingRep.docs.idBack} />
               <DocPreview label="الرخصة (وش)" src={viewingRep.docs.licenseFront} />
               <DocPreview label="الرخصة (ضهر)" src={viewingRep.docs.licenseBack} />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deletingRep && (
+        <div
+          className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
+          onClick={() => setDeletingId(null)}
+        >
+          <div
+            className="bg-card rounded-2xl p-6 max-w-sm w-full"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="font-bold text-foreground mb-2">تأكيد الحذف</h3>
+            <p className="text-sm text-muted-foreground mb-6">
+              هل أنت متأكد إنك عايز تحذف المندوب <span className="font-semibold text-foreground">{deletingRep.name}</span>؟ الإجراء ده مش هيتقدر يتراجع عنه.
+            </p>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleConfirmDelete}
+                className="flex-1 bg-destructive text-destructive-foreground rounded-xl px-4 py-2.5 text-sm font-semibold hover:opacity-90 transition"
+              >
+                حذف
+              </button>
+              <button
+                onClick={() => setDeletingId(null)}
+                className="flex-1 rounded-xl border border-border px-4 py-2.5 text-sm font-semibold text-muted-foreground hover:text-foreground transition"
+              >
+                إلغاء
+              </button>
             </div>
           </div>
         </div>
