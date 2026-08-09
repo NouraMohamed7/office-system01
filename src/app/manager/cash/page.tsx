@@ -328,7 +328,7 @@ export default function CashPage() {
                       <Cell key={p.name} fill={p.c} />
                     ))}
                   </Pie>
-                  <Tooltip formatter={(v: number) => v.toLocaleString()} />
+                  <Tooltip formatter={(v) => (typeof v === "number" ? v.toLocaleString() : v)} />
                 </PieChart>
               </ResponsiveContainer>
             </Card>
@@ -339,7 +339,7 @@ export default function CashPage() {
               <BarChart data={weekly}>
                 <XAxis dataKey="w" tick={{ fontSize: 11 }} />
                 <YAxis tick={{ fontSize: 11 }} />
-                <Tooltip formatter={(v: number) => v.toLocaleString()} />
+                <Tooltip formatter={(v) => (typeof v === "number" ? v.toLocaleString() : v)} />
                 <Bar dataKey="دخل" fill="var(--success)" radius={[4, 4, 0, 0]} />
                 <Bar dataKey="مصروف" fill="var(--destructive)" radius={[4, 4, 0, 0]} />
               </BarChart>
