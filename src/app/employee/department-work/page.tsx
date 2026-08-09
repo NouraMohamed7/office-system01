@@ -14,6 +14,8 @@ import {
   Truck,
   MessageCircle,
   Download,
+  Pencil,
+  Trash2,
 } from "lucide-react";
 
 type Tab = "social" | "dash";
@@ -21,6 +23,38 @@ type Tab = "social" | "dash";
 type Counts = { posts: number; reels: number; stories: number };
 
 const INITIAL_COUNTS: Counts = { posts: 34, reels: 12, stories: 58 };
+
+const PLATFORM_OPTIONS = ["Instagram", "TikTok", "Facebook", "X (Twitter)"];
+const CONTENT_TYPE_OPTIONS = ["بوست", "ريل", "ستوري", "كاروسيل"];
+
+type ContentItem = {
+  id: string;
+  platform: string;
+  contentType: string;
+  link: string;
+  time: string;
+};
+
+function countsForType(type: string) {
+  return {
+    posts: type === "بوست" || type === "كاروسيل" ? 1 : 0,
+    reels: type === "ريل" ? 1 : 0,
+    stories: type === "ستوري" ? 1 : 0,
+  };
+}
+
+function applyCountsDelta(prev: Counts, type: string, sign: 1 | -1): Counts {
+  const d = countsForType(type);
+  return {
+    posts: prev.posts + sign * d.posts,
+    reels: prev.reels + sign * d.reels,
+    stories: prev.stories + sign * d.stories,
+  };
+}
+
+function formatNow() {
+  return new Date().toLocaleString("ar-EG", { dateStyle: "short", timeStyle: "short" });
+}
 
 type DriverStatus = "نشط" | "متغيب" | "مخالفة";
 type DriverComment = { text: string; time: string };
@@ -41,6 +75,7 @@ export default function DepartmentPage() {
   const showToast = useToast();
   const [tab, setTab] = useState<Tab>("social");
   const [counts, setCounts] = useState<Counts>(INITIAL_COUNTS);
+  const [contentItems, setContentItems] = useState<ContentItem[]>([]);
   const [drivers, setDrivers] = useState<Driver[]>(initialDrivers);
 
   const handleExport = () => {
@@ -52,6 +87,18 @@ export default function DepartmentPage() {
       { المؤشر: "عدد الستوري", القيمة: counts.stories },
     ]);
     XLSX.utils.book_append_sheet(wb, socialSheet, "السوشيال ميديا");
+
+    if (contentItems.length > 0) {
+      const contentSheet = XLSX.utils.json_to_sheet(
+        contentItems.map((c) => ({
+          المنصة: c.platform,
+          النوع: c.contentType,
+          الرابط: c.link,
+          التوقيت: c.time,
+        }))
+      );
+      XLSX.utils.book_append_sheet(wb, contentSheet, "المحتوى المضاف");
+    }
 
     const driversSheet = XLSX.utils.json_to_sheet(
       drivers.map((d) => ({
@@ -107,7 +154,14 @@ export default function DepartmentPage() {
         </button>
       </div>
 
-      {tab === "social" && <SocialVariant counts={counts} setCounts={setCounts} />}
+      {tab === "social" && (
+        <SocialVariant
+          counts={counts}
+          setCounts={setCounts}
+          contentItems={contentItems}
+          setContentItems={setContentItems}
+        />
+      )}
       {tab === "dash" && <DashVariant drivers={drivers} setDrivers={setDrivers} />}
     </PortalLayout>
   );
@@ -116,15 +170,27 @@ export default function DepartmentPage() {
 function SocialVariant({
   counts,
   setCounts,
+  contentItems,
+  setContentItems,
 }: {
   counts: Counts;
   setCounts: Dispatch<SetStateAction<Counts>>;
+  contentItems: ContentItem[];
+  setContentItems: Dispatch<SetStateAction<ContentItem[]>>;
 }) {
   const showToast = useToast();
   const [platform, setPlatform] = useState("Instagram");
   const [contentType, setContentType] = useState("بوست");
   const [link, setLink] = useState("");
   const [error, setError] = useState("");
+
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState<{ platform: string; contentType: string; link: string }>({
+    platform: "Instagram",
+    contentType: "بوست",
+    link: "",
+  });
+  const [editError, setEditError] = useState("");
 
   const handleSave = () => {
     if (!link.trim()) {
@@ -133,13 +199,62 @@ function SocialVariant({
       return;
     }
     setError("");
-    setCounts((prev) => ({
-      posts: prev.posts + (contentType === "بوست" || contentType === "كاروسيل" ? 1 : 0),
-      reels: prev.reels + (contentType === "ريل" ? 1 : 0),
-      stories: prev.stories + (contentType === "ستوري" ? 1 : 0),
-    }));
+    const newItem: ContentItem = {
+      id: `content-${Date.now()}`,
+      platform,
+      contentType,
+      link: link.trim(),
+      time: formatNow(),
+    };
+    setContentItems((prev) => [newItem, ...prev]);
+    setCounts((prev) => applyCountsDelta(prev, contentType, 1));
     setLink("");
     showToast("success", `تم حفظ ${contentType} على ${platform} بنجاح`);
+  };
+
+  const handleStartEdit = (item: ContentItem) => {
+    setEditingId(item.id);
+    setEditDraft({ platform: item.platform, contentType: item.contentType, link: item.link });
+    setEditError("");
+  };
+
+  const handleCancelEdit = () => {
+    setEditingId(null);
+    setEditError("");
+  };
+
+  const handleSaveEdit = (id: string) => {
+    if (!editDraft.link.trim()) {
+      setEditError("الرابط مطلوب");
+      showToast("error", "الرابط مطلوب قبل الحفظ");
+      return;
+    }
+    const oldItem = contentItems.find((c) => c.id === id);
+    if (!oldItem) return;
+
+    setCounts((prev) => {
+      const afterRemoveOld = applyCountsDelta(prev, oldItem.contentType, -1);
+      return applyCountsDelta(afterRemoveOld, editDraft.contentType, 1);
+    });
+    setContentItems((prev) =>
+      prev.map((c) =>
+        c.id === id
+          ? { ...c, platform: editDraft.platform, contentType: editDraft.contentType, link: editDraft.link.trim() }
+          : c
+      )
+    );
+    setEditingId(null);
+    setEditError("");
+    showToast("success", "تم تعديل المحتوى بنجاح");
+  };
+
+  const handleDelete = (id: string) => {
+    const item = contentItems.find((c) => c.id === id);
+    if (!item) return;
+    setCounts((prev) => applyCountsDelta(prev, item.contentType, -1));
+    setContentItems((prev) => prev.filter((c) => c.id !== id));
+    if (editingId === id) setEditingId(null);
+    showToast("success", "تم حذف المحتوى");
   };
 
   return (
@@ -152,8 +267,8 @@ function SocialVariant({
       <Card className="p-6">
         <h3 className="font-bold text-foreground mb-4">تسجيل محتوى</h3>
         <div className="grid md:grid-cols-2 gap-4">
-          <Select label="المنصة" value={platform} onChange={setPlatform} options={["Instagram", "TikTok", "Facebook", "X (Twitter)"]} />
-          <Select label="نوع المحتوى" value={contentType} onChange={setContentType} options={["بوست", "ريل", "ستوري", "كاروسيل"]} />
+          <Select label="المنصة" value={platform} onChange={setPlatform} options={PLATFORM_OPTIONS} />
+          <Select label="نوع المحتوى" value={contentType} onChange={setContentType} options={CONTENT_TYPE_OPTIONS} />
           <div className="md:col-span-2">
             <label className="text-sm font-semibold text-foreground">الرابط</label>
             <input
@@ -179,6 +294,133 @@ function SocialVariant({
         >
           حفظ المحتوى
         </button>
+      </Card>
+
+      <Card className="p-6 mt-6">
+        <h3 className="font-bold text-foreground mb-4">المحتوى المضاف</h3>
+        {contentItems.length === 0 ? (
+          <p className="text-sm text-muted-foreground">لسه مفيش محتوى مضاف</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-muted-foreground border-b border-border">
+                  <th className="py-2 px-2 text-right font-semibold">المنصة</th>
+                  <th className="py-2 px-2 text-right font-semibold">النوع</th>
+                  <th className="py-2 px-2 text-right font-semibold">الرابط</th>
+                  <th className="py-2 px-2 text-right font-semibold">التوقيت</th>
+                  <th className="py-2 px-2 text-right font-semibold">إجراءات</th>
+                </tr>
+              </thead>
+              <tbody>
+                {contentItems.map((item) => {
+                  const isEditing = editingId === item.id;
+                  return (
+                    <tr key={item.id} className="border-b border-border/60 last:border-0 align-top">
+                      <td className="py-2.5 px-2">
+                        {isEditing ? (
+                          <select
+                            value={editDraft.platform}
+                            onChange={(e) => setEditDraft((prev) => ({ ...prev, platform: e.target.value }))}
+                            className="h-9 rounded-lg border border-border bg-card px-2 text-xs outline-none"
+                          >
+                            {PLATFORM_OPTIONS.map((o) => (
+                              <option key={o}>{o}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <span className="text-foreground">{item.platform}</span>
+                        )}
+                      </td>
+                      <td className="py-2.5 px-2">
+                        {isEditing ? (
+                          <select
+                            value={editDraft.contentType}
+                            onChange={(e) => setEditDraft((prev) => ({ ...prev, contentType: e.target.value }))}
+                            className="h-9 rounded-lg border border-border bg-card px-2 text-xs outline-none"
+                          >
+                            {CONTENT_TYPE_OPTIONS.map((o) => (
+                              <option key={o}>{o}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <span className="text-foreground">{item.contentType}</span>
+                        )}
+                      </td>
+                      <td className="py-2.5 px-2 max-w-[220px]">
+                        {isEditing ? (
+                          <>
+                            <input
+                              value={editDraft.link}
+                              onChange={(e) => {
+                                setEditDraft((prev) => ({ ...prev, link: e.target.value }));
+                                setEditError("");
+                              }}
+                              className={`h-9 w-full rounded-lg border bg-card px-2 text-xs outline-none transition
+                                ${
+                                  editError
+                                    ? "border-destructive focus:border-destructive"
+                                    : "border-border focus:border-primary"
+                                }`}
+                            />
+                            {editError && <p className="text-xs text-destructive mt-1">{editError}</p>}
+                          </>
+                        ) : (
+                          <a
+                            href={item.link}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-primary hover:underline truncate block max-w-[220px]"
+                          >
+                            {item.link}
+                          </a>
+                        )}
+                      </td>
+                      <td className="py-2.5 px-2 text-muted-foreground whitespace-nowrap">{item.time}</td>
+                      <td className="py-2.5 px-2">
+                        <div className="flex items-center gap-3">
+                          {isEditing ? (
+                            <>
+                              <button
+                                onClick={() => handleSaveEdit(item.id)}
+                                className="text-xs font-semibold text-success hover:underline"
+                              >
+                                حفظ
+                              </button>
+                              <button
+                                onClick={handleCancelEdit}
+                                className="text-xs font-semibold text-muted-foreground hover:underline"
+                              >
+                                إلغاء
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                onClick={() => handleStartEdit(item)}
+                                className="flex items-center gap-1 text-xs font-semibold text-primary hover:underline"
+                              >
+                                <Pencil className="h-3 w-3" />
+                                تعديل
+                              </button>
+                              <button
+                                onClick={() => handleDelete(item.id)}
+                                className="flex items-center gap-1 text-xs font-semibold text-destructive hover:underline"
+                              >
+                                <Trash2 className="h-3 w-3" />
+                                حذف
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </Card>
     </>
   );
