@@ -1,4 +1,4 @@
-// src/app/employee/department/page.tsx
+// src/app/employee/department-work/page.tsx
 "use client";
 
 import type { Dispatch, SetStateAction, ComponentType } from "react";
@@ -10,8 +10,6 @@ import {
   Image as ImageIcon,
   Film,
   LayoutTemplate,
-  TrendingUp,
-  TrendingDown,
   User,
   Truck,
   MessageCircle,
@@ -202,12 +200,6 @@ function DashVariant({
   const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
   const [openComments, setOpenComments] = useState<Record<string, boolean>>({});
 
-  const current = {
-    active: drivers.filter((d) => d.status === "نشط").length,
-    absent: drivers.filter((d) => d.status === "متغيب").length,
-    violations: drivers.filter((d) => d.status === "مخالفة").length,
-  };
-
   const handleSave = () => {
     if (!name.trim()) {
       setError("من فضلك أدخل اسم المندوب");
@@ -239,121 +231,113 @@ function DashVariant({
   };
 
   return (
-    <>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-        <MetricCard icon={TrendingUp} label="عدد النشطين" value={String(current.active)} tone="success" />
-        <MetricCard icon={TrendingDown} label="عدد المتغيبين" value={String(current.absent)} tone="muted" />
-        <MetricCard icon={TrendingDown} label="عدد المخالفات" value={String(current.violations)} tone="danger" />
-      </div>
-
-      <div className="grid lg:grid-cols-3 gap-6">
-        <Card className="p-6">
-          <h3 className="font-bold text-foreground mb-4 flex items-center gap-2">
-            <User className="h-4 w-4 text-primary" /> تسجيل مندوب
-          </h3>
-          <div className="space-y-4">
-            <div>
-              <label className="text-sm font-semibold text-foreground">اسم المندوب</label>
-              <input
-                value={name}
-                onChange={(e) => {
-                  setName(e.target.value);
-                  setError("");
-                }}
-                placeholder="اسم المندوب"
-                className={`mt-2 w-full h-11 rounded-xl border bg-card focus:ring-2 outline-none px-3 text-sm transition
-                  ${
-                    error
-                      ? "border-destructive focus:border-destructive focus:ring-destructive/20"
-                      : "border-border focus:border-primary focus:ring-primary/20"
-                  }`}
-              />
-              {error && <p className="text-xs text-destructive mt-1.5">{error}</p>}
-            </div>
-            <Select label="الحالة" value={status} onChange={(v) => setStatus(v as DriverStatus)} options={["نشط", "متغيب", "مخالفة"]} />
+    <div className="grid lg:grid-cols-3 gap-6">
+      <Card className="p-6">
+        <h3 className="font-bold text-foreground mb-4 flex items-center gap-2">
+          <User className="h-4 w-4 text-primary" /> تسجيل مندوب
+        </h3>
+        <div className="space-y-4">
+          <div>
+            <label className="text-sm font-semibold text-foreground">اسم المندوب</label>
+            <input
+              value={name}
+              onChange={(e) => {
+                setName(e.target.value);
+                setError("");
+              }}
+              placeholder="اسم المندوب"
+              className={`mt-2 w-full h-11 rounded-xl border bg-card focus:ring-2 outline-none px-3 text-sm transition
+                ${
+                  error
+                    ? "border-destructive focus:border-destructive focus:ring-destructive/20"
+                    : "border-border focus:border-primary focus:ring-primary/20"
+                }`}
+            />
+            {error && <p className="text-xs text-destructive mt-1.5">{error}</p>}
           </div>
-          <button
-            onClick={handleSave}
-            className="mt-6 w-full bg-primary text-primary-foreground rounded-xl px-6 py-2.5 text-sm font-semibold hover:bg-primary-dark transition"
-          >
-            حفظ المندوب
-          </button>
-        </Card>
+          <Select label="الحالة" value={status} onChange={(v) => setStatus(v as DriverStatus)} options={["نشط", "متغيب", "مخالفة"]} />
+        </div>
+        <button
+          onClick={handleSave}
+          className="mt-6 w-full bg-primary text-primary-foreground rounded-xl px-6 py-2.5 text-sm font-semibold hover:bg-primary-dark transition"
+        >
+          حفظ المندوب
+        </button>
+      </Card>
 
-        <Card className="p-6 lg:col-span-2">
-          <h3 className="font-bold text-foreground mb-4 flex items-center gap-2">
-            <Truck className="h-4 w-4 text-primary" /> قائمة المناديب
-          </h3>
-          <div className="space-y-2">
-            {drivers.length === 0 && <p className="text-sm text-muted-foreground">لسه مفيش مناديب مسجلين</p>}
-            {drivers.map((d) => {
-              const isOpen = !!openComments[d.id];
-              return (
-                <div key={d.id} className="rounded-xl border border-border bg-card px-4 py-3">
-                  <div className="flex items-center justify-between gap-3 flex-wrap">
-                    <span className="font-semibold text-foreground text-sm">{d.name}</span>
-                    <div className="flex items-center gap-2">
-                      <select
-                        value={d.status}
-                        onChange={(e) => handleStatusChange(d.id, e.target.value as DriverStatus)}
-                        className={`h-9 rounded-lg border px-2.5 text-xs font-semibold outline-none
-                          ${
-                            d.status === "نشط"
-                              ? "border-success/30 bg-success/10 text-success"
-                              : d.status === "متغيب"
-                              ? "border-border bg-muted text-muted-foreground"
-                              : "border-destructive/30 bg-destructive/10 text-destructive"
-                          }`}
-                      >
-                        <option>نشط</option>
-                        <option>متغيب</option>
-                        <option>مخالفة</option>
-                      </select>
+      <Card className="p-6 lg:col-span-2">
+        <h3 className="font-bold text-foreground mb-4 flex items-center gap-2">
+          <Truck className="h-4 w-4 text-primary" /> قائمة المناديب
+        </h3>
+        <div className="space-y-2">
+          {drivers.length === 0 && <p className="text-sm text-muted-foreground">لسه مفيش مناديب مسجلين</p>}
+          {drivers.map((d) => {
+            const isOpen = !!openComments[d.id];
+            return (
+              <div key={d.id} className="rounded-xl border border-border bg-card px-4 py-3">
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <span className="font-semibold text-foreground text-sm">{d.name}</span>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={d.status}
+                      onChange={(e) => handleStatusChange(d.id, e.target.value as DriverStatus)}
+                      className={`h-9 rounded-lg border px-2.5 text-xs font-semibold outline-none
+                        ${
+                          d.status === "نشط"
+                            ? "border-success/30 bg-success/10 text-success"
+                            : d.status === "متغيب"
+                            ? "border-border bg-muted text-muted-foreground"
+                            : "border-destructive/30 bg-destructive/10 text-destructive"
+                        }`}
+                    >
+                      <option>نشط</option>
+                      <option>متغيب</option>
+                      <option>مخالفة</option>
+                    </select>
+                    <button
+                      onClick={() => setOpenComments((prev) => ({ ...prev, [d.id]: !prev[d.id] }))}
+                      className="flex items-center gap-1.5 h-9 rounded-lg border border-border px-2.5 text-xs font-semibold text-muted-foreground hover:text-primary hover:border-primary/40 transition"
+                    >
+                      <MessageCircle className="h-3.5 w-3.5" />
+                      تعليقات {d.comments.length > 0 && `(${d.comments.length})`}
+                    </button>
+                  </div>
+                </div>
+
+                {isOpen && (
+                  <div className="mt-3 pt-3 border-t border-border/60 space-y-2">
+                    {d.comments.length === 0 && <p className="text-xs text-muted-foreground">لا توجد تعليقات بعد.</p>}
+                    {d.comments.map((c, i) => (
+                      <div key={i} className="bg-secondary/50 rounded-lg px-3 py-2">
+                        <div className="flex items-center justify-between mb-0.5">
+                          <span className="text-xs text-muted-foreground">{c.time}</span>
+                        </div>
+                        <p className="text-sm text-foreground">{c.text}</p>
+                      </div>
+                    ))}
+                    <div className="flex gap-2 pt-1">
+                      <input
+                        value={commentDrafts[d.id] || ""}
+                        onChange={(e) => setCommentDrafts((prev) => ({ ...prev, [d.id]: e.target.value }))}
+                        onKeyDown={(e) => e.key === "Enter" && handleAddComment(d.id)}
+                        placeholder="اكتب تعليق..."
+                        className="flex-1 h-9 rounded-lg border border-border bg-background px-3 text-xs outline-none focus:border-primary"
+                      />
                       <button
-                        onClick={() => setOpenComments((prev) => ({ ...prev, [d.id]: !prev[d.id] }))}
-                        className="flex items-center gap-1.5 h-9 rounded-lg border border-border px-2.5 text-xs font-semibold text-muted-foreground hover:text-primary hover:border-primary/40 transition"
+                        onClick={() => handleAddComment(d.id)}
+                        className="bg-primary text-primary-foreground rounded-lg px-3 text-xs font-semibold hover:bg-primary-dark transition"
                       >
-                        <MessageCircle className="h-3.5 w-3.5" />
-                        تعليقات {d.comments.length > 0 && `(${d.comments.length})`}
+                        إضافة
                       </button>
                     </div>
                   </div>
-
-                  {isOpen && (
-                    <div className="mt-3 pt-3 border-t border-border/60 space-y-2">
-                      {d.comments.length === 0 && <p className="text-xs text-muted-foreground">لا توجد تعليقات بعد.</p>}
-                      {d.comments.map((c, i) => (
-                        <div key={i} className="bg-secondary/50 rounded-lg px-3 py-2">
-                          <div className="flex items-center justify-between mb-0.5">
-                            <span className="text-xs text-muted-foreground">{c.time}</span>
-                          </div>
-                          <p className="text-sm text-foreground">{c.text}</p>
-                        </div>
-                      ))}
-                      <div className="flex gap-2 pt-1">
-                        <input
-                          value={commentDrafts[d.id] || ""}
-                          onChange={(e) => setCommentDrafts((prev) => ({ ...prev, [d.id]: e.target.value }))}
-                          onKeyDown={(e) => e.key === "Enter" && handleAddComment(d.id)}
-                          placeholder="اكتب تعليق..."
-                          className="flex-1 h-9 rounded-lg border border-border bg-background px-3 text-xs outline-none focus:border-primary"
-                        />
-                        <button
-                          onClick={() => handleAddComment(d.id)}
-                          className="bg-primary text-primary-foreground rounded-lg px-3 text-xs font-semibold hover:bg-primary-dark transition"
-                        >
-                          إضافة
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </Card>
-      </div>
-    </>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+    </div>
   );
 }
 

@@ -17,7 +17,7 @@ const NAV: NavItem[] = [
   { to: "/employee/attendance", ar: "الحضور", en: "Attendance", icon: Clock },
   { to: "/employee/tasks", ar: "المهام", en: "Tasks", icon: ListTodo },
   { to: "/employee/reports", ar: "التقارير اليومية", en: "Daily Reports", icon: FileText },
-  { to: "/employee/department", ar: "شغل القسم", en: "Department Work", icon: Briefcase },
+  { to: "/employee/department-work", ar: "شغل القسم", en: "Department Work", icon: Briefcase },
   { to: "/employee/representatives", ar: "المناديب", en: "Representatives", icon: Users },
   { to: "/employee/uploads", ar: "رفع الشيتات", en: "Upload Center", icon: Upload },
   { to: "/employee/complaints", ar: "الشكاوى", en: "Complaints", icon: LifeBuoy },

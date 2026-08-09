@@ -18,7 +18,7 @@ const nav = [
   { to: "/manager/tasks", icon: ListChecks, ar: "المهام", en: "Tasks" },
   { to: "/manager/reports", icon: FileText, ar: "التقارير اليومية", en: "Daily Reports" },
   { to: "/manager/reports-hub", icon: BarChart3, ar: "التقارير الشاملة", en: "Reports Hub" },
-  { to: "/manager/department", icon: Building2, ar: "شغل القسم", en: "Department Work" },
+  { to: "/manager/department-work", icon: Building2, ar: "شغل القسم", en: "Department Work" },
   { to: "/manager/representatives", icon: Truck, ar: "المناديب", en: "Representatives" },
   { to: "/manager/uploads", icon: UploadCloud, ar: "رفع الشيتات", en: "Upload Center" },
   // { to: "/manager/approvals", icon: CheckCircle2, ar: "الاعتمادات", en: "Approvals", badge: 14 },

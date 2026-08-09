@@ -7,7 +7,6 @@ import {
   Eye,
   Check,
   X,
-  Pencil,
   FileSpreadsheet,
   FileText,
   CheckCircle2,
@@ -19,7 +18,7 @@ import {
 
 type Tone = "teal" | "success" | "warning" | "primary" | "danger";
 type Status = "بانتظار" | "معتمد" | "تحتاج تعديل" | "مرفوض";
-type ActionKind = "download" | "preview" | "approve" | "reject" | "edit";
+type ActionKind = "download" | "preview" | "approve" | "reject";
 
 type UploadFile = {
   id: string;
@@ -247,7 +246,6 @@ export default function UploadsPage() {
     pending: files.filter((f) => f.st === "بانتظار").length,
     approved: files.filter((f) => f.st === "معتمد").length,
     rejected: files.filter((f) => f.st === "مرفوض").length,
-    needsEdit: files.filter((f) => f.st === "تحتاج تعديل").length,
   }), [files]);
 
   const updateStatus = (id: string, st: Status) => {
@@ -290,15 +288,6 @@ export default function UploadsPage() {
     });
   };
 
-  const handleRequestEdit = (f: UploadFile) => {
-    if (f.st === "تحتاج تعديل" || isBusy(f.id, "edit")) return;
-    runAction(f.id, "edit", () => {
-      updateStatus(f.id, "تحتاج تعديل");
-      markViewed(f.id);
-      pushToast("info", `تم طلب تعديل من ${f.emp}`);
-    });
-  };
-
   const openRejectConfirm = (f: UploadFile) => {
     if (f.st === "مرفوض") return;
     setRejectTarget(f);
@@ -332,13 +321,12 @@ export default function UploadsPage() {
 
       <PageHeader title="مركز رفع الشيتات" subtitle="مراجعة واعتماد الملفات المرفوعة من الموظفين." />
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         <StatCard dense label="إجمالي" value={String(totals.total)} tone="primary" />
         <StatCard dense label="جديدة" value={String(totals.fresh)} tone="teal" />
         <StatCard dense label="بانتظار المراجعة" value={String(totals.pending)} tone="warning" />
         <StatCard dense label="معتمدة" value={String(totals.approved)} tone="success" />
         <StatCard dense label="مرفوضة" value={String(totals.rejected)} tone="danger" />
-        <StatCard dense label="تحتاج تعديل" value={String(totals.needsEdit)} tone="warning" />
       </div>
 
       <Card className="!p-4">
@@ -403,14 +391,6 @@ export default function UploadsPage() {
                   <td className="px-4 py-3">
                     <div className="flex gap-1">
                       <button
-                        onClick={() => handleDownload(f)}
-                        disabled={isBusy(f.id, "download")}
-                        title="تحميل"
-                        className="grid size-8 place-items-center rounded-lg text-muted-foreground transition hover:bg-accent hover:text-primary active:scale-90 disabled:opacity-50"
-                      >
-                        {isBusy(f.id, "download") ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
-                      </button>
-                      <button
                         onClick={() => handlePreview(f)}
                         title="معاينة"
                         className="grid size-8 place-items-center rounded-lg text-muted-foreground transition hover:bg-accent hover:text-primary active:scale-90"
@@ -434,12 +414,12 @@ export default function UploadsPage() {
                         <X className="size-4" />
                       </button>
                       <button
-                        onClick={() => handleRequestEdit(f)}
-                        disabled={f.st === "تحتاج تعديل" || isBusy(f.id, "edit")}
-                        title="طلب تعديل"
-                        className="grid size-8 place-items-center rounded-lg text-muted-foreground transition hover:bg-warning/10 hover:text-[oklch(0.48_0.11_82)] active:scale-90 disabled:opacity-40"
+                        onClick={() => handleDownload(f)}
+                        disabled={isBusy(f.id, "download")}
+                        title="تحميل"
+                        className="grid size-8 place-items-center rounded-lg text-muted-foreground transition hover:bg-accent hover:text-primary active:scale-90 disabled:opacity-50"
                       >
-                        {isBusy(f.id, "edit") ? <Loader2 className="size-4 animate-spin" /> : <Pencil className="size-4" />}
+                        {isBusy(f.id, "download") ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
                       </button>
                     </div>
                   </td>

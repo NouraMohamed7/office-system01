@@ -1,15 +1,15 @@
-// src/app/manager/department/page.tsx
+// src/app/manager/department-work/page.tsx
 "use client";
 
 import { Card, PageHeader, StatCard } from "@/components/manager/primitives";
 import { useToast } from "@/components/toast";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
-import { Fragment, Suspense, useState, useCallback } from "react";
+import { Suspense, useState, useCallback } from "react";
 import * as XLSX from "xlsx";
 import {
-  Building2, Image as ImageIcon, Film, LayoutTemplate, TrendingUp,
-  TrendingDown, User, Truck, Search, X, Download, RotateCcw,
-  ChevronDown, Link as LinkIcon,
+  Building2, Image as ImageIcon, Film, LayoutTemplate,
+  User, Truck, Search, X, Download, RotateCcw,
+  Link as LinkIcon,
 } from "lucide-react";
 
 /* ------------------------------------------------------------------ */
@@ -32,53 +32,24 @@ const tabs: { k: DeptKey; ar: string }[] = [
 /*  Mock data                                                          */
 /* ------------------------------------------------------------------ */
 
-type SocialItem = { type: string; platform: string; date: string; link: string; engagement: number };
-type SocialEmployee = { name: string; role: string; posts: number; reels: number; stories: number; items: SocialItem[] };
+// السوشيال ميديا دلوقتي بيعرض بس: المنصة، نوع المحتوى، التاريخ، والرابط (لو موجود).
+// الستوري مالهاش رابط دائم فبيتعرض بدالها "-"
+type SocialItem = { platform: string; type: string; date: string; link: string | null };
 
-const socialEmployees: SocialEmployee[] = [
-  {
-    name: "سارة محمد", role: "Instagram", posts: 4, reels: 2, stories: 6,
-    items: [
-      { type: "بوست", platform: "Instagram", date: "2026-07-28", link: "instagram.com/p/aa1", engagement: 4.2 },
-      { type: "ريل", platform: "Instagram", date: "2026-07-26", link: "instagram.com/reel/aa2", engagement: 6.8 },
-      { type: "ستوري", platform: "Instagram", date: "2026-07-25", link: "instagram.com/stories/aa3", engagement: 2.1 },
-    ],
-  },
-  {
-    name: "يوسف عبد الله", role: "TikTok", posts: 2, reels: 5, stories: 3,
-    items: [
-      { type: "ريل", platform: "TikTok", date: "2026-07-29", link: "tiktok.com/@y/video/bb1", engagement: 9.4 },
-      { type: "ريل", platform: "TikTok", date: "2026-07-27", link: "tiktok.com/@y/video/bb2", engagement: 7.1 },
-      { type: "بوست", platform: "TikTok", date: "2026-07-24", link: "tiktok.com/@y/video/bb3", engagement: 3.5 },
-    ],
-  },
-  {
-    name: "منة الله كمال", role: "Facebook", posts: 3, reels: 1, stories: 5,
-    items: [
-      { type: "بوست", platform: "Facebook", date: "2026-07-30", link: "facebook.com/posts/cc1", engagement: 2.9 },
-      { type: "ستوري", platform: "Facebook", date: "2026-07-28", link: "facebook.com/stories/cc2", engagement: 1.4 },
-    ],
-  },
-  {
-    name: "عمر شريف", role: "X (Twitter)", posts: 2, reels: 0, stories: 2,
-    items: [
-      { type: "بوست", platform: "X (Twitter)", date: "2026-07-27", link: "x.com/o/status/dd1", engagement: 1.1 },
-      { type: "بوست", platform: "X (Twitter)", date: "2026-07-22", link: "x.com/o/status/dd2", engagement: 0.8 },
-    ],
-  },
-  {
-    name: "هدى الشناوي", role: "Instagram", posts: 3, reels: 2, stories: 4,
-    items: [
-      { type: "كاروسيل", platform: "Instagram", date: "2026-07-29", link: "instagram.com/p/ee1", engagement: 5.3 },
-      { type: "ريل", platform: "Instagram", date: "2026-07-25", link: "instagram.com/reel/ee2", engagement: 4.7 },
-    ],
-  },
-  {
-    name: "أحمد نبيل", role: "TikTok", posts: 1, reels: 3, stories: 2,
-    items: [
-      { type: "ريل", platform: "TikTok", date: "2026-07-26", link: "tiktok.com/@a/video/ff1", engagement: 6.2 },
-    ],
-  },
+const socialContent: SocialItem[] = [
+  { platform: "Instagram", type: "بوست", date: "2026-07-28", link: "instagram.com/p/aa1" },
+  { platform: "Instagram", type: "ريل", date: "2026-07-26", link: "instagram.com/reel/aa2" },
+  { platform: "Instagram", type: "ستوري", date: "2026-07-25", link: null },
+  { platform: "TikTok", type: "ريل", date: "2026-07-29", link: "tiktok.com/@y/video/bb1" },
+  { platform: "TikTok", type: "ريل", date: "2026-07-27", link: "tiktok.com/@y/video/bb2" },
+  { platform: "TikTok", type: "بوست", date: "2026-07-24", link: "tiktok.com/@y/video/bb3" },
+  { platform: "Facebook", type: "بوست", date: "2026-07-30", link: "facebook.com/posts/cc1" },
+  { platform: "Facebook", type: "ستوري", date: "2026-07-28", link: null },
+  { platform: "X (Twitter)", type: "بوست", date: "2026-07-27", link: "x.com/o/status/dd1" },
+  { platform: "X (Twitter)", type: "بوست", date: "2026-07-22", link: "x.com/o/status/dd2" },
+  { platform: "Instagram", type: "كاروسيل", date: "2026-07-29", link: "instagram.com/p/ee1" },
+  { platform: "Instagram", type: "ريل", date: "2026-07-25", link: "instagram.com/reel/ee2" },
+  { platform: "TikTok", type: "ريل", date: "2026-07-26", link: "tiktok.com/@a/video/ff1" },
 ];
 
 type DriverStatus = "نشط" | "متغيب" | "مخالفة";
@@ -113,11 +84,9 @@ export default function DepartmentPage() {
       <style>{`
         @keyframes fadeSlideIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
         @keyframes popIn { from { opacity: 0; transform: scale(.96); } to { opacity: 1; transform: scale(1); } }
-        @keyframes expandIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
         .fade-in { animation: fadeSlideIn .35s ease-out both; }
         .pop-in { animation: popIn .25s ease-out both; }
         .row-in { animation: fadeSlideIn .3s ease-out both; }
-        .expand-in { animation: expandIn .2s ease-out both; }
       `}</style>
       <DepartmentPageInner />
     </Suspense>
@@ -215,37 +184,43 @@ function DepartmentPageInner() {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Social detail                                                       */
+/*  Social detail — flat content table (no employee names)             */
 /* ------------------------------------------------------------------ */
 
 function SocialDetail() {
   const showToast = useToast();
-  const [query, setQuery] = useState("");
   const [platform, setPlatform] = useState("الكل");
-  const [expanded, setExpanded] = useState<string | null>(null);
+  const [contentType, setContentType] = useState("الكل");
 
-  const totals = socialEmployees.reduce(
-    (acc, e) => ({ posts: acc.posts + e.posts, reels: acc.reels + e.reels, stories: acc.stories + e.stories }),
+  const totals = socialContent.reduce(
+    (acc, it) => ({
+      posts: acc.posts + (it.type === "بوست" || it.type === "كاروسيل" ? 1 : 0),
+      reels: acc.reels + (it.type === "ريل" ? 1 : 0),
+      stories: acc.stories + (it.type === "ستوري" ? 1 : 0),
+    }),
     { posts: 0, reels: 0, stories: 0 }
   );
 
-  const filtered = socialEmployees.filter((e) => {
-    const matchesQuery = e.name.includes(query);
-    const matchesPlatform = platform === "الكل" || e.role === platform;
-    return matchesQuery && matchesPlatform;
+  const filtered = socialContent.filter((it) => {
+    const matchesPlatform = platform === "الكل" || it.platform === platform;
+    const matchesType = contentType === "الكل" || it.type === contentType;
+    return matchesPlatform && matchesType;
   });
 
   const resetFilters = () => {
-    setQuery("");
     setPlatform("الكل");
+    setContentType("الكل");
     showToast("success", "تم مسح الفلاتر");
   };
 
   const handleExport = () => {
     exportToExcel(
       "تقرير-السوشيال-ميديا",
-      filtered.map((e) => ({
-        الموظف: e.name, المنصة: e.role, بوستات: e.posts, ريلز: e.reels, ستوري: e.stories,
+      filtered.map((it) => ({
+        المنصة: it.platform,
+        "نوع المحتوى": it.type,
+        التاريخ: it.date,
+        الرابط: it.link ?? "لا يوجد رابط دائم",
       }))
     );
     showToast("success", "تم تنزيل ملف الإكسل");
@@ -261,9 +236,8 @@ function SocialDetail() {
 
       <Card className="p-6">
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
-          <h3 className="font-bold text-foreground">أداء فريق السوشيال ميديا</h3>
+          <h3 className="font-bold text-foreground">محتوى السوشيال ميديا</h3>
           <div className="flex flex-col sm:flex-row gap-2">
-            <SearchInput value={query} onChange={setQuery} placeholder="ابحث باسم الموظف..." />
             <select
               value={platform}
               onChange={(e) => setPlatform(e.target.value)}
@@ -271,6 +245,15 @@ function SocialDetail() {
             >
               {["الكل", "Instagram", "TikTok", "Facebook", "X (Twitter)"].map((p) => (
                 <option key={p}>{p}</option>
+              ))}
+            </select>
+            <select
+              value={contentType}
+              onChange={(e) => setContentType(e.target.value)}
+              className="h-10 rounded-xl border border-border bg-card px-3 text-sm transition-colors focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none"
+            >
+              {["الكل", "بوست", "ريل", "ستوري", "كاروسيل"].map((t) => (
+                <option key={t}>{t}</option>
               ))}
             </select>
             <button
@@ -292,58 +275,41 @@ function SocialDetail() {
           <table className="w-full text-sm">
             <thead>
               <tr className="text-right text-muted-foreground border-b border-border">
-                <th className="pb-2 font-semibold w-6"></th>
-                <th className="pb-2 font-semibold">الموظف</th>
                 <th className="pb-2 font-semibold">المنصة</th>
-                <th className="pb-2 font-semibold">بوستات</th>
-                <th className="pb-2 font-semibold">ريلز</th>
-                <th className="pb-2 font-semibold">ستوري</th>
+                <th className="pb-2 font-semibold">نوع المحتوى</th>
+                <th className="pb-2 font-semibold">التاريخ</th>
+                <th className="pb-2 font-semibold">الرابط</th>
               </tr>
             </thead>
             <tbody>
               {filtered.length === 0 && (
-                <tr><td colSpan={6} className="py-8 text-center text-muted-foreground">لا يوجد نتائج مطابقة لبحثك</td></tr>
+                <tr><td colSpan={4} className="py-8 text-center text-muted-foreground">لا يوجد نتائج مطابقة للفلاتر</td></tr>
               )}
-              {filtered.map((e, i) => {
-                const isOpen = expanded === e.name;
-                return (
-                  <Fragment key={e.name}>
-                    <tr
-                      style={{ animationDelay: `${i * 35}ms` }}
-                      onClick={() => setExpanded(isOpen ? null : e.name)}
-                      className="row-in border-b border-border last:border-0 hover:bg-secondary/50 transition-colors cursor-pointer"
-                    >
-                      <td className="py-3">
-                        <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`} />
-                      </td>
-                      <td className="py-3 font-semibold text-foreground">{e.name}</td>
-                      <td className="py-3 text-muted-foreground">{e.role}</td>
-                      <td className="py-3 tabular-nums">{e.posts}</td>
-                      <td className="py-3 tabular-nums">{e.reels}</td>
-                      <td className="py-3 tabular-nums">{e.stories}</td>
-                    </tr>
-                    {isOpen && (
-                      <tr>
-                        <td colSpan={6} className="pb-4">
-                          <div className="expand-in rounded-xl bg-secondary/40 p-4 space-y-2">
-                            <p className="text-xs font-semibold text-muted-foreground mb-2">آخر المحتوى المنشور</p>
-                            {e.items.map((it, idx) => (
-                              <div key={idx} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-card px-3 py-2 text-xs border border-border">
-                                <span className="font-semibold text-foreground">{it.type} · {it.platform}</span>
-                                <span className="text-muted-foreground">{it.date}</span>
-                                <span className="flex items-center gap-1 text-muted-foreground">
-                                  <LinkIcon className="h-3 w-3" /> {it.link}
-                                </span>
-                                <span className="font-bold text-success">تفاعل {it.engagement}%</span>
-                              </div>
-                            ))}
-                          </div>
-                        </td>
-                      </tr>
+              {filtered.map((it, i) => (
+                <tr
+                  key={i}
+                  style={{ animationDelay: `${i * 35}ms` }}
+                  className="row-in border-b border-border last:border-0 hover:bg-secondary/50 transition-colors"
+                >
+                  <td className="py-3 font-semibold text-foreground">{it.platform}</td>
+                  <td className="py-3 text-muted-foreground">{it.type}</td>
+                  <td className="py-3 tabular-nums text-muted-foreground">{it.date}</td>
+                  <td className="py-3">
+                    {it.link ? (
+                      <a
+                        href={`https://${it.link}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-1 text-primary hover:underline"
+                      >
+                        <LinkIcon className="h-3 w-3" /> {it.link}
+                      </a>
+                    ) : (
+                      <span className="text-muted-foreground">لا يوجد رابط دائم</span>
                     )}
-                  </Fragment>
-                );
-              })}
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
@@ -363,11 +329,6 @@ function DashDetail() {
   const [query, setQuery] = useState("");
 
   const list = drivers.filter((d) => d.name.includes(query));
-  const current = {
-    active: drivers.filter((d) => d.status === "نشط").length,
-    absent: drivers.filter((d) => d.status === "متغيب").length,
-    violations: drivers.filter((d) => d.status === "مخالفة").length,
-  };
 
   const handleStatusChange = (id: string, newStatus: DriverStatus) => {
     setDrivers((prev) => prev.map((d) => (d.id === id ? { ...d, status: newStatus } : d)));
@@ -392,12 +353,6 @@ function DashDetail() {
         >
           <Download className="h-3.5 w-3.5" /> تصدير Excel
         </button>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <MetricCard icon={TrendingUp} label="عدد النشطين" value={String(current.active)} tone="success" />
-        <MetricCard icon={TrendingDown} label="عدد المتغيبين" value={String(current.absent)} tone="muted" />
-        <MetricCard icon={TrendingDown} label="عدد المخالفات" value={String(current.violations)} tone="danger" />
       </div>
 
       <Card className="p-6">
