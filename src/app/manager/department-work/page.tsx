@@ -1,7 +1,7 @@
 // src/app/manager/department-work/page.tsx
 "use client";
 
-import { Card, PageHeader, StatCard } from "@/components/manager/primitives";
+import { Card, PageHeader } from "@/components/manager/primitives";
 import { useToast } from "@/components/toast";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { Suspense, useState, useCallback } from "react";
@@ -18,9 +18,9 @@ import {
 
 type DeptKey = "social" | "dash";
 
-const overviewDepts: { key: DeptKey; name: string; en: string; emps: number; tasks: number; target?: number; tone: "success" | "warning" }[] = [
-  { key: "social", name: "السوشيال ميديا", en: "Social Media", emps: 6, tasks: 18, tone: "success" },
-  { key: "dash", name: "المناديب", en: "Dash", emps: 7, tasks: 22, target: 74, tone: "warning" },
+const overviewDepts: { key: DeptKey; name: string; en: string; tone: "success" | "warning" }[] = [
+  { key: "social", name: "السوشيال ميديا", en: "Social Media", tone: "success" },
+  { key: "dash", name: "المناديب", en: "Dash", tone: "warning" },
 ];
 
 const tabs: { k: DeptKey; ar: string }[] = [
@@ -110,23 +110,9 @@ function DepartmentPageInner() {
     [router, pathname, searchParams]
   );
 
-  const totalEmps = overviewDepts.reduce((a, d) => a + d.emps, 0);
-  const totalTasks = overviewDepts.reduce((a, d) => a + d.tasks, 0);
-  const targetDepts = overviewDepts.filter((d) => d.target !== undefined);
-  const avgTarget = targetDepts.length
-    ? Math.round(targetDepts.reduce((a, d) => a + (d.target ?? 0), 0) / targetDepts.length)
-    : 0;
-
   return (
     <div className="space-y-6">
       <PageHeader title="شغل القسم" subtitle="متابعة أداء كل قسم وموظفيه أول بأول." />
-
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <StatCard dense label="عدد الأقسام" value={String(overviewDepts.length)} tone="primary" />
-        <StatCard dense label="إجمالي الموظفين" value={String(totalEmps)} tone="teal" />
-        <StatCard dense label="مهام مفتوحة" value={String(totalTasks)} tone="warning" />
-        <StatCard dense label="متوسط تحقيق Target" value={`${avgTarget}%`} tone="success" />
-      </div>
 
       {/* overview cards — click to jump to that department's detail (updates the URL) */}
       <div className="grid gap-4 md:grid-cols-2">
@@ -139,23 +125,11 @@ function DepartmentPageInner() {
               activeDept === d.key ? "ring-2 ring-primary" : ""
             }`}
           >
-            <div className="flex items-start justify-between">
-              <div className={`grid size-11 place-items-center rounded-xl pill-${d.tone} transition-transform duration-200`}>
-                <Building2 className="size-5" />
-              </div>
-              {d.target !== undefined && (
-                <div className="text-right">
-                  <div className="text-2xl font-bold text-primary tabular">{d.target}%</div>
-                  <div className="text-[10px] text-muted-foreground">Target</div>
-                </div>
-              )}
+            <div className={`grid size-11 place-items-center rounded-xl pill-${d.tone} transition-transform duration-200`}>
+              <Building2 className="size-5" />
             </div>
             <div className="mt-3 text-base font-bold">{d.name}</div>
             <div className="text-[11px] text-muted-foreground">{d.en}</div>
-            <div className="mt-3 flex items-center gap-4 text-xs">
-              <div><span className="font-bold text-foreground tabular">{d.emps}</span> <span className="text-muted-foreground">موظف</span></div>
-              <div><span className="font-bold text-foreground tabular">{d.tasks}</span> <span className="text-muted-foreground">مهمة</span></div>
-            </div>
           </button>
         ))}
       </div>
