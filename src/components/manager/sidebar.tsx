@@ -23,7 +23,6 @@ const nav = [
   { to: "/manager/uploads", icon: UploadCloud, ar: "رفع الشيتات", en: "Upload Center" },
   // { to: "/manager/approvals", icon: CheckCircle2, ar: "الاعتمادات", en: "Approvals", badge: 14 },
   { to: "/manager/complaints", icon: MessageSquare, ar: "الشكاوى", en: "Complaints" },
-  { to: "/manager/expenses", icon: Wallet, ar: "المصروفات", en: "Expenses" },
   { to: "/manager/cash", icon: Landmark, ar: "الخزنة", en: "Company Cash" },
   { to: "/manager/deductions", icon: Gift, ar: "الخصومات والمكافآت", en: "Deductions & Rewards" },
   { to: "/manager/library", icon: BookOpen, ar: "المكتبة", en: "Library" },
