@@ -1,9 +1,9 @@
-// src/app/representatives/page.tsx
+// src/app/employee/representatives/page.tsx
 "use client";
 
 import { PortalLayout, Card } from "@/components/portal-layout";
 import { useToast } from "@/components/toast";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import {
   Truck,
@@ -18,107 +18,135 @@ import {
   FileSpreadsheet,
   Pencil,
   Trash2,
+  Loader2,
 } from "lucide-react";
+import {
+  type Representative,
+  type SupervisorOption,
+  getRepresentatives,
+  getSupervisorOptions,
+  createRepresentative,
+  updateRepresentative,
+  deleteRepresentative,
+  getCurrentUserId,
+  canManageRepresentative,
+  formatCountry,
+} from "@/modules/representatives/api/representatives.api";
 
-type RepDocs = {
-  photo?: string;
-  idFront?: string;
-  idBack?: string;
-  licenseFront?: string;
-  licenseBack?: string;
-};
-
-type Rep = {
-  id: string;
+type FormState = {
   name: string;
   phone1: string;
   phone2: string;
-  supervisor: string;
+  supervisorId: string;
   hasMotorcycle: boolean;
-  docs: RepDocs;
+  profileImg: File | null;
+  identityFront: File | null;
+  identityBack: File | null;
+  licenseFront: File | null;
+  licenseBack: File | null;
 };
 
-const INITIAL_REPS: Rep[] = [
-  {
-    id: "r1",
-    name: "أحمد صلاح",
-    phone1: "01012345678",
-    phone2: "01512345678",
-    supervisor: "محمد رضا",
-    hasMotorcycle: true,
-    docs: {},
-  },
-  {
-    id: "r2",
-    name: "محمود جابر",
-    phone1: "01123456789",
-    phone2: "01223456789",
-    supervisor: "محمد رضا",
-    hasMotorcycle: false,
-    docs: {},
-  },
-  {
-    id: "r3",
-    name: "كريم عادل",
-    phone1: "01234567890",
-    phone2: "01034567890",
-    supervisor: "سارة يونس",
-    hasMotorcycle: true,
-    docs: {},
-  },
-];
-
-const emptyForm = {
+const emptyForm: FormState = {
   name: "",
   phone1: "",
   phone2: "",
-  supervisor: "",
+  supervisorId: "",
   hasMotorcycle: true,
-  photo: "",
-  idFront: "",
-  idBack: "",
-  licenseFront: "",
-  licenseBack: "",
+  profileImg: null,
+  identityFront: null,
+  identityBack: null,
+  licenseFront: null,
+  licenseBack: null,
 };
 
 export default function RepresentativesPage() {
   const showToast = useToast();
-  const [reps, setReps] = useState<Rep[]>(INITIAL_REPS);
+
+  const [reps, setReps] = useState<Representative[]>([]);
+  const [loadingReps, setLoadingReps] = useState(true);
+
+  const [supervisors, setSupervisors] = useState<SupervisorOption[]>([]);
+  const [loadingSupervisors, setLoadingSupervisors] = useState(true);
+
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+
   const [search, setSearch] = useState("");
   const [showForm, setShowForm] = useState(false);
-  const [viewingId, setViewingId] = useState<string | null>(null);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [viewingId, setViewingId] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [saving, setSaving] = useState(false);
 
-  const [form, setForm] = useState(emptyForm);
-  const [formErrors, setFormErrors] = useState<{ name?: string; phone1?: string; phone2?: string; supervisor?: string }>({});
+  const [form, setForm] = useState<FormState>(emptyForm);
+  // المستندات الحالية للمندوب وقت التعديل — بتتعرض لحد ما المستخدم يختار ملف جديد بدالها
+  const [existingDocs, setExistingDocs] = useState<{
+    profile_img: string | null;
+    identity_front: string | null;
+    identity_back: string | null;
+    license_front: string | null;
+    license_back: string | null;
+  }>({ profile_img: null, identity_front: null, identity_back: null, license_front: null, license_back: null });
+
+  const [formErrors, setFormErrors] = useState<{
+    name?: string;
+    phone1?: string;
+    supervisorId?: string;
+  }>({});
+
+  const supervisorNameMap = useMemo(
+    () => Object.fromEntries(supervisors.map((s) => [s.id, s.name])),
+    [supervisors]
+  );
+
+  const loadReps = async () => {
+    setLoadingReps(true);
+    try {
+      setReps(await getRepresentatives());
+    } catch {
+      showToast("error", "تعذر تحميل بيانات المناديب");
+    } finally {
+      setLoadingReps(false);
+    }
+  };
+
+  useEffect(() => {
+    loadReps();
+    getCurrentUserId().then(setCurrentUserId).catch(() => setCurrentUserId(null));
+    setLoadingSupervisors(true);
+    getSupervisorOptions()
+      .then(setSupervisors)
+      .catch(() => showToast("error", "تعذر تحميل قائمة المشرفين"))
+      .finally(() => setLoadingSupervisors(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const filtered = useMemo(() => {
     return reps.filter((r) => {
       const q = search.trim();
-      if (
-        q &&
-        !r.name.includes(q) &&
-        !r.phone1.includes(q) &&
-        !r.phone2.includes(q) &&
-        !r.supervisor.includes(q)
-      )
-        return false;
-      return true;
+      if (!q) return true;
+      const supervisorName = supervisorNameMap[r.supervisor_id] || "";
+      return (
+        r.full_name.includes(q) ||
+        r.phone_1.includes(q) ||
+        (r.phone_2 || "").includes(q) ||
+        supervisorName.includes(q)
+      );
     });
-  }, [reps, search]);
+  }, [reps, search, supervisorNameMap]);
 
   const totals = useMemo(
     () => ({
       total: reps.length,
-      withMotorcycle: reps.filter((r) => r.hasMotorcycle).length,
-      withoutMotorcycle: reps.filter((r) => !r.hasMotorcycle).length,
+      withMotorcycle: reps.filter((r) => r.has_motorcycle).length,
+      withoutMotorcycle: reps.filter((r) => !r.has_motorcycle).length,
     }),
     [reps]
   );
 
   const resetForm = () => {
     setForm(emptyForm);
+    setExistingDocs({ profile_img: null, identity_front: null, identity_back: null, license_front: null, license_back: null });
     setFormErrors({});
     setEditingId(null);
     setShowForm(false);
@@ -135,86 +163,99 @@ export default function RepresentativesPage() {
     setShowForm(true);
   };
 
-  const handleStartEdit = (rep: Rep) => {
+  const handleStartEdit = (rep: Representative) => {
     setForm({
-      name: rep.name,
-      phone1: rep.phone1,
-      phone2: rep.phone2,
-      supervisor: rep.supervisor,
-      hasMotorcycle: rep.hasMotorcycle,
-      photo: rep.docs.photo || "",
-      idFront: rep.docs.idFront || "",
-      idBack: rep.docs.idBack || "",
-      licenseFront: rep.docs.licenseFront || "",
-      licenseBack: rep.docs.licenseBack || "",
+      name: rep.full_name,
+      phone1: rep.phone_1,
+      phone2: rep.phone_2 || "",
+      supervisorId: rep.supervisor_id,
+      hasMotorcycle: rep.has_motorcycle,
+      profileImg: null,
+      identityFront: null,
+      identityBack: null,
+      licenseFront: null,
+      licenseBack: null,
+    });
+    setExistingDocs({
+      profile_img: rep.profile_img,
+      identity_front: rep.identity_front,
+      identity_back: rep.identity_back,
+      license_front: rep.license_front,
+      license_back: rep.license_back,
     });
     setFormErrors({});
     setEditingId(rep.id);
     setShowForm(true);
   };
 
-  const handleSaveRep = () => {
+  const handleSaveRep = async () => {
     const errors: typeof formErrors = {};
     if (!form.name.trim()) errors.name = "الاسم مطلوب";
     if (!form.phone1.trim()) errors.phone1 = "رقم الهاتف الأول مطلوب";
-    if (!form.phone2.trim()) errors.phone2 = "رقم الهاتف الثاني مطلوب";
-    if (!form.supervisor.trim()) errors.supervisor = "اسم المشرف مطلوب";
+    if (!form.supervisorId) errors.supervisorId = "اختيار المشرف مطلوب";
     if (Object.keys(errors).length) {
       setFormErrors(errors);
       showToast("error", "فيه حقول ناقصة في الفورم");
       return;
     }
     setFormErrors({});
-
-    const docs: RepDocs = {
-      photo: form.photo || undefined,
-      idFront: form.idFront || undefined,
-      idBack: form.idBack || undefined,
-      licenseFront: form.licenseFront || undefined,
-      licenseBack: form.licenseBack || undefined,
-    };
-
-    if (editingId) {
-      setReps((prev) =>
-        prev.map((r) =>
-          r.id === editingId
-            ? {
-                ...r,
-                name: form.name.trim(),
-                phone1: form.phone1.trim(),
-                phone2: form.phone2.trim(),
-                supervisor: form.supervisor.trim(),
-                hasMotorcycle: form.hasMotorcycle,
-                docs,
-              }
-            : r
-        )
-      );
-      showToast("success", `تم حفظ تعديلات ${form.name.trim()}`);
-    } else {
-      const newRep: Rep = {
-        id: `r-${Date.now()}`,
-        name: form.name.trim(),
-        phone1: form.phone1.trim(),
-        phone2: form.phone2.trim(),
-        supervisor: form.supervisor.trim(),
-        hasMotorcycle: form.hasMotorcycle,
-        docs,
-      };
-      setReps((prev) => [newRep, ...prev]);
-      showToast("success", `تم إضافة المندوب ${newRep.name}`);
+    setSaving(true);
+    try {
+      if (editingId) {
+        await updateRepresentative({
+          rep_id: editingId,
+          full_name: form.name.trim(),
+          supervisor_id: form.supervisorId,
+          has_motorcycle: form.hasMotorcycle,
+          phone1: form.phone1.trim(),
+          phone2: form.phone2.trim() || undefined,
+          profileImg: form.profileImg,
+          identityFront: form.identityFront,
+          identityBack: form.identityBack,
+          licenseFront: form.licenseFront,
+          licenseBack: form.licenseBack,
+        });
+        showToast("success", `تم حفظ تعديلات ${form.name.trim()}`);
+      } else {
+        await createRepresentative({
+          full_name: form.name.trim(),
+          supervisor_id: form.supervisorId,
+          has_motorcycle: form.hasMotorcycle,
+          phone1: form.phone1.trim(),
+          phone2: form.phone2.trim() || undefined,
+          profileImg: form.profileImg,
+          identityFront: form.identityFront,
+          identityBack: form.identityBack,
+          licenseFront: form.licenseFront,
+          licenseBack: form.licenseBack,
+        });
+        showToast("success", `تم إضافة المندوب ${form.name.trim()}`);
+      }
+      await loadReps();
+      resetForm();
+    } catch (e) {
+      showToast("error", e instanceof Error ? e.message : "حصل خطأ أثناء الحفظ");
+    } finally {
+      setSaving(false);
     }
-
-    resetForm();
   };
 
-  const handleConfirmDelete = () => {
+  const handleConfirmDelete = async () => {
+    if (deletingId == null) return;
     const rep = reps.find((r) => r.id === deletingId);
     if (!rep) return;
-    setReps((prev) => prev.filter((r) => r.id !== deletingId));
-    if (editingId === deletingId) resetForm();
-    setDeletingId(null);
-    showToast("success", `تم حذف المندوب ${rep.name}`);
+    setDeleting(true);
+    try {
+      await deleteRepresentative(deletingId);
+      setReps((prev) => prev.filter((r) => r.id !== deletingId));
+      if (editingId === deletingId) resetForm();
+      showToast("success", `تم حذف المندوب ${rep.full_name}`);
+      setDeletingId(null);
+    } catch (e) {
+      showToast("error", e instanceof Error ? e.message : "حصل خطأ أثناء الحذف");
+    } finally {
+      setDeleting(false);
+    }
   };
 
   const handleExportExcel = () => {
@@ -223,35 +264,28 @@ export default function RepresentativesPage() {
       return;
     }
 
-    const rows = filtered.map((r, idx) => ({
-      "م": idx + 1,
-      "الاسم": r.name,
-      "الهاتف الأول": r.phone1,
-      "الهاتف الثاني": r.phone2,
-      "المشرف": r.supervisor,
-      "عنده موتوسيكل": r.hasMotorcycle ? "نعم" : "لا",
-      "الصورة الشخصية": r.docs.photo ? "متوفرة" : "غير متوفرة",
-      "البطاقة (وش)": r.docs.idFront ? "متوفرة" : "غير متوفرة",
-      "البطاقة (ضهر)": r.docs.idBack ? "متوفرة" : "غير متوفرة",
-      "الرخصة (وش)": r.docs.licenseFront ? "متوفرة" : "غير متوفرة",
-      "الرخصة (ضهر)": r.docs.licenseBack ? "متوفرة" : "غير متوفرة",
-    }));
+    const rows = filtered.map((r, idx) => {
+      const country = formatCountry(r.country);
+      return {
+        "م": idx + 1,
+        "الاسم": r.full_name,
+        "الهاتف الأول": r.phone_1,
+        "الهاتف الثاني": r.phone_2 || "-",
+        "المشرف": supervisorNameMap[r.supervisor_id] || r.supervisor_id,
+        "الدولة": `${country.flag} ${country.name}`,
+        "عنده موتوسيكل": r.has_motorcycle ? "نعم" : "لا",
+        "الصورة الشخصية": r.profile_img ? "متوفرة" : "غير متوفرة",
+        "البطاقة (وش)": r.identity_front ? "متوفرة" : "غير متوفرة",
+        "البطاقة (ضهر)": r.identity_back ? "متوفرة" : "غير متوفرة",
+        "الرخصة (وش)": r.license_front ? "متوفرة" : "غير متوفرة",
+        "الرخصة (ضهر)": r.license_back ? "متوفرة" : "غير متوفرة",
+      };
+    });
 
     const worksheet = XLSX.utils.json_to_sheet(rows);
-
-    // ضبط عرض الأعمدة عشان تبقى مرتبة
     worksheet["!cols"] = [
-      { wch: 5 },
-      { wch: 20 },
-      { wch: 15 },
-      { wch: 15 },
-      { wch: 18 },
-      { wch: 14 },
-      { wch: 14 },
-      { wch: 14 },
-      { wch: 14 },
-      { wch: 14 },
-      { wch: 14 },
+      { wch: 5 }, { wch: 20 }, { wch: 15 }, { wch: 15 }, { wch: 18 }, { wch: 12 },
+      { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 },
     ];
 
     const workbook = XLSX.utils.book_new();
@@ -267,7 +301,7 @@ export default function RepresentativesPage() {
   const deletingRep = reps.find((r) => r.id === deletingId) || null;
 
   return (
-    <PortalLayout title="المناديب" subtitle="إدارة مناديب التوصيل في مصر ومتابعة بياناتهم">
+    <PortalLayout title="المناديب" subtitle="إدارة مناديب التوصيل ومتابعة بياناتهم">
       <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
         <MetricCard icon={Truck} label="إجمالي المناديب" value={String(totals.total)} tone="primary" />
         <MetricCard icon={Bike} label="عندهم موتوسيكل" value={String(totals.withMotorcycle)} tone="success" />
@@ -275,8 +309,8 @@ export default function RepresentativesPage() {
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-        <div className="inline-flex items-center gap-2 rounded-xl bg-secondary px-4 py-2 text-sm font-semibold text-foreground">
-          <span className="text-base">🇪🇬</span> مناديب مصر
+        <div className="text-sm font-semibold text-muted-foreground">
+          {loadingReps ? "جاري تحميل المناديب..." : `${reps.length} مندوب مسجل`}
         </div>
         <div className="flex items-center gap-3">
           <button
@@ -337,36 +371,38 @@ export default function RepresentativesPage() {
             </div>
 
             <div>
-              <label className="text-sm font-semibold text-foreground">رقم الهاتف الثاني</label>
+              <label className="text-sm font-semibold text-foreground">رقم الهاتف الثاني (اختياري)</label>
               <input
                 value={form.phone2}
-                onChange={(e) => {
-                  setForm((f) => ({ ...f, phone2: e.target.value }));
-                  setFormErrors((p) => ({ ...p, phone2: undefined }));
-                }}
+                onChange={(e) => setForm((f) => ({ ...f, phone2: e.target.value }))}
                 placeholder="01xxxxxxxxx"
-                className={`mt-2 w-full h-11 rounded-xl border bg-card focus:ring-2 outline-none px-3 text-sm
-                  ${formErrors.phone2 ? "border-destructive focus:border-destructive focus:ring-destructive/20" : "border-border focus:border-primary focus:ring-primary/20"}`}
+                className="mt-2 w-full h-11 rounded-xl border border-border bg-card focus:ring-2 focus:border-primary focus:ring-primary/20 outline-none px-3 text-sm"
               />
-              {formErrors.phone2 && <p className="text-xs text-destructive mt-1.5">{formErrors.phone2}</p>}
             </div>
 
             <div>
-              <label className="text-sm font-semibold text-foreground">اسم المشرف</label>
+              <label className="text-sm font-semibold text-foreground">المشرف</label>
               <div className="relative mt-2">
-                <UserRound className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <input
-                  value={form.supervisor}
+                <UserRound className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+                <select
+                  value={form.supervisorId}
+                  disabled={loadingSupervisors}
                   onChange={(e) => {
-                    setForm((f) => ({ ...f, supervisor: e.target.value }));
-                    setFormErrors((p) => ({ ...p, supervisor: undefined }));
+                    setForm((f) => ({ ...f, supervisorId: e.target.value }));
+                    setFormErrors((p) => ({ ...p, supervisorId: undefined }));
                   }}
-                  placeholder="اسم المشرف المسؤول"
-                  className={`w-full h-11 rounded-xl border bg-card focus:ring-2 outline-none pr-9 pl-3 text-sm
-                    ${formErrors.supervisor ? "border-destructive focus:border-destructive focus:ring-destructive/20" : "border-border focus:border-primary focus:ring-primary/20"}`}
-                />
+                  className={`w-full h-11 rounded-xl border bg-card focus:ring-2 outline-none pr-9 pl-3 text-sm disabled:opacity-60
+                    ${formErrors.supervisorId ? "border-destructive focus:border-destructive focus:ring-destructive/20" : "border-border focus:border-primary focus:ring-primary/20"}`}
+                >
+                  <option value="">{loadingSupervisors ? "جاري التحميل..." : "اختر المشرف"}</option>
+                  {supervisors.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
               </div>
-              {formErrors.supervisor && <p className="text-xs text-destructive mt-1.5">{formErrors.supervisor}</p>}
+              {formErrors.supervisorId && <p className="text-xs text-destructive mt-1.5">{formErrors.supervisorId}</p>}
             </div>
 
             <div>
@@ -399,28 +435,33 @@ export default function RepresentativesPage() {
             <div className="grid md:grid-cols-3 gap-4">
               <FileInputPreview
                 label="الصورة الشخصية"
-                value={form.photo}
-                onChange={(v) => setForm((f) => ({ ...f, photo: v }))}
+                file={form.profileImg}
+                existingUrl={existingDocs.profile_img}
+                onChange={(f) => setForm((s) => ({ ...s, profileImg: f }))}
               />
               <FileInputPreview
                 label="صورة البطاقة (وش)"
-                value={form.idFront}
-                onChange={(v) => setForm((f) => ({ ...f, idFront: v }))}
+                file={form.identityFront}
+                existingUrl={existingDocs.identity_front}
+                onChange={(f) => setForm((s) => ({ ...s, identityFront: f }))}
               />
               <FileInputPreview
                 label="صورة البطاقة (ضهر)"
-                value={form.idBack}
-                onChange={(v) => setForm((f) => ({ ...f, idBack: v }))}
+                file={form.identityBack}
+                existingUrl={existingDocs.identity_back}
+                onChange={(f) => setForm((s) => ({ ...s, identityBack: f }))}
               />
               <FileInputPreview
                 label="صورة الرخصة (وش)"
-                value={form.licenseFront}
-                onChange={(v) => setForm((f) => ({ ...f, licenseFront: v }))}
+                file={form.licenseFront}
+                existingUrl={existingDocs.license_front}
+                onChange={(f) => setForm((s) => ({ ...s, licenseFront: f }))}
               />
               <FileInputPreview
                 label="صورة الرخصة (ضهر)"
-                value={form.licenseBack}
-                onChange={(v) => setForm((f) => ({ ...f, licenseBack: v }))}
+                file={form.licenseBack}
+                existingUrl={existingDocs.license_back}
+                onChange={(f) => setForm((s) => ({ ...s, licenseBack: f }))}
               />
             </div>
           </div>
@@ -428,8 +469,10 @@ export default function RepresentativesPage() {
           <div className="mt-6 flex items-center gap-3">
             <button
               onClick={handleSaveRep}
-              className="bg-primary text-primary-foreground rounded-xl px-6 py-2.5 text-sm font-semibold hover:bg-[color:var(--primary-dark)] transition"
+              disabled={saving}
+              className="inline-flex items-center gap-2 bg-primary text-primary-foreground rounded-xl px-6 py-2.5 text-sm font-semibold hover:bg-[color:var(--primary-dark)] transition disabled:opacity-60"
             >
+              {saving && <Loader2 className="h-4 w-4 animate-spin" />}
               {editingId ? "حفظ التعديلات" : "حفظ المندوب"}
             </button>
             <button
@@ -463,79 +506,109 @@ export default function RepresentativesPage() {
                 <th className="pb-3 font-semibold">الهاتف الأول</th>
                 <th className="pb-3 font-semibold">الهاتف الثاني</th>
                 <th className="pb-3 font-semibold">المشرف</th>
+                <th className="pb-3 font-semibold">الدولة</th>
                 <th className="pb-3 font-semibold">موتوسيكل</th>
                 <th className="pb-3 font-semibold">الصور</th>
                 <th className="pb-3 font-semibold">إجراءات</th>
               </tr>
             </thead>
             <tbody>
-              {filtered.length === 0 && (
+              {loadingReps && (
                 <tr>
-                  <td colSpan={7} className="py-6 text-center text-muted-foreground">
+                  <td colSpan={8} className="py-8 text-center text-muted-foreground">
+                    <span className="inline-flex items-center gap-2">
+                      <Loader2 className="h-4 w-4 animate-spin" /> جاري التحميل...
+                    </span>
+                  </td>
+                </tr>
+              )}
+              {!loadingReps && filtered.length === 0 && (
+                <tr>
+                  <td colSpan={8} className="py-6 text-center text-muted-foreground">
                     مفيش نتائج مطابقة
                   </td>
                 </tr>
               )}
-              {filtered.map((r) => (
-                <tr key={r.id} className="border-b border-border/60 hover:bg-primary/5 transition">
-                  <td className="py-3 font-semibold text-foreground">
-                    <span className="inline-flex items-center gap-2">
-                      {r.docs.photo ? (
-                        <img src={r.docs.photo} alt={r.name} className="h-7 w-7 rounded-full object-cover border border-border" />
-                      ) : (
-                        <span className="h-7 w-7 rounded-full bg-secondary grid place-items-center text-muted-foreground">
-                          <UserRound className="h-3.5 w-3.5" />
+              {!loadingReps &&
+                filtered.map((r) => {
+                  const canManage = canManageRepresentative(r, currentUserId);
+                  const country = formatCountry(r.country);
+                  return (
+                    <tr key={r.id} className="border-b border-border/60 hover:bg-primary/5 transition">
+                      <td className="py-3 font-semibold text-foreground">
+                        <span className="inline-flex items-center gap-2">
+                          {r.profile_img ? (
+                            <img src={r.profile_img} alt={r.full_name} className="h-7 w-7 rounded-full object-cover border border-border" />
+                          ) : (
+                            <span className="h-7 w-7 rounded-full bg-secondary grid place-items-center text-muted-foreground">
+                              <UserRound className="h-3.5 w-3.5" />
+                            </span>
+                          )}
+                          {r.full_name}
                         </span>
-                      )}
-                      {r.name}
-                    </span>
-                  </td>
-                  <td className="py-3 text-muted-foreground">
-                    <span className="inline-flex items-center gap-1.5">
-                      <Phone className="h-3.5 w-3.5" /> {r.phone1}
-                    </span>
-                  </td>
-                  <td className="py-3 text-muted-foreground">
-                    <span className="inline-flex items-center gap-1.5">
-                      <Phone className="h-3.5 w-3.5" /> {r.phone2}
-                    </span>
-                  </td>
-                  <td className="py-3 text-muted-foreground">{r.supervisor}</td>
-                  <td className="py-3">
-                    <span
-                      className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2 py-1 rounded-lg ${
-                        r.hasMotorcycle ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"
-                      }`}
-                    >
-                      <Bike className="h-3.5 w-3.5" /> {r.hasMotorcycle ? "نعم" : "لا"}
-                    </span>
-                  </td>
-                  <td className="py-3">
-                    <button
-                      onClick={() => setViewingId(r.id)}
-                      className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline"
-                    >
-                      <Eye className="h-3.5 w-3.5" /> عرض الصور
-                    </button>
-                  </td>
-                  <td className="py-3">
-                    <div className="flex items-center gap-3">
-                      <button
-                        onClick={() => handleStartEdit(r)}
-                        className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline"
-                      >
-                        <Pencil className="h-3.5 w-3.5" /> تعديل
-                      </button>
-                      <button
-                        onClick={() => setDeletingId(r.id)}
-                        className="inline-flex items-center gap-1.5 text-xs font-semibold text-destructive hover:underline"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" /> حذف
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                      </td>
+                      <td className="py-3 text-muted-foreground">
+                        <span className="inline-flex items-center gap-1.5">
+                          <Phone className="h-3.5 w-3.5" /> {r.phone_1}
+                        </span>
+                      </td>
+                      <td className="py-3 text-muted-foreground">
+                        {r.phone_2 ? (
+                          <span className="inline-flex items-center gap-1.5">
+                            <Phone className="h-3.5 w-3.5" /> {r.phone_2}
+                          </span>
+                        ) : (
+                          <span className="text-xs">—</span>
+                        )}
+                      </td>
+                      <td className="py-3 text-muted-foreground">
+                        {loadingSupervisors ? "..." : supervisorNameMap[r.supervisor_id] || "غير معروف"}
+                      </td>
+                      <td className="py-3 text-muted-foreground">
+                        <span className="inline-flex items-center gap-1.5">
+                          {country.flag} {country.name}
+                        </span>
+                      </td>
+                      <td className="py-3">
+                        <span
+                          className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2 py-1 rounded-lg ${
+                            r.has_motorcycle ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"
+                          }`}
+                        >
+                          <Bike className="h-3.5 w-3.5" /> {r.has_motorcycle ? "نعم" : "لا"}
+                        </span>
+                      </td>
+                      <td className="py-3">
+                        <button
+                          onClick={() => setViewingId(r.id)}
+                          className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline"
+                        >
+                          <Eye className="h-3.5 w-3.5" /> عرض الصور
+                        </button>
+                      </td>
+                      <td className="py-3">
+                        {!canManage ? (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        ) : (
+                          <div className="flex items-center gap-3">
+                            <button
+                              onClick={() => handleStartEdit(r)}
+                              className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline"
+                            >
+                              <Pencil className="h-3.5 w-3.5" /> تعديل
+                            </button>
+                            <button
+                              onClick={() => setDeletingId(r.id)}
+                              className="inline-flex items-center gap-1.5 text-xs font-semibold text-destructive hover:underline"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" /> حذف
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
             </tbody>
           </table>
         </div>
@@ -551,17 +624,17 @@ export default function RepresentativesPage() {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-4">
-              <h3 className="font-bold text-foreground">صور {viewingRep.name}</h3>
+              <h3 className="font-bold text-foreground">صور {viewingRep.full_name}</h3>
               <button onClick={() => setViewingId(null)} className="text-muted-foreground hover:text-foreground">
                 <X className="h-5 w-5" />
               </button>
             </div>
             <div className="grid sm:grid-cols-2 gap-4">
-              <DocPreview label="الصورة الشخصية" src={viewingRep.docs.photo} />
-              <DocPreview label="البطاقة (وش)" src={viewingRep.docs.idFront} />
-              <DocPreview label="البطاقة (ضهر)" src={viewingRep.docs.idBack} />
-              <DocPreview label="الرخصة (وش)" src={viewingRep.docs.licenseFront} />
-              <DocPreview label="الرخصة (ضهر)" src={viewingRep.docs.licenseBack} />
+              <DocPreview label="الصورة الشخصية" src={viewingRep.profile_img} />
+              <DocPreview label="البطاقة (وش)" src={viewingRep.identity_front} />
+              <DocPreview label="البطاقة (ضهر)" src={viewingRep.identity_back} />
+              <DocPreview label="الرخصة (وش)" src={viewingRep.license_front} />
+              <DocPreview label="الرخصة (ضهر)" src={viewingRep.license_back} />
             </div>
           </div>
         </div>
@@ -570,26 +643,26 @@ export default function RepresentativesPage() {
       {deletingRep && (
         <div
           className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
-          onClick={() => setDeletingId(null)}
+          onClick={() => !deleting && setDeletingId(null)}
         >
-          <div
-            className="bg-card rounded-2xl p-6 max-w-sm w-full"
-            onClick={(e) => e.stopPropagation()}
-          >
+          <div className="bg-card rounded-2xl p-6 max-w-sm w-full" onClick={(e) => e.stopPropagation()}>
             <h3 className="font-bold text-foreground mb-2">تأكيد الحذف</h3>
             <p className="text-sm text-muted-foreground mb-6">
-              هل أنت متأكد إنك عايز تحذف المندوب <span className="font-semibold text-foreground">{deletingRep.name}</span>؟ الإجراء ده مش هيتقدر يتراجع عنه.
+              هل أنت متأكد إنك عايز تحذف المندوب <span className="font-semibold text-foreground">{deletingRep.full_name}</span>؟ الإجراء ده مش هيتقدر يتراجع عنه.
             </p>
             <div className="flex items-center gap-3">
               <button
                 onClick={handleConfirmDelete}
-                className="flex-1 bg-destructive text-destructive-foreground rounded-xl px-4 py-2.5 text-sm font-semibold hover:opacity-90 transition"
+                disabled={deleting}
+                className="flex-1 inline-flex items-center justify-center gap-2 bg-destructive text-destructive-foreground rounded-xl px-4 py-2.5 text-sm font-semibold hover:opacity-90 transition disabled:opacity-60"
               >
+                {deleting && <Loader2 className="h-4 w-4 animate-spin" />}
                 حذف
               </button>
               <button
                 onClick={() => setDeletingId(null)}
-                className="flex-1 rounded-xl border border-border px-4 py-2.5 text-sm font-semibold text-muted-foreground hover:text-foreground transition"
+                disabled={deleting}
+                className="flex-1 rounded-xl border border-border px-4 py-2.5 text-sm font-semibold text-muted-foreground hover:text-foreground transition disabled:opacity-60"
               >
                 إلغاء
               </button>
@@ -633,22 +706,34 @@ function MetricCard({
 
 function FileInputPreview({
   label,
-  value,
+  file,
+  existingUrl,
   onChange,
 }: {
   label: string;
-  value?: string;
-  onChange: (dataUrl: string) => void;
+  file: File | null;
+  existingUrl?: string | null;
+  onChange: (file: File | null) => void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!file) {
+      setPreviewUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    setPreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
 
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => onChange(reader.result as string);
-    reader.readAsDataURL(file);
+    const f = e.target.files?.[0];
+    onChange(f || null);
   };
+
+  const displayUrl = previewUrl || existingUrl || undefined;
 
   return (
     <div>
@@ -659,16 +744,16 @@ function FileInputPreview({
           onClick={() => inputRef.current?.click()}
           className="h-11 px-4 rounded-xl border border-dashed border-border bg-secondary text-xs font-semibold text-muted-foreground hover:border-primary hover:text-primary transition flex items-center gap-2"
         >
-          <ImagePlus className="h-4 w-4" /> {value ? "تغيير الصورة" : "رفع صورة"}
+          <ImagePlus className="h-4 w-4" /> {displayUrl ? "تغيير الصورة" : "رفع صورة"}
         </button>
-        {value && <img src={value} alt={label} className="h-11 w-11 rounded-lg object-cover border border-border" />}
+        {displayUrl && <img src={displayUrl} alt={label} className="h-11 w-11 rounded-lg object-cover border border-border" />}
       </div>
       <input ref={inputRef} type="file" accept="image/*" onChange={handleFile} className="hidden" />
     </div>
   );
 }
 
-function DocPreview({ label, src }: { label: string; src?: string }) {
+function DocPreview({ label, src }: { label: string; src?: string | null }) {
   return (
     <div>
       <div className="text-xs font-semibold text-muted-foreground mb-1.5">{label}</div>

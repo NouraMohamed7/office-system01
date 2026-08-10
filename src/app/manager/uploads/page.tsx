@@ -7,50 +7,39 @@ import {
   Eye,
   Check,
   X,
-  FileSpreadsheet,
+  PencilLine,
   FileText,
   CheckCircle2,
   AlertCircle,
   Info,
-  ChevronDown,
   Loader2,
+  Trash2,
 } from "lucide-react";
+import {
+  UnifiedFile,
+  FileApprovalStatus,
+  FILE_STATUS_LABELS,
+  getAllFiles,
+  reviewFileApproval,
+  renamePlainFile,
+  deletePlainFiles,
+  deleteApprovalFile,
+} from "@/modules/uploads/api/uploads.api";
 
-type Tone = "teal" | "success" | "warning" | "primary" | "danger";
-type Status = "بانتظار" | "معتمد" | "تحتاج تعديل" | "مرفوض";
-type ActionKind = "download" | "preview" | "approve" | "reject";
+type Tone = "teal" | "success" | "warning" | "danger" | "primary";
+type ActionKind = "approve" | "reject" | "edit_request";
+type KindFilter = "الكل" | "عام" | FileApprovalStatus;
 
-type UploadFile = {
-  id: string;
-  emp: string;
-  dept: string;
-  type: string;
-  name: string;
-  date: string;
-  st: Status;
-  tone: Tone;
-  viewed: boolean; // بيتحول true أول ما حد يعاين/يحمل الملف
+const STATUS_TONE: Record<FileApprovalStatus, Tone> = {
+  pending: "teal",
+  accepted: "success",
+  edit_requested: "warning",
+  rejected: "danger",
 };
 
-const STATUS_TONE: Record<Status, Tone> = {
-  "بانتظار": "teal",
-  "معتمد": "success",
-  "تحتاج تعديل": "warning",
-  "مرفوض": "danger",
-};
+const FILTERS: KindFilter[] = ["الكل", "عام", "pending", "accepted", "edit_requested", "rejected"];
 
-const DEPARTMENTS = ["كل الأقسام", "المبيعات", "السوشيال ميديا", "المناديب"];
-const FILE_TYPES = ["كل الأنواع", "شيت ليدز", "نتائج مكالمات", "تقرير مبيعات", "تقرير سوشيال", "بيانات مناديب"];
-
-const INITIAL_FILES: UploadFile[] = [
-  { id: "f1", emp: "نورا حسن", dept: "المبيعات", type: "شيت ليدز", name: "leads-jul-20.xlsx", date: "20 يوليو 09:15", st: "بانتظار", tone: "teal", viewed: false },
-  { id: "f2", emp: "محمود علي", dept: "المبيعات", type: "نتائج مكالمات", name: "calls-19.pdf", date: "19 يوليو 17:40", st: "معتمد", tone: "success", viewed: true },
-  { id: "f3", emp: "كريم سعيد", dept: "المبيعات", type: "تقرير مبيعات", name: "sales-w29.pdf", date: "19 يوليو 16:00", st: "تحتاج تعديل", tone: "warning", viewed: true },
-  { id: "f4", emp: "دينا فتحي", dept: "السوشيال ميديا", type: "تقرير سوشيال", name: "social-report.xlsx", date: "18 يوليو 14:30", st: "معتمد", tone: "success", viewed: true },
-  { id: "f5", emp: "سارة إبراهيم", dept: "المناديب", type: "بيانات مناديب", name: "reps-list.xlsx", date: "17 يوليو 11:00", st: "مرفوض", tone: "danger", viewed: false },
-];
-
-// ---------- Toast ----------
+/* ---------- Toast ---------- */
 type ToastItem = { id: number; tone: "success" | "error" | "info"; message: string };
 
 function ToastStack({ toasts, onDismiss }: { toasts: ToastItem[]; onDismiss: (id: number) => void }) {
@@ -64,7 +53,7 @@ function ToastStack({ toasts, onDismiss }: { toasts: ToastItem[]; onDismiss: (id
           <button
             key={t.id}
             onClick={() => onDismiss(t.id)}
-            className="toast-in toast-out pointer-events-auto flex items-center gap-2 rounded-xl border border-border bg-background px-4 py-2.5 text-sm font-semibold shadow-warm-lg transition hover:opacity-90"
+            className="toast-in pointer-events-auto flex items-center gap-2 rounded-xl border border-border bg-background px-4 py-2.5 text-sm font-semibold shadow-warm-lg transition hover:opacity-90"
           >
             <Icon className={`size-4 ${color[t.tone]}`} />
             {t.message}
@@ -75,85 +64,51 @@ function ToastStack({ toasts, onDismiss }: { toasts: ToastItem[]; onDismiss: (id
   );
 }
 
-// ---------- Filter dropdown ----------
-function FilterDropdown({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  options: string[];
-  onChange: (v: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  const isActive = value !== options[0];
-
-  useEffect(() => {
-    if (!open) return;
-    const onClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", onClick);
-    return () => document.removeEventListener("mousedown", onClick);
-  }, [open]);
-
-  return (
-    <div className="relative" ref={ref}>
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className={`flex items-center gap-1 rounded-xl border px-3 py-2 text-xs transition ${
-          isActive ? "border-primary bg-primary/10 text-primary" : "border-border bg-background text-muted-foreground hover:bg-accent"
-        }`}
-      >
-        {isActive ? value : label} <ChevronDown className={`size-3 transition-transform ${open ? "rotate-180" : ""}`} />
-      </button>
-      {open && (
-        <div className="dropdown-in absolute right-0 z-20 mt-1.5 w-44 overflow-hidden rounded-xl border border-border bg-background shadow-warm-lg">
-          {options.map((o) => (
-            <button
-              key={o}
-              onClick={() => { onChange(o); setOpen(false); }}
-              className={`block w-full px-3 py-2 text-right text-xs hover:bg-accent ${o === value ? "bg-accent/60 font-semibold text-primary" : ""}`}
-            >
-              {o}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---------- Confirm modal (للرفض بس، لأنه إجراء حساس) ----------
-function ConfirmModal({
+/* ---------- Review modal (approval-kind only) ---------- */
+function ReviewModal({
   open,
-  title,
-  message,
-  confirmLabel,
-  danger,
+  action,
+  fileName,
   loading,
   onConfirm,
   onClose,
 }: {
   open: boolean;
-  title: string;
-  message: string;
-  confirmLabel: string;
-  danger?: boolean;
-  loading?: boolean;
-  onConfirm: () => void;
+  action: ActionKind | null;
+  fileName: string;
+  loading: boolean;
+  onConfirm: (comment: string) => void;
   onClose: () => void;
 }) {
-  if (!open) return null;
+  const [comment, setComment] = useState("");
+
+  useEffect(() => {
+    if (open) setComment("");
+  }, [open]);
+
+  if (!open || !action) return null;
+
+  const config = {
+    reject: { title: "تأكيد الرفض", confirmLabel: "رفض الملف", danger: true },
+    edit_request: { title: "طلب تعديل", confirmLabel: "إرسال طلب التعديل", danger: false },
+    approve: { title: "اعتماد الملف", confirmLabel: "اعتماد", danger: false },
+  }[action];
+
+  const commentRequired = action === "reject" || action === "edit_request";
+
   return (
     <div className="fixed inset-0 z-[95] flex items-center justify-center p-4">
       <div className="modal-backdrop absolute inset-0 bg-black/40" onClick={loading ? undefined : onClose} />
       <div className="modal-card relative w-full max-w-sm rounded-2xl bg-background p-5 shadow-warm-lg">
-        <h3 className="text-base font-bold">{title}</h3>
-        <p className="mt-2 text-sm text-muted-foreground">{message}</p>
+        <h3 className="text-base font-bold">{config.title}</h3>
+        <p className="mt-2 text-sm text-muted-foreground">الملف: {fileName}</p>
+        <textarea
+          value={comment}
+          onChange={(e) => setComment(e.target.value)}
+          rows={3}
+          placeholder={commentRequired ? "اكتب سبب القرار (مطلوب)..." : "تعليق اختياري..."}
+          className="mt-3 w-full rounded-xl border border-border bg-card p-3 text-sm outline-none focus:border-primary/50 resize-none"
+        />
         <div className="mt-5 flex justify-end gap-2">
           <button
             onClick={onClose}
@@ -163,14 +118,14 @@ function ConfirmModal({
             إلغاء
           </button>
           <button
-            onClick={onConfirm}
-            disabled={loading}
-            className={`flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-semibold text-white transition disabled:opacity-70 ${
-              danger ? "bg-destructive hover:bg-destructive/90" : "bg-primary hover:bg-primary/90"
+            onClick={() => onConfirm(comment)}
+            disabled={loading || (commentRequired && !comment.trim())}
+            className={`flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-semibold text-white transition disabled:opacity-50 ${
+              config.danger ? "bg-destructive hover:bg-destructive/90" : "bg-primary hover:bg-primary/90"
             }`}
           >
             {loading && <Loader2 className="size-3.5 animate-spin" />}
-            {confirmLabel}
+            {config.confirmLabel}
           </button>
         </div>
       </div>
@@ -178,8 +133,64 @@ function ConfirmModal({
   );
 }
 
-// ---------- Preview modal ----------
-function PreviewModal({ file, onClose }: { file: UploadFile | null; onClose: () => void }) {
+/* ---------- Rename modal (plain-kind only) ---------- */
+function RenameModal({
+  open,
+  currentName,
+  loading,
+  onConfirm,
+  onClose,
+}: {
+  open: boolean;
+  currentName: string;
+  loading: boolean;
+  onConfirm: (newName: string) => void;
+  onClose: () => void;
+}) {
+  const [value, setValue] = useState(currentName);
+
+  useEffect(() => {
+    if (open) setValue(currentName);
+  }, [open, currentName]);
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-[95] flex items-center justify-center p-4">
+      <div className="modal-backdrop absolute inset-0 bg-black/40" onClick={loading ? undefined : onClose} />
+      <div className="modal-card relative w-full max-w-sm rounded-2xl bg-background p-5 shadow-warm-lg">
+        <h3 className="text-base font-bold">تعديل اسم الملف</h3>
+        <input
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && value.trim() && onConfirm(value.trim())}
+          autoFocus
+          className="mt-3 w-full h-10 rounded-xl border border-border bg-card px-3 text-sm outline-none focus:border-primary/50"
+        />
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            onClick={onClose}
+            disabled={loading}
+            className="rounded-xl border border-border px-4 py-2 text-xs font-semibold text-muted-foreground transition hover:bg-accent disabled:opacity-50"
+          >
+            إلغاء
+          </button>
+          <button
+            onClick={() => value.trim() && onConfirm(value.trim())}
+            disabled={loading || !value.trim()}
+            className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white transition hover:bg-primary/90 disabled:opacity-50"
+          >
+            {loading && <Loader2 className="size-3.5 animate-spin" />}
+            حفظ
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Preview modal ---------- */
+function PreviewModal({ file, onClose }: { file: UnifiedFile | null; onClose: () => void }) {
   if (!file) return null;
   return (
     <div className="fixed inset-0 z-[90] flex items-center justify-center p-4">
@@ -194,31 +205,63 @@ function PreviewModal({ file, onClose }: { file: UploadFile | null; onClose: () 
         <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border bg-accent/30 py-10">
           <FileText className="size-10 text-muted-foreground" />
           <div className="text-sm font-semibold">{file.name}</div>
-          <div className="text-xs text-muted-foreground">معاينة الملف غير متاحة حاليًا، حمّل الملف لعرضه كاملًا.</div>
+          <a
+            href={file.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs font-semibold text-primary hover:underline"
+          >
+            فتح الملف في نافذة جديدة
+          </a>
         </div>
         <div className="mt-4 space-y-1.5 text-xs text-muted-foreground">
-          <div>الموظف: <span className="font-semibold text-foreground">{file.emp}</span></div>
-          <div>القسم: <span className="font-semibold text-foreground">{file.dept}</span></div>
-          <div>نوع الملف: <span className="font-semibold text-foreground">{file.type}</span></div>
-          <div>تاريخ الرفع: <span className="font-semibold text-foreground">{file.date}</span></div>
+          <div>الموظف: <span className="font-semibold text-foreground">{file.user_name ?? "غير معروف"}</span></div>
+          <div>تاريخ الرفع: <span className="font-semibold text-foreground">{file.created_at.slice(0, 10)}</span></div>
+          <div>
+            النوع:{" "}
+            <span className="font-semibold text-foreground">
+              {file.kind === "file" ? "عام" : FILE_STATUS_LABELS[file.status as FileApprovalStatus]}
+            </span>
+          </div>
         </div>
       </div>
     </div>
   );
 }
 
-// ---------- Main Page ----------
+/* ---------- Main Page ---------- */
 export default function UploadsPage() {
-  const [files, setFiles] = useState<UploadFile[]>(INITIAL_FILES);
+  const [files, setFiles] = useState<UnifiedFile[]>([]);
+  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [dept, setDept] = useState(DEPARTMENTS[0]);
-  const [fileType, setFileType] = useState(FILE_TYPES[0]);
-  const [previewFile, setPreviewFile] = useState<UploadFile | null>(null);
+  const [filterValue, setFilterValue] = useState<KindFilter>("الكل");
+  const [previewFile, setPreviewFile] = useState<UnifiedFile | null>(null);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
-  const [rejectTarget, setRejectTarget] = useState<UploadFile | null>(null);
-  const [pendingAction, setPendingAction] = useState<{ id: string; kind: ActionKind } | null>(null);
+  const [reviewTarget, setReviewTarget] = useState<{ file: UnifiedFile; action: ActionKind } | null>(null);
+  const [renameTarget, setRenameTarget] = useState<UnifiedFile | null>(null);
+  const [pendingKey, setPendingKey] = useState<string | null>(null);
+  const [reviewLoading, setReviewLoading] = useState(false);
+  const [renameLoading, setRenameLoading] = useState(false);
 
   const toastCounter = useRef(0);
+  const rowKey = (f: UnifiedFile) => `${f.kind}-${f.id}`;
+
+  async function loadFiles() {
+    setLoading(true);
+    try {
+      const data = await getAllFiles();
+      setFiles(data);
+    } catch (err) {
+      console.error(err);
+      pushToast("error", "حصل خطأ أثناء تحميل الملفات");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadFiles();
+  }, []);
 
   const pushToast = (tone: ToastItem["tone"], message: string) => {
     toastCounter.current += 1;
@@ -227,105 +270,116 @@ export default function UploadsPage() {
     setTimeout(() => dismissToast(id), 3000);
   };
 
-  const dismissToast = (id: number) => {
-    setToasts((t) => t.filter((x) => x.id !== id));
-  };
+  const dismissToast = (id: number) => setToasts((t) => t.filter((x) => x.id !== id));
 
   const filtered = useMemo(() => {
     return files.filter((f) => {
-      if (search.trim() && !f.emp.includes(search.trim())) return false;
-      if (dept !== DEPARTMENTS[0] && f.dept !== dept) return false;
-      if (fileType !== FILE_TYPES[0] && f.type !== fileType) return false;
+      if (search.trim() && !(f.user_name ?? "").includes(search.trim())) return false;
+      if (filterValue === "عام" && f.kind !== "file") return false;
+      if (filterValue !== "الكل" && filterValue !== "عام" && f.status !== filterValue) return false;
       return true;
     });
-  }, [files, search, dept, fileType]);
+  }, [files, search, filterValue]);
 
   const totals = useMemo(() => ({
     total: files.length,
-    fresh: files.filter((f) => !f.viewed).length,
-    pending: files.filter((f) => f.st === "بانتظار").length,
-    approved: files.filter((f) => f.st === "معتمد").length,
-    rejected: files.filter((f) => f.st === "مرفوض").length,
+    plain: files.filter((f) => f.kind === "file").length,
+    pending: files.filter((f) => f.status === "pending").length,
+    accepted: files.filter((f) => f.status === "accepted").length,
+    editRequested: files.filter((f) => f.status === "edit_requested").length,
+    rejected: files.filter((f) => f.status === "rejected").length,
   }), [files]);
 
-  const updateStatus = (id: string, st: Status) => {
-    setFiles((prev) => prev.map((f) => (f.id === id ? { ...f, st, tone: STATUS_TONE[st] } : f)));
+  const statusToEnum: Record<ActionKind, FileApprovalStatus> = {
+    approve: "accepted",
+    reject: "rejected",
+    edit_request: "edit_requested",
   };
 
-  const markViewed = (id: string) => {
-    setFiles((prev) => prev.map((f) => (f.id === id ? { ...f, viewed: true } : f)));
+  const openReview = (file: UnifiedFile, action: ActionKind) => {
+    if (statusToEnum[action] === file.status) return;
+    setReviewTarget({ file, action });
   };
 
-  const runAction = (id: string, kind: ActionKind, work: () => void, delay = 500) => {
-    setPendingAction({ id, kind });
-    setTimeout(() => {
-      work();
-      setPendingAction(null);
-    }, delay);
+  const confirmReview = async (comment: string) => {
+    if (!reviewTarget) return;
+    const { file, action } = reviewTarget;
+    setReviewLoading(true);
+    try {
+      await reviewFileApproval(file.id, statusToEnum[action], comment);
+      setFiles((prev) => prev.map((f) => (rowKey(f) === rowKey(file) ? { ...f, status: statusToEnum[action] } : f)));
+      const msgByAction: Record<ActionKind, string> = {
+        approve: `تم اعتماد ملف ${file.user_name ?? ""}`,
+        reject: `تم رفض ملف ${file.user_name ?? ""}`,
+        edit_request: `تم إرسال طلب تعديل لملف ${file.user_name ?? ""}`,
+      };
+      pushToast(action === "reject" ? "error" : "success", msgByAction[action]);
+      setReviewTarget(null);
+    } catch (err) {
+      console.error(err);
+      pushToast("error", "حصل خطأ أثناء تحديث حالة الملف");
+    } finally {
+      setReviewLoading(false);
+    }
   };
 
-  const isBusy = (id: string, kind: ActionKind) => pendingAction?.id === id && pendingAction?.kind === kind;
-
-  const handleDownload = (f: UploadFile) => {
-    if (isBusy(f.id, "download")) return;
-    runAction(f.id, "download", () => {
-      markViewed(f.id);
-      pushToast("success", `تم تحميل ${f.name}`);
-    });
+  const confirmRename = async (newName: string) => {
+    if (!renameTarget) return;
+    setRenameLoading(true);
+    try {
+      await renamePlainFile(renameTarget.id, newName);
+      setFiles((prev) => prev.map((f) => (rowKey(f) === rowKey(renameTarget) ? { ...f, name: newName } : f)));
+      pushToast("success", "تم تعديل اسم الملف");
+      setRenameTarget(null);
+    } catch (err) {
+      console.error(err);
+      pushToast("error", "حصل خطأ أثناء تعديل الاسم");
+    } finally {
+      setRenameLoading(false);
+    }
   };
 
-  const handlePreview = (f: UploadFile) => {
-    markViewed(f.id);
-    setPreviewFile(f);
+  const handleDelete = async (f: UnifiedFile) => {
+    const key = rowKey(f);
+    setPendingKey(key);
+    try {
+      if (f.kind === "file") await deletePlainFiles([f.id]);
+      else await deleteApprovalFile(f.id);
+      setFiles((prev) => prev.filter((x) => rowKey(x) !== key));
+      pushToast("success", `تم حذف ${f.name}`);
+    } catch (err) {
+      console.error(err);
+      pushToast("error", "حصل خطأ أثناء حذف الملف");
+    } finally {
+      setPendingKey(null);
+    }
   };
 
-  const handleApprove = (f: UploadFile) => {
-    if (f.st === "معتمد" || isBusy(f.id, "approve")) return;
-    runAction(f.id, "approve", () => {
-      updateStatus(f.id, "معتمد");
-      markViewed(f.id);
-      pushToast("success", `تم اعتماد ملف ${f.emp}`);
-    });
-  };
-
-  const openRejectConfirm = (f: UploadFile) => {
-    if (f.st === "مرفوض") return;
-    setRejectTarget(f);
-  };
-
-  const confirmReject = () => {
-    if (!rejectTarget) return;
-    const f = rejectTarget;
-    runAction(f.id, "reject", () => {
-      updateStatus(f.id, "مرفوض");
-      markViewed(f.id);
-      pushToast("error", `تم رفض ملف ${f.emp}`);
-      setRejectTarget(null);
-    }, 450);
+  const handleDownload = (f: UnifiedFile) => {
+    window.open(f.url, "_blank", "noopener,noreferrer");
   };
 
   return (
     <div className="space-y-6">
       <style jsx global>{`
         @keyframes toastIn { from { opacity: 0; transform: translateY(12px) scale(0.95); } to { opacity: 1; transform: translateY(0) scale(1); } }
-        @keyframes dropdownIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
         @keyframes rowIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
         @keyframes backdropIn { from { opacity: 0; } to { opacity: 1; } }
         @keyframes modalIn { from { opacity: 0; transform: scale(0.94) translateY(8px); } to { opacity: 1; transform: scale(1) translateY(0); } }
         .toast-in { animation: toastIn 0.25s ease-out; }
-        .dropdown-in { animation: dropdownIn 0.15s ease-out; }
         .row-in { animation: rowIn 0.2s ease-out both; }
         .modal-backdrop { animation: backdropIn 0.2s ease-out; }
         .modal-card { animation: modalIn 0.25s ease-out; }
       `}</style>
 
-      <PageHeader title="مركز رفع الشيتات" subtitle="مراجعة واعتماد الملفات المرفوعة من الموظفين." />
+      <PageHeader title="مركز رفع الملفات" subtitle="متابعة الملفات العامة ومراجعة الملفات المحتاجة موافقة." />
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <StatCard dense label="إجمالي" value={String(totals.total)} tone="primary" />
-        <StatCard dense label="جديدة" value={String(totals.fresh)} tone="teal" />
-        <StatCard dense label="بانتظار المراجعة" value={String(totals.pending)} tone="warning" />
-        <StatCard dense label="معتمدة" value={String(totals.approved)} tone="success" />
+        <StatCard dense label="عام" value={String(totals.plain)} tone="primary" />
+        <StatCard dense label="بانتظار المراجعة" value={String(totals.pending)} tone="teal" />
+        <StatCard dense label="معتمدة" value={String(totals.accepted)} tone="success" />
+        <StatCard dense label="تحتاج تعديل" value={String(totals.editRequested)} tone="warning" />
         <StatCard dense label="مرفوضة" value={String(totals.rejected)} tone="danger" />
       </div>
 
@@ -337,11 +391,20 @@ export default function UploadsPage() {
             placeholder="اسم الموظف..."
             className="h-10 min-w-[220px] flex-1 rounded-xl border border-border bg-background px-4 text-sm outline-none transition focus:border-primary/50"
           />
-          <FilterDropdown label="القسم" value={dept} options={DEPARTMENTS} onChange={setDept} />
-          <FilterDropdown label="نوع الملف" value={fileType} options={FILE_TYPES} onChange={setFileType} />
-          {(search || dept !== DEPARTMENTS[0] || fileType !== FILE_TYPES[0]) && (
+          <select
+            value={filterValue}
+            onChange={(e) => setFilterValue(e.target.value as KindFilter)}
+            className="h-10 rounded-xl border border-border bg-background px-3 text-xs"
+          >
+            {FILTERS.map((f) => (
+              <option key={f} value={f}>
+                {f === "الكل" ? "كل الملفات" : f === "عام" ? "عام (بدون مراجعة)" : FILE_STATUS_LABELS[f]}
+              </option>
+            ))}
+          </select>
+          {(search || filterValue !== "الكل") && (
             <button
-              onClick={() => { setSearch(""); setDept(DEPARTMENTS[0]); setFileType(FILE_TYPES[0]); }}
+              onClick={() => { setSearch(""); setFilterValue("الكل"); }}
               className="rounded-xl px-3 py-2 text-xs font-semibold text-muted-foreground underline-offset-2 hover:text-primary hover:underline"
             >
               مسح الفلاتر
@@ -355,76 +418,116 @@ export default function UploadsPage() {
           <table className="w-full text-sm">
             <thead className="bg-accent/40 text-xs text-muted-foreground">
               <tr className="[&>th]:px-4 [&>th]:py-3 [&>th]:text-right">
-                <th>الموظف</th><th>نوع الملف</th><th>اسم الملف</th><th>تاريخ الرفع</th><th>الحالة</th><th>الإجراءات</th>
+                <th>الموظف</th><th>اسم الملف</th><th>تاريخ الرفع</th><th>الحالة</th><th>الإجراءات</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {filtered.length === 0 && (
+              {loading && (
                 <tr>
-                  <td colSpan={6} className="px-4 py-10 text-center text-sm text-muted-foreground">
-                    مفيش ملفات مطابقة لبحثك
-                  </td>
+                  <td colSpan={5} className="px-4 py-10 text-center text-sm text-muted-foreground">جارٍ التحميل...</td>
                 </tr>
               )}
-              {filtered.map((f, i) => (
-                <tr key={f.id} className="row-in row-hover hover:row-hover-active" style={{ animationDelay: `${i * 30}ms` }}>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-3">
-                      <Avatar name={f.emp} />
-                      <div className="flex items-center gap-1.5">
-                        <span className="font-semibold">{f.emp}</span>
-                        {!f.viewed && <span className="size-1.5 rounded-full bg-primary" title="ملف جديد" />}
-                      </div>
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 text-xs text-muted-foreground">{f.type}</td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-2">
-                      <FileSpreadsheet className="size-4 text-success" />
-                      {f.name}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 text-xs text-muted-foreground">{f.date}</td>
-                  <td className="px-4 py-3">
-                    <Pill tone={f.tone}>{f.st}</Pill>
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex gap-1">
-                      <button
-                        onClick={() => handlePreview(f)}
-                        title="معاينة"
-                        className="grid size-8 place-items-center rounded-lg text-muted-foreground transition hover:bg-accent hover:text-primary active:scale-90"
-                      >
-                        <Eye className="size-4" />
-                      </button>
-                      <button
-                        onClick={() => handleApprove(f)}
-                        disabled={f.st === "معتمد" || isBusy(f.id, "approve")}
-                        title="اعتماد"
-                        className="grid size-8 place-items-center rounded-lg text-muted-foreground transition hover:bg-success/10 hover:text-success active:scale-90 disabled:opacity-40"
-                      >
-                        {isBusy(f.id, "approve") ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
-                      </button>
-                      <button
-                        onClick={() => openRejectConfirm(f)}
-                        disabled={f.st === "مرفوض"}
-                        title="رفض"
-                        className="grid size-8 place-items-center rounded-lg text-muted-foreground transition hover:bg-destructive/10 hover:text-destructive active:scale-90 disabled:opacity-40"
-                      >
-                        <X className="size-4" />
-                      </button>
-                      <button
-                        onClick={() => handleDownload(f)}
-                        disabled={isBusy(f.id, "download")}
-                        title="تحميل"
-                        className="grid size-8 place-items-center rounded-lg text-muted-foreground transition hover:bg-accent hover:text-primary active:scale-90 disabled:opacity-50"
-                      >
-                        {isBusy(f.id, "download") ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
-                      </button>
-                    </div>
-                  </td>
+              {!loading && filtered.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="px-4 py-10 text-center text-sm text-muted-foreground">مفيش ملفات مطابقة لبحثك</td>
                 </tr>
-              ))}
+              )}
+              {!loading && filtered.map((f, i) => {
+                const key = rowKey(f);
+                return (
+                  <tr key={key} className="row-in" style={{ animationDelay: `${i * 30}ms` }}>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-3">
+                        <Avatar name={f.user_name ?? "غير معروف"} />
+                        <span className="font-semibold">{f.user_name ?? "غير معروف"}</span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <FileText className="size-4 text-primary" />
+                        {f.name}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-xs text-muted-foreground">{f.created_at.slice(0, 10)}</td>
+                    <td className="px-4 py-3">
+                      {f.kind === "file" ? (
+                        <Pill tone="primary">عام</Pill>
+                      ) : (
+                        <Pill tone={STATUS_TONE[f.status as FileApprovalStatus]}>
+                          {FILE_STATUS_LABELS[f.status as FileApprovalStatus]}
+                        </Pill>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex gap-1">
+                        <button
+                          onClick={() => setPreviewFile(f)}
+                          title="معاينة"
+                          className="grid size-8 place-items-center rounded-lg text-muted-foreground transition hover:bg-accent hover:text-primary active:scale-90"
+                        >
+                          <Eye className="size-4" />
+                        </button>
+
+                        {f.kind === "approval" && (
+                          <>
+                            <button
+                              onClick={() => openReview(f, "approve")}
+                              disabled={f.status === "accepted"}
+                              title="اعتماد"
+                              className="grid size-8 place-items-center rounded-lg text-muted-foreground transition hover:bg-success/10 hover:text-success active:scale-90 disabled:opacity-40"
+                            >
+                              <Check className="size-4" />
+                            </button>
+                            <button
+                              onClick={() => openReview(f, "edit_request")}
+                              disabled={f.status === "edit_requested"}
+                              title="طلب تعديل"
+                              className="grid size-8 place-items-center rounded-lg text-muted-foreground transition hover:bg-warning/20 hover:text-[oklch(0.48_0.11_82)] active:scale-90 disabled:opacity-40"
+                            >
+                              <PencilLine className="size-4" />
+                            </button>
+                            <button
+                              onClick={() => openReview(f, "reject")}
+                              disabled={f.status === "rejected"}
+                              title="رفض"
+                              className="grid size-8 place-items-center rounded-lg text-muted-foreground transition hover:bg-destructive/10 hover:text-destructive active:scale-90 disabled:opacity-40"
+                            >
+                              <X className="size-4" />
+                            </button>
+                          </>
+                        )}
+
+                        {f.kind === "file" && (
+                          <button
+                            onClick={() => setRenameTarget(f)}
+                            title="تعديل الاسم"
+                            className="grid size-8 place-items-center rounded-lg text-muted-foreground transition hover:bg-accent hover:text-primary active:scale-90"
+                          >
+                            <PencilLine className="size-4" />
+                          </button>
+                        )}
+
+                        <button
+                          onClick={() => handleDownload(f)}
+                          title="تحميل"
+                          className="grid size-8 place-items-center rounded-lg text-muted-foreground transition hover:bg-accent hover:text-primary active:scale-90"
+                        >
+                          <Download className="size-4" />
+                        </button>
+
+                        <button
+                          onClick={() => handleDelete(f)}
+                          disabled={pendingKey === key}
+                          title="حذف"
+                          className="grid size-8 place-items-center rounded-lg text-muted-foreground transition hover:bg-destructive/10 hover:text-destructive active:scale-90 disabled:opacity-50"
+                        >
+                          {pendingKey === key ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -432,15 +535,21 @@ export default function UploadsPage() {
 
       <PreviewModal file={previewFile} onClose={() => setPreviewFile(null)} />
 
-      <ConfirmModal
-        open={!!rejectTarget}
-        title="تأكيد الرفض"
-        message={rejectTarget ? `متأكد إنك عايز ترفض ملف "${rejectTarget.name}" الخاص بـ ${rejectTarget.emp}؟` : ""}
-        confirmLabel="رفض الملف"
-        danger
-        loading={rejectTarget ? isBusy(rejectTarget.id, "reject") : false}
-        onConfirm={confirmReject}
-        onClose={() => setRejectTarget(null)}
+      <ReviewModal
+        open={!!reviewTarget}
+        action={reviewTarget?.action ?? null}
+        fileName={reviewTarget?.file.name ?? ""}
+        loading={reviewLoading}
+        onConfirm={confirmReview}
+        onClose={() => setReviewTarget(null)}
+      />
+
+      <RenameModal
+        open={!!renameTarget}
+        currentName={renameTarget?.name ?? ""}
+        loading={renameLoading}
+        onConfirm={confirmRename}
+        onClose={() => setRenameTarget(null)}
       />
 
       <ToastStack toasts={toasts} onDismiss={dismissToast} />

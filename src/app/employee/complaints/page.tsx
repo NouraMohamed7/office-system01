@@ -1,81 +1,72 @@
-// src/app/complaints/page.tsx
+// src/app/employee/complaints/page.tsx
 "use client";
 
 import { PortalLayout, Card, StatusPill } from "@/components/portal-layout";
 import { useToast } from "@/components/toast";
-import { useState } from "react";
-import { LifeBuoy, Plus, X, MessageSquare, Send, Clock3, CheckCircle2, AlertCircle } from "lucide-react";
+import { useEffect, useState } from "react";
+import { LifeBuoy, Plus, X, Trash2, Clock3, CheckCircle2, AlertCircle } from "lucide-react";
+import {
+  ComplaintRow,
+  ComplaintStatus,
+  ComplaintType,
+  COMPLAINT_STATUS_LABELS,
+  COMPLAINT_TYPE_LABELS,
+  COMPLAINT_TYPES,
+  createComplaint,
+  deleteComplaint,
+  getMyComplaints,
+} from "@/modules/complaints/api/complaints.api";
 
-type ComplaintStatus = "قيد المراجعة" | "تم الرد" | "مغلقة";
-type ComplaintCategory = "بيئة العمل" | "الراتب والمزايا" | "زميل عمل" | "أدوات وموارد" | "أخرى";
-
-type Reply = { from: "أنا" | "الإدارة"; text: string; at: string };
-type Complaint = {
-  id: string;
-  subject: string;
-  category: ComplaintCategory;
-  description: string;
-  status: ComplaintStatus;
-  createdAt: string;
-  replies: Reply[];
+const statusTone: Record<ComplaintStatus, "teal" | "success" | "warning" | "danger"> = {
+  new: "teal",
+  in_processing: "warning",
+  done: "success",
+  rejected: "danger",
 };
-
-const INITIAL_COMPLAINTS: Complaint[] = [
-  {
-    id: "c1",
-    subject: "تأخر صرف مكافأة الأداء",
-    category: "الراتب والمزايا",
-    description: "مكافأة شهر يونيو لسه ماوصلتش، وحابب أعرف موعدها بالظبط.",
-    status: "تم الرد",
-    createdAt: "2026-07-20",
-    replies: [
-      { from: "الإدارة", text: "تم التحقق، المكافأة هتنزل مع راتب أغسطس بسبب تعديل في السيستم.", at: "2026-07-22" },
-    ],
-  },
-  {
-    id: "c2",
-    subject: "مشكلة في تكييف المكتب",
-    category: "بيئة العمل",
-    description: "التكييف في الدور التاني مش شغال من يومين وده مؤثر على التركيز.",
-    status: "مغلقة",
-    createdAt: "2026-07-14",
-    replies: [
-      { from: "الإدارة", text: "تم إصلاح التكييف بتاريخ 2026-07-15.", at: "2026-07-15" },
-    ],
-  },
-  {
-    id: "c3",
-    subject: "طلب جهاز لابتوب بديل",
-    category: "أدوات وموارد",
-    description: "اللابتوب الحالي بطيء جدًا وبيأثر على سرعة إنجاز المهام.",
-    status: "قيد المراجعة",
-    createdAt: "2026-07-25",
-    replies: [],
-  },
-];
-
-const CATEGORIES: ComplaintCategory[] = ["بيئة العمل", "الراتب والمزايا", "زميل عمل", "أدوات وموارد", "أخرى"];
 
 export default function ComplaintsPage() {
   const showToast = useToast();
-  const [complaints, setComplaints] = useState<Complaint[]>(INITIAL_COMPLAINTS);
-  const [showForm, setShowForm] = useState(false);
-  const [openId, setOpenId] = useState<string | null>(null);
-  const [replyText, setReplyText] = useState("");
 
-  const [form, setForm] = useState({ subject: "", category: "بيئة العمل" as ComplaintCategory, description: "" });
+  const [complaints, setComplaints] = useState<ComplaintRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [openId, setOpenId] = useState<number | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const [form, setForm] = useState<{ subject: string; category: ComplaintType; description: string }>({
+    subject: "",
+    category: "work_env",
+    description: "",
+  });
   const [errors, setErrors] = useState<{ subject?: string; description?: string }>({});
+
+  async function loadComplaints() {
+    setLoading(true);
+    try {
+      const data = await getMyComplaints();
+      setComplaints(data);
+    } catch (err) {
+      console.error(err);
+      showToast("error", "حصل خطأ أثناء تحميل الشكاوى");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadComplaints();
+  }, []);
 
   const totals = {
     total: complaints.length,
-    pending: complaints.filter((c) => c.status === "قيد المراجعة").length,
-    replied: complaints.filter((c) => c.status === "تم الرد").length,
-    closed: complaints.filter((c) => c.status === "مغلقة").length,
+    pending: complaints.filter((c) => c.status === "new" || c.status === "in_processing").length,
+    done: complaints.filter((c) => c.status === "done").length,
+    rejected: complaints.filter((c) => c.status === "rejected").length,
   };
 
   const openComplaint = complaints.find((c) => c.id === openId) ?? null;
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     const newErrors: typeof errors = {};
     if (!form.subject.trim()) newErrors.subject = "عنوان الشكوى مطلوب";
     if (!form.description.trim()) newErrors.description = "تفاصيل الشكوى مطلوبة";
@@ -85,32 +76,35 @@ export default function ComplaintsPage() {
       return;
     }
     setErrors({});
-    const newComplaint: Complaint = {
-      id: `c-${Date.now()}`,
-      subject: form.subject.trim(),
-      category: form.category,
-      description: form.description.trim(),
-      status: "قيد المراجعة",
-      createdAt: new Date().toISOString().slice(0, 10),
-      replies: [],
-    };
-    setComplaints((prev) => [newComplaint, ...prev]);
-    setForm({ subject: "", category: "بيئة العمل", description: "" });
-    setShowForm(false);
-    showToast("success", "تم إرسال شكواك بنجاح، هيتم مراجعتها قريبًا");
+    setSubmitting(true);
+    try {
+      await createComplaint({
+        title: form.subject.trim(),
+        description: form.description.trim(),
+        type: form.category,
+      });
+      setForm({ subject: "", category: "work_env", description: "" });
+      setShowForm(false);
+      showToast("success", "تم إرسال شكواك بنجاح، هيتم مراجعتها قريبًا");
+      await loadComplaints();
+    } catch (err) {
+      console.error(err);
+      showToast("error", "حصل خطأ أثناء إرسال الشكوى");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
-  const handleSendReply = () => {
-    if (!replyText.trim() || !openComplaint) return;
-    setComplaints((prev) =>
-      prev.map((c) =>
-        c.id === openComplaint.id
-          ? { ...c, replies: [...c.replies, { from: "أنا", text: replyText.trim(), at: new Date().toISOString().slice(0, 10) }] }
-          : c
-      )
-    );
-    setReplyText("");
-    showToast("success", "تم إرسال ردك");
+  const handleDelete = async (id: number) => {
+    try {
+      await deleteComplaint(id);
+      showToast("success", "تم حذف الشكوى");
+      setOpenId(null);
+      await loadComplaints();
+    } catch (err) {
+      console.error(err);
+      showToast("error", "حصل خطأ أثناء حذف الشكوى");
+    }
   };
 
   return (
@@ -118,8 +112,8 @@ export default function ComplaintsPage() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <MetricCard icon={LifeBuoy} label="إجمالي الشكاوى" value={String(totals.total)} tone="primary" />
         <MetricCard icon={Clock3} label="قيد المراجعة" value={String(totals.pending)} tone="warning" />
-        <MetricCard icon={MessageSquare} label="تم الرد عليها" value={String(totals.replied)} tone="teal" />
-        <MetricCard icon={CheckCircle2} label="مغلقة" value={String(totals.closed)} tone="success" />
+        <MetricCard icon={CheckCircle2} label="تم الحل" value={String(totals.done)} tone="success" />
+        <MetricCard icon={AlertCircle} label="مرفوضة" value={String(totals.rejected)} tone="danger" />
       </div>
 
       <div className="flex justify-end mb-4">
@@ -147,9 +141,14 @@ export default function ComplaintsPage() {
             </div>
             <div>
               <label className="text-sm font-semibold text-foreground">التصنيف</label>
-              <select value={form.category} onChange={(e) => setForm((f) => ({ ...f, category: e.target.value as ComplaintCategory }))}
-                className="mt-2 w-full h-11 rounded-xl border border-border bg-card px-3 text-sm">
-                {CATEGORIES.map((c) => <option key={c}>{c}</option>)}
+              <select
+                value={form.category}
+                onChange={(e) => setForm((f) => ({ ...f, category: e.target.value as ComplaintType }))}
+                className="mt-2 w-full h-11 rounded-xl border border-border bg-card px-3 text-sm"
+              >
+                {COMPLAINT_TYPES.map((t) => (
+                  <option key={t} value={t}>{COMPLAINT_TYPE_LABELS[t]}</option>
+                ))}
               </select>
             </div>
             <div className="md:col-span-2">
@@ -165,8 +164,12 @@ export default function ComplaintsPage() {
               {errors.description && <p className="text-xs text-destructive mt-1.5">{errors.description}</p>}
             </div>
           </div>
-          <button onClick={handleSubmit} className="mt-6 bg-primary text-primary-foreground rounded-xl px-6 py-2.5 text-sm font-semibold hover:bg-[color:var(--primary-dark)] transition">
-            إرسال الشكوى
+          <button
+            onClick={handleSubmit}
+            disabled={submitting}
+            className="mt-6 bg-primary text-primary-foreground rounded-xl px-6 py-2.5 text-sm font-semibold hover:bg-[color:var(--primary-dark)] transition disabled:opacity-60"
+          >
+            {submitting ? "جارٍ الإرسال..." : "إرسال الشكوى"}
           </button>
         </Card>
       )}
@@ -174,10 +177,13 @@ export default function ComplaintsPage() {
       <Card className="p-6">
         <h3 className="font-bold text-foreground mb-4">شكاواي السابقة</h3>
         <div className="space-y-2">
-          {complaints.length === 0 && (
+          {loading && (
+            <p className="text-sm text-muted-foreground text-center py-6">جارٍ التحميل...</p>
+          )}
+          {!loading && complaints.length === 0 && (
             <p className="text-sm text-muted-foreground text-center py-6">لسه معملتيش أي شكوى</p>
           )}
-          {complaints.map((c) => (
+          {!loading && complaints.map((c) => (
             <button
               key={c.id}
               onClick={() => setOpenId(c.id)}
@@ -187,15 +193,12 @@ export default function ComplaintsPage() {
                 <AlertCircle className="h-5 w-5" />
               </div>
               <div className="flex-1 min-w-0">
-                <div className="font-semibold text-foreground text-sm truncate">{c.subject}</div>
+                <div className="font-semibold text-foreground text-sm truncate">{c.title}</div>
                 <div className="text-xs text-muted-foreground mt-0.5">
-                  {c.category} · {c.createdAt}
-                  {c.replies.length > 0 && ` · ${c.replies.length} رد`}
+                  {COMPLAINT_TYPE_LABELS[c.type]} · {c.created_at.slice(0, 10)}
                 </div>
               </div>
-              <StatusPill tone={c.status === "تم الرد" ? "teal" : c.status === "مغلقة" ? "success" : "warning"}>
-                {c.status}
-              </StatusPill>
+              <StatusPill tone={statusTone[c.status]}>{COMPLAINT_STATUS_LABELS[c.status]}</StatusPill>
             </button>
           ))}
         </div>
@@ -206,8 +209,10 @@ export default function ComplaintsPage() {
           <div onClick={(e) => e.stopPropagation()} className="bg-card rounded-2xl shadow-warm-lg w-full max-w-lg max-h-[85vh] flex flex-col">
             <div className="flex items-center justify-between p-5 border-b border-border">
               <div>
-                <h3 className="font-bold text-foreground">{openComplaint.subject}</h3>
-                <div className="text-xs text-muted-foreground mt-1">{openComplaint.category} · {openComplaint.createdAt}</div>
+                <h3 className="font-bold text-foreground">{openComplaint.title}</h3>
+                <div className="text-xs text-muted-foreground mt-1">
+                  {COMPLAINT_TYPE_LABELS[openComplaint.type]} · {openComplaint.created_at.slice(0, 10)}
+                </div>
               </div>
               <button onClick={() => setOpenId(null)} className="h-9 w-9 grid place-items-center rounded-lg hover:bg-secondary transition">
                 <X className="h-4 w-4" />
@@ -216,32 +221,21 @@ export default function ComplaintsPage() {
 
             <div className="flex-1 overflow-y-auto scrollbar-thin p-5 space-y-3">
               <div className="rounded-xl bg-secondary/60 p-3 text-sm text-foreground">{openComplaint.description}</div>
-
-              {openComplaint.replies.map((r, i) => (
-                <div key={i} className={`flex ${r.from === "أنا" ? "justify-end" : "justify-start"}`}>
-                  <div className={`max-w-[80%] rounded-xl p-3 text-sm ${r.from === "أنا" ? "bg-primary text-primary-foreground" : "bg-secondary text-foreground"}`}>
-                    <div>{r.text}</div>
-                    <div className={`text-[11px] mt-1 ${r.from === "أنا" ? "text-primary-foreground/70" : "text-muted-foreground"}`}>{r.from} · {r.at}</div>
-                  </div>
-                </div>
-              ))}
-
-              {openComplaint.status === "مغلقة" && (
-                <p className="text-xs text-center text-muted-foreground py-2">تم إغلاق هذه الشكوى</p>
-              )}
+              <div className="flex items-center justify-between">
+                <StatusPill tone={statusTone[openComplaint.status]}>
+                  {COMPLAINT_STATUS_LABELS[openComplaint.status]}
+                </StatusPill>
+              </div>
             </div>
 
-            {openComplaint.status !== "مغلقة" && (
-              <div className="p-4 border-t border-border flex items-center gap-2">
-                <input
-                  value={replyText}
-                  onChange={(e) => setReplyText(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleSendReply()}
-                  placeholder="اكتبي ردًا أو استفسارًا إضافيًا..."
-                  className="flex-1 h-11 rounded-xl border border-border bg-card focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none px-3 text-sm"
-                />
-                <button onClick={handleSendReply} className="h-11 w-11 grid place-items-center rounded-xl bg-primary text-primary-foreground hover:bg-[color:var(--primary-dark)] transition shrink-0">
-                  <Send className="h-4 w-4" />
+            {openComplaint.status === "new" && (
+              <div className="p-4 border-t border-border">
+                <button
+                  onClick={() => handleDelete(openComplaint.id)}
+                  className="w-full inline-flex items-center justify-center gap-2 rounded-xl border border-destructive/30 text-destructive px-4 py-2.5 text-sm font-semibold hover:bg-destructive/10 transition"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  حذف الشكوى
                 </button>
               </div>
             )}
