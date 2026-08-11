@@ -35,14 +35,14 @@ const deductionRewardSchema = z.object({
     .min(3, "السبب يجب ألا يقل عن 3 أحرف")
     .max(300, "السبب طويل جدًا (300 حرف كحد أقصى)"),
   value: z
-    .number({ invalid_type_error: "القيمة مطلوبة" })
+    .number({ error: "القيمة مطلوبة" })
     .positive("القيمة يجب أن تكون أكبر من صفر")
     .max(1_000_000, "القيمة كبيرة بشكل غير منطقي"),
   date: z
     .string()
     .refine((v) => !Number.isNaN(Date.parse(v)), { message: "التاريخ غير صالح" }),
   type: z.enum(["reward", "deduction"], {
-    errorMap: () => ({ message: "النوع غير صالح" }),
+    error: "النوع غير صالح",
   }),
 });
 
