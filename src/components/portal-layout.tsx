@@ -7,9 +7,8 @@ import { useState, type ReactNode } from "react";
 import {
   LayoutDashboard, Clock, ListTodo, FileText, Briefcase, Users,
   Upload, LifeBuoy, BookOpen, Trophy, User, Search, Bell, ChevronRight,
-  ChevronsRight, Menu, X,
+  ChevronsRight, Menu, X, Gift,
 } from "lucide-react";
-
 type NavItem = { to: string; ar: string; en: string; icon: React.ComponentType<{ className?: string }> };
 
 const NAV: NavItem[] = [
@@ -21,6 +20,7 @@ const NAV: NavItem[] = [
   { to: "/employee/representatives", ar: "المناديب", en: "Representatives", icon: Users },
   { to: "/employee/uploads", ar: "رفع الشيتات", en: "Upload Center", icon: Upload },
   { to: "/employee/complaints", ar: "الشكاوى", en: "Complaints", icon: LifeBuoy },
+  { to: "/employee/deductions", ar: "الخصومات والمكافآت", en: "Deductions & Rewards", icon: Gift },
   { to: "/employee/library", ar: "المكتبة", en: "Library", icon: BookOpen },
   { to: "/employee/performance", ar: "الأداء", en: "Performance", icon: Trophy },
   { to: "/employee/profile", ar: "الملف الشخصي", en: "Profile", icon: User },

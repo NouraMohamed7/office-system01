@@ -1,54 +1,33 @@
 "use client";
 
-import { useMemo, useState } from "react";
+// src/app/manager/announcements/page.tsx
+//
+// نفس تصميم الصفحة الأصلية، لكن دلوقتي متربطة بالكامل بالباك اند:
+// - قائمة الأقسام بتتجاب من جدول department (مش هارد كودد).
+// - "كل الموظفين" = department_id = null.
+// - النشر والحذف بيحصل فعليًا على جدول announcements.
+// - عمود "المشاهدات" بيجيب العدد الحقيقي من announcement_seen.
+// - realtime: أي تعديل (من أي جهاز/مستخدم مدير تاني) بيحدّث القائمة فورًا.
+
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Card, PageHeader, Pill, StatCard } from "@/components/manager/primitives";
-import { Plus, Megaphone, Users, Building2, Eye, Trash2 } from "lucide-react";
+import { Plus, Megaphone, Users, Building2, Eye, Trash2, Loader2 } from "lucide-react";
+import {
+  getAnnouncements,
+  createAnnouncement,
+  deleteAnnouncement,
+  getDepartments,
+  getAnnouncementViewsMap,
+  subscribeAnnouncements,
+  type AnnouncementRow,
+  type DepartmentRow,
+} from "@/modules/announcements/api/announcements.api";
+import { useToast } from "@/components/toast";
 
-type Audience =
-  | "كل الموظفين"
-  | "قسم السوشيال ميديا"
-  | "قسم الكول سنتر"
-  | "قسم التسويق"
-  | "قسم المبيعات"
-  | "قسم التصميم";
+const ALL_EMPLOYEES_VALUE = "all"; // يمثل department_id = null في الفورم
 
-type Announcement = {
-  id: string;
-  title: string;
-  body: string;
-  audience: Audience;
-  date: Date;
-  views: number;
-  tone: "primary" | "warning" | "success" | "teal";
-};
-
-const audiences: Audience[] = [
-  "كل الموظفين",
-  "قسم السوشيال ميديا",
-  "قسم الكول سنتر",
-  "قسم التسويق",
-  "قسم المبيعات",
-  "قسم التصميم",
-];
-
-const toneByAudience: Record<Audience, Announcement["tone"]> = {
-  "كل الموظفين": "success",
-  "قسم السوشيال ميديا": "primary",
-  "قسم الكول سنتر": "teal",
-  "قسم التسويق": "warning",
-  "قسم المبيعات": "primary",
-  "قسم التصميم": "teal",
-};
-
-function daysAgo(n: number, hour = 12) {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  d.setHours(hour, 0, 0, 0);
-  return d;
-}
-
-function timeAgo(d: Date) {
-  const diffMs = Date.now() - d.getTime();
+function timeAgo(iso: string) {
+  const diffMs = Date.now() - new Date(iso).getTime();
   const mins = Math.floor(diffMs / 60000);
   if (mins < 1) return "الآن";
   if (mins < 60) return `قبل ${mins} دقيقة`;
@@ -58,65 +37,73 @@ function timeAgo(d: Date) {
   return `قبل ${days} يوم`;
 }
 
-const initialAnnouncements: Announcement[] = [
-  {
-    id: "a1",
-    title: "اجتماع فريق التسويق غدًا الساعة 11",
-    body: "",
-    audience: "قسم التسويق",
-    date: daysAgo(0, new Date().getHours() - 1),
-    views: 14,
-    tone: "primary",
-  },
-  {
-    id: "a2",
-    title: "تحديث سياسة الحضور والانصراف",
-    body: "",
-    audience: "كل الموظفين",
-    date: daysAgo(1),
-    views: 128,
-    tone: "warning",
-  },
-  {
-    id: "a3",
-    title: "إجازة رسمية يوم الخميس القادم",
-    body: "",
-    audience: "كل الموظفين",
-    date: daysAgo(2),
-    views: 140,
-    tone: "success",
-  },
-  {
-    id: "a4",
-    title: "ورشة تدريبية لفريق الكول سنتر",
-    body: "",
-    audience: "قسم الكول سنتر",
-    date: daysAgo(3),
-    views: 32,
-    tone: "teal",
-  },
-];
+// نلوّن حسب كون الإعلان عام أو لقسم محدد
+function toneFor(departmentId: number | null): "primary" | "success" {
+  return departmentId === null ? "success" : "primary";
+}
 
 export default function AnnouncementsPage() {
-  const [announcements, setAnnouncements] = useState<Announcement[]>(initialAnnouncements);
+  const showToast = useToast();
+
+  const [announcements, setAnnouncements] = useState<AnnouncementRow[]>([]);
+  const [departments, setDepartments] = useState<DepartmentRow[]>([]);
+  const [viewsMap, setViewsMap] = useState<Record<number, number>>({});
+  const [loading, setLoading] = useState(true);
+
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
-  const [audience, setAudience] = useState<Audience>("كل الموظفين");
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [audience, setAudience] = useState<string>(ALL_EMPLOYEES_VALUE);
+  const [publishing, setPublishing] = useState(false);
+  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+
+  const departmentNameById = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const d of departments) map.set(d.id, d.name);
+    return map;
+  }, [departments]);
+
+  const loadAll = useCallback(async () => {
+    try {
+      const [rows, deps] = await Promise.all([getAnnouncements(), getDepartments()]);
+      setAnnouncements(rows);
+      setDepartments(deps);
+
+      const views = await getAnnouncementViewsMap(rows.map((r) => r.id));
+      setViewsMap(views);
+    } catch (err) {
+      console.error(err);
+      showToast("error", "تعذر تحميل الإعلانات");
+    } finally {
+      setLoading(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    loadAll();
+    const unsubscribe = subscribeAnnouncements(() => loadAll());
+    return unsubscribe;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const sorted = useMemo(
-    () => [...announcements].sort((a, b) => b.date.getTime() - a.date.getTime()),
+    () =>
+      [...announcements].sort(
+        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      ),
     [announcements]
   );
 
   const stats = useMemo(() => {
     const total = announcements.length;
     const now = new Date();
-    const thisMonth = announcements.filter(
-      (a) => a.date.getMonth() === now.getMonth() && a.date.getFullYear() === now.getFullYear()
-    ).length;
-    const forAll = announcements.filter((a) => a.audience === "كل الموظفين").length;
+    const thisMonth = announcements.filter((a) => {
+      const d = new Date(a.created_at);
+      return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+    }).length;
+    const forAll = announcements.filter((a) => a.department_id === null).length;
     const forSpecific = total - forAll;
     return { total, thisMonth, forAll, forSpecific };
   }, [announcements]);
@@ -124,39 +111,48 @@ export default function AnnouncementsPage() {
   function resetForm() {
     setTitle("");
     setBody("");
-    setAudience("كل الموظفين");
+    setAudience(ALL_EMPLOYEES_VALUE);
   }
 
-  function publish() {
-    if (!title.trim()) return;
-    const newAnnouncement: Announcement = {
-      id: `a-${Date.now()}`,
-      title: title.trim(),
-      body: body.trim(),
-      audience,
-      date: new Date(),
-      views: 0,
-      tone: toneByAudience[audience],
-    };
-    setAnnouncements((prev) => [newAnnouncement, ...prev]);
-    resetForm();
-    setOpen(false);
+  async function publish() {
+    if (!title.trim() || publishing) return;
+    setPublishing(true);
+    try {
+      const department_id = audience === ALL_EMPLOYEES_VALUE ? null : Number(audience);
+      await createAnnouncement({
+        title: title.trim(),
+        details: body.trim(),
+        department_id,
+      });
+      showToast("success", "تم نشر الإعلان بنجاح");
+      resetForm();
+      setOpen(false);
+      await loadAll();
+    } catch (err) {
+      console.error(err);
+      showToast("error", "حدث خطأ أثناء نشر الإعلان");
+    } finally {
+      setPublishing(false);
+    }
   }
 
-  function deleteAnnouncement(id: string) {
-    setAnnouncements((prev) => prev.filter((a) => a.id !== id));
-    if (expandedId === id) setExpandedId(null);
+  async function handleDelete(id: number) {
+    setDeletingId(id);
+    try {
+      await deleteAnnouncement(id);
+      setAnnouncements((prev) => prev.filter((a) => a.id !== id));
+      if (expandedId === id) setExpandedId(null);
+      showToast("success", "تم حذف الإعلان");
+    } catch (err) {
+      console.error(err);
+      showToast("error", "تعذر حذف الإعلان");
+    } finally {
+      setDeletingId(null);
+    }
   }
 
-  function toggleExpand(a: Announcement) {
-    setExpandedId((prev) => {
-      const isOpening = prev !== a.id;
-      if (isOpening) {
-        // زيادة حقيقية لعدد المشاهدات عند فتح الإعلان لأول مرة في هذه الجلسة
-        setAnnouncements((all) => all.map((x) => (x.id === a.id ? { ...x, views: x.views + 1 } : x)));
-      }
-      return isOpening ? a.id : null;
-    });
+  function toggleExpand(a: AnnouncementRow) {
+    setExpandedId((prev) => (prev === a.id ? null : a.id));
   }
 
   return (
@@ -182,49 +178,67 @@ export default function AnnouncementsPage() {
       </div>
 
       <Card className="!p-0 overflow-hidden">
-        {sorted.length === 0 ? (
+        {loading ? (
+          <div className="flex items-center justify-center gap-2 p-10 text-sm text-muted-foreground">
+            <Loader2 className="size-4 animate-spin" /> جاري التحميل...
+          </div>
+        ) : sorted.length === 0 ? (
           <div className="p-10 text-center text-sm text-muted-foreground">لا توجد إعلانات بعد</div>
         ) : (
           <ul className="divide-y divide-border">
-            {sorted.map((a) => (
-              <li key={a.id} className="group">
-                <div
-                  onClick={() => toggleExpand(a)}
-                  className="row-hover flex flex-wrap items-center gap-4 p-4 hover:row-hover-active cursor-pointer"
-                >
-                  <div className="grid size-11 shrink-0 place-items-center rounded-xl pill-primary">
-                    <Megaphone className="size-5" />
-                  </div>
-                  <div className="min-w-[220px] flex-1">
-                    <div className="font-semibold">{a.title}</div>
-                    <div className="mt-0.5 text-xs text-muted-foreground">
-                      {a.audience} · {timeAgo(a.date)}
-                    </div>
-                  </div>
-                  <Pill tone={a.tone === "success" ? "success" : a.tone === "warning" ? "warning" : "primary"}>
-                    {a.audience === "كل الموظفين" ? "عام" : "قسم محدد"}
-                  </Pill>
-                  <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                    <Eye className="size-3.5" /> {a.views}
-                  </div>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      deleteAnnouncement(a.id);
-                    }}
-                    className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition"
-                    title="حذف الإعلان"
+            {sorted.map((a) => {
+              const isGeneral = a.department_id === null;
+              const audienceLabel = isGeneral
+                ? "كل الموظفين"
+                : departmentNameById.get(a.department_id!) ?? "قسم غير معروف";
+
+              return (
+                <li key={a.id} className="group">
+                  <div
+                    onClick={() => toggleExpand(a)}
+                    className="row-hover flex flex-wrap items-center gap-4 p-4 hover:row-hover-active cursor-pointer"
                   >
-                    <Trash2 className="size-4" />
-                  </button>
-                </div>
-                {expandedId === a.id && a.body && (
-                  <div className="px-4 pb-4 pe-[4.75rem]">
-                    <div className="rounded-xl bg-accent/30 p-3 text-sm text-muted-foreground">{a.body}</div>
+                    <div className="grid size-11 shrink-0 place-items-center rounded-xl pill-primary">
+                      <Megaphone className="size-5" />
+                    </div>
+                    <div className="min-w-[220px] flex-1">
+                      <div className="font-semibold">{a.title}</div>
+                      <div className="mt-0.5 text-xs text-muted-foreground">
+                        {audienceLabel} · {timeAgo(a.created_at)}
+                      </div>
+                    </div>
+                    <Pill tone={toneFor(a.department_id) === "success" ? "success" : "primary"}>
+                      {isGeneral ? "عام" : "قسم محدد"}
+                    </Pill>
+                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <Eye className="size-3.5" /> {viewsMap[a.id] ?? 0}
+                    </div>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDelete(a.id);
+                      }}
+                      disabled={deletingId === a.id}
+                      className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition disabled:opacity-60"
+                      title="حذف الإعلان"
+                    >
+                      {deletingId === a.id ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        <Trash2 className="size-4" />
+                      )}
+                    </button>
                   </div>
-                )}
-              </li>
-            ))}
+                  {expandedId === a.id && a.details && (
+                    <div className="px-4 pb-4 pe-[4.75rem]">
+                      <div className="rounded-xl bg-accent/30 p-3 text-sm text-muted-foreground whitespace-pre-wrap">
+                        {a.details}
+                      </div>
+                    </div>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         )}
       </Card>
@@ -233,6 +247,7 @@ export default function AnnouncementsPage() {
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4"
           onClick={() => {
+            if (publishing) return;
             setOpen(false);
             resetForm();
           }}
@@ -263,12 +278,13 @@ export default function AnnouncementsPage() {
                 <span className="mb-1 block text-xs text-muted-foreground">الجمهور المستهدف</span>
                 <select
                   value={audience}
-                  onChange={(e) => setAudience(e.target.value as Audience)}
+                  onChange={(e) => setAudience(e.target.value)}
                   className="h-10 w-full rounded-xl border border-border bg-background px-3 text-sm outline-none"
                 >
-                  {audiences.map((a) => (
-                    <option key={a} value={a}>
-                      {a}
+                  <option value={ALL_EMPLOYEES_VALUE}>كل الموظفين</option>
+                  {departments.map((d) => (
+                    <option key={d.id} value={String(d.id)}>
+                      {d.name}
                     </option>
                   ))}
                 </select>
@@ -277,18 +293,21 @@ export default function AnnouncementsPage() {
             <div className="mt-6 flex justify-end gap-2">
               <button
                 onClick={() => {
+                  if (publishing) return;
                   setOpen(false);
                   resetForm();
                 }}
-                className="rounded-xl border border-border bg-background px-4 py-2 text-sm font-semibold hover:bg-accent"
+                disabled={publishing}
+                className="rounded-xl border border-border bg-background px-4 py-2 text-sm font-semibold hover:bg-accent disabled:opacity-60"
               >
                 إلغاء
               </button>
               <button
                 onClick={publish}
-                disabled={!title.trim()}
-                className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary-dark disabled:opacity-40 disabled:cursor-not-allowed"
+                disabled={!title.trim() || publishing}
+                className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary-dark disabled:opacity-40 disabled:cursor-not-allowed"
               >
+                {publishing && <Loader2 className="size-4 animate-spin" />}
                 نشر الإعلان
               </button>
             </div>
