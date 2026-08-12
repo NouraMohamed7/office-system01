@@ -1,7 +1,4 @@
-// ============================================================
-// أضيفي الكود ده في src/modules/approvals/api/approvals.api.ts
-// (فوق أي كود موجود عندك بالفعل في نفس الملف)
-// ============================================================
+import { supabase } from "@/lib/supabase/client";
 
 export async function getPendingApprovalsCount(): Promise<number> {
   const { count, error } = await supabase
