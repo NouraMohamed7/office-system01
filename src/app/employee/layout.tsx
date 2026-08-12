@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase/client";
 import { getCurrentUserRole } from "@/modules/auth/api/auth.api";
 import { ROLE_ID } from "@/constants";
+import { AnnouncementPopup } from "@/components/announcement-popup";
 
 export default function EmployeeLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -47,5 +48,11 @@ export default function EmployeeLayout({ children }: { children: React.ReactNode
     );
   }
 
-  return <>{children}</>;
+  return (
+    <>
+      {children}
+      {/* Global modal — بيظهر تلقائيًا فوق أي صفحة الموظف فاتحها لو فيه إعلان جديد لسه ما شافوش */}
+      <AnnouncementPopup />
+    </>
+  );
 }

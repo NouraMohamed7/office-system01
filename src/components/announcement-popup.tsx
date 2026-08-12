@@ -3,8 +3,8 @@
 // src/components/announcement-popup.tsx
 //
 // بوب أب بيظهر في نص الشاشة للموظف لما يبقى عنده إعلان جديد لسه ما شافوش.
-// مش مربوط بصفحة الداشبورد — حطه مرة واحدة في src/app/employee/layout.tsx
-// عشان يشتغل من أي صفحة الموظف يفتحها (زي أي global modal).
+// متركب مرة واحدة في src/app/employee/layout.tsx عشان يشتغل من أي صفحة
+// الموظف يفتحها (زي أي global modal) — مفيش صفحة إعلانات منفصلة.
 //
 // السلوك:
 // 1) أول ما الكومبوننت يعمل mount بيجيب كل الإعلانات غير المشاهدة.
@@ -49,6 +49,7 @@ export function AnnouncementPopup() {
 
   // أول تحميل
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount، الـ setState بيحصل جوه دالة async بعد await
     loadUnseen();
   }, [loadUnseen]);
 

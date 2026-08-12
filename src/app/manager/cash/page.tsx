@@ -1,29 +1,21 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Card, PageHeader, Pill, StatCard } from "@/components/manager/primitives";
-import { Plus, Wallet, MoreVertical, Trash2 } from "lucide-react";
+import { Plus, Wallet, MoreVertical, Trash2, Paperclip, Loader2 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, PieChart, Pie, Cell, Tooltip } from "recharts";
+import { CashRow, CashType, createCash, deleteCash, fetchCash } from "@/modules/cash/api/cash.api";
 
 // ============================================================
-// الخزنة — صفحة واحدة موحّدة لإدارة كل حركة الفلوس (دخل ومصروف)
-// دمج صفحتي "الخزنة" و"المصروفات" القديمتين في صفحة واحدة.
-// مفيش أي علاقة بالموظفين هنا، الصفحة دي بتنظم الفلوس بس.
+// الخزنة — متصلة بالباك الحقيقي (جدول cash + create-cash + delete-cash)
+// ملاحظات مهمة:
+// - مفيش تعديل (update) على العمليات، الباك مش بيدعم ده.
+// - التاريخ بيتحدد من السيرفر وقت الإنشاء، مش بناخده من المستخدم.
+// - مفيش "رصيد افتتاحي" في الباك، فالرصيد بيتحسب من مجموع الحركات بس
+//   (STARTING_BALANCE هنا = 0، غيّرها لو فعلاً عندك رصيد افتتاحي حقيقي متفق عليه).
 // ============================================================
 
-type Kind = "دخل" | "مصروف";
-
-type Tx = {
-  id: string;
-  date: Date;
-  kind: Kind;
-  amount: number; // رقم موجب دايمًا، الإشارة بتتحدد من kind
-  category?: string; // تصنيف حر (غالبًا للمصروفات)
-  who?: string; // المسؤول عن العملية
-  spentOn?: string; // اتصرف على ايه
-};
-
-const STARTING_BALANCE = 855940;
+const STARTING_BALANCE = 0;
 
 const CATEGORY_PALETTE = [
   "var(--primary)",
@@ -37,11 +29,8 @@ function colorForCategory(cat: string, knownCats: string[]) {
   return CATEGORY_PALETTE[idx % CATEGORY_PALETTE.length];
 }
 
-function daysAgo(n: number, hour = 12) {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  d.setHours(hour, 0, 0, 0);
-  return d;
+function toDate(iso: string) {
+  return new Date(iso);
 }
 
 function formatDate(d: Date) {
@@ -65,40 +54,75 @@ function formatMoney(n: number) {
   return n.toLocaleString();
 }
 
-const initialTx: Tx[] = [
-  { id: "seed-1", date: daysAgo(4), kind: "مصروف", amount: 45000, category: "إيجار", who: "أحمد", spentOn: "إيجار المحل" },
-  { id: "seed-2", date: daysAgo(3), kind: "دخل", amount: 12000, spentOn: "مبيعات نقدي" },
-  { id: "seed-3", date: daysAgo(2, 10), kind: "مصروف", amount: 820, category: "ضيافة", who: "سارة", spentOn: "مياه وحاجات ضيافة للمكتب" },
-  { id: "seed-4", date: daysAgo(2, 18), kind: "مصروف", amount: 4820, category: "توريد بضاعة", who: "دينا", spentOn: "توريد بضاعة جديدة" },
-  { id: "seed-5", date: daysAgo(1), kind: "دخل", amount: 25000, spentOn: "مبيعات أونلاين" },
-  { id: "seed-6", date: daysAgo(0), kind: "مصروف", amount: 2400, category: "إعلانات", who: "أحمد", spentOn: "حملة إعلانات فيسبوك" },
-  { id: "seed-7", date: daysAgo(3), kind: "مصروف", amount: 45000, category: "رواتب", who: "أحمد", spentOn: "رواتب الشهر" },
-];
+// نوع العرض بالعربي — مربوط بقيم الـ enum الحقيقية في الباك (income / expenses)
+type KindAr = "دخل" | "مصروف";
+const KIND_TO_DB: Record<KindAr, CashType> = { "دخل": "income", "مصروف": "expenses" };
+const DB_TO_KIND: Record<CashType, KindAr> = { income: "دخل", expenses: "مصروف" };
 
 export default function CashPage() {
-  const [txs, setTxs] = useState<Tx[]>(initialTx);
-  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [rows, setRows] = useState<CashRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const [openMenuId, setOpenMenuId] = useState<number | null>(null);
   const [showForm, setShowForm] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
 
   // فلاتر الجدول
   const [search, setSearch] = useState("");
-  const [fKind, setFKind] = useState<"all" | Kind>("all");
+  const [fKind, setFKind] = useState<"all" | KindAr>("all");
   const [fWho, setFWho] = useState("الكل");
   const [fCat, setFCat] = useState("الكل");
   const [fDate, setFDate] = useState<"all" | "today" | "week" | "month">("all");
 
   // فورم إضافة عملية
-  const [formKind, setFormKind] = useState<Kind>("دخل");
+  const [formKind, setFormKind] = useState<KindAr>("دخل");
   const [formAmount, setFormAmount] = useState("");
   const [formCat, setFormCat] = useState("");
   const [formWho, setFormWho] = useState("");
   const [formSpentOn, setFormSpentOn] = useState("");
-  const [formDate, setFormDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [formReceipt, setFormReceipt] = useState<File | null>(null);
+
+  // ---- تحميل البيانات الحقيقية ----
+  async function loadCash() {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const data = await fetchCash();
+      setRows(data);
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : "تعذر تحميل بيانات الخزنة");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadCash();
+  }, []);
+
+  // ---- تحويل صفوف الباك لشكل العرض ----
+  const txs = useMemo(
+    () =>
+      rows.map((r) => ({
+        id: r.id,
+        date: toDate(r.date),
+        kind: DB_TO_KIND[r.type],
+        amount: Number(r.value),
+        category: r.category ?? undefined,
+        who: r.responsible_by ?? undefined,
+        spentOn: r.cause ?? undefined,
+        receiptUrl: r.receipt_url ?? undefined,
+      })),
+    [rows]
+  );
 
   // ---- ترتيب زمني تصاعدي + حساب الرصيد الجاري بعد كل عملية ----
   const chronological = useMemo(() => {
     const sorted = [...txs].sort((a, b) => a.date.getTime() - b.date.getTime());
-    const { list } = sorted.reduce<{ list: (Tx & { bal: number })[]; running: number }>(
+    const { list } = sorted.reduce<{ list: (typeof sorted[number] & { bal: number })[]; running: number }>(
       (acc, t) => {
         const running = acc.running + (t.kind === "دخل" ? t.amount : -t.amount);
         return { list: [...acc.list, { ...t, bal: running }], running };
@@ -160,31 +184,49 @@ export default function CashPage() {
     });
   }, [ledgerDesc, fKind, fWho, fCat, fDate, search]);
 
-  function addTransaction() {
+  // ---- إضافة عملية فعليًا على الباك ----
+  async function addTransaction() {
     const amt = Number(formAmount);
     if (!amt || amt <= 0) return;
-    const newTx: Tx = {
-      id: `tx-${Date.now()}`,
-      date: new Date(formDate),
-      kind: formKind,
-      amount: amt,
-      category: formCat.trim() || undefined,
-      who: formWho.trim() || undefined,
-      spentOn: formSpentOn.trim() || undefined,
-    };
-    setTxs((prev) => [...prev, newTx]);
-    setFormAmount("");
-    setFormCat("");
-    setFormWho("");
-    setFormSpentOn("");
-    setFormKind("دخل");
-    setFormDate(new Date().toISOString().slice(0, 10));
-    setShowForm(false);
+
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      await createCash({
+        type: KIND_TO_DB[formKind],
+        value: amt,
+        category: formCat.trim() || undefined,
+        cause: formSpentOn.trim() || undefined,
+        responsible_by: formWho.trim() || undefined,
+        receipt: formReceipt ?? undefined,
+      });
+      await loadCash();
+      setFormAmount("");
+      setFormCat("");
+      setFormWho("");
+      setFormSpentOn("");
+      setFormReceipt(null);
+      setFormKind("دخل");
+      setShowForm(false);
+    } catch (e) {
+      setSubmitError(e instanceof Error ? e.message : "فشل تسجيل الحركة");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
-  function deleteTransaction(id: string) {
-    setTxs((prev) => prev.filter((t) => t.id !== id));
+  // ---- حذف عملية فعليًا من الباك ----
+  async function deleteTransaction(id: number) {
+    setDeletingId(id);
     setOpenMenuId(null);
+    try {
+      await deleteCash(id);
+      setRows((prev) => prev.filter((r) => r.id !== id));
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "فشل حذف السجل");
+    } finally {
+      setDeletingId(null);
+    }
   }
 
   function exportCsv() {
@@ -209,6 +251,28 @@ export default function CashPage() {
     a.download = `الخزنة-${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
+  }
+
+  if (loading) {
+    return (
+      <div className="flex h-64 items-center justify-center gap-2 text-sm text-muted-foreground">
+        <Loader2 className="size-4 animate-spin" /> جاري تحميل الخزنة...
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <Card className="space-y-3 text-center">
+        <div className="text-sm text-destructive">{loadError}</div>
+        <button
+          onClick={loadCash}
+          className="rounded-lg border border-border bg-background px-3 py-2 text-xs font-semibold hover:bg-accent/40"
+        >
+          إعادة المحاولة
+        </button>
+      </Card>
+    );
   }
 
   return (
@@ -264,12 +328,6 @@ export default function CashPage() {
               className="rounded-lg border border-border bg-background px-3 py-2 text-sm tabular outline-none focus:ring-2 focus:ring-primary/40"
             />
             <input
-              type="date"
-              value={formDate}
-              onChange={(e) => setFormDate(e.target.value)}
-              className="rounded-lg border border-border bg-background px-3 py-2 text-sm tabular outline-none focus:ring-2 focus:ring-primary/40"
-            />
-            <input
               type="text"
               placeholder="التصنيف (اختياري)"
               value={formCat}
@@ -283,6 +341,15 @@ export default function CashPage() {
               onChange={(e) => setFormWho(e.target.value)}
               className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary/40"
             />
+            <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-dashed border-border bg-background px-3 py-2 text-xs text-muted-foreground hover:bg-accent/40">
+              <Paperclip className="size-3.5" />
+              {formReceipt ? formReceipt.name : "إرفاق إيصال (اختياري)"}
+              <input
+                type="file"
+                className="hidden"
+                onChange={(e) => setFormReceipt(e.target.files?.[0] ?? null)}
+              />
+            </label>
           </div>
           <input
             type="text"
@@ -291,11 +358,16 @@ export default function CashPage() {
             onChange={(e) => setFormSpentOn(e.target.value)}
             className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary/40"
           />
+          <div className="text-[11px] text-muted-foreground">
+            التاريخ بيتسجل تلقائيًا بتاريخ اليوم وقت الحفظ (مش قابل للتعديل).
+          </div>
+          {submitError && <div className="text-xs text-destructive">{submitError}</div>}
           <button
             onClick={addTransaction}
-            disabled={!formAmount || Number(formAmount) <= 0}
-            className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90 transition disabled:opacity-40 disabled:cursor-not-allowed"
+            disabled={!formAmount || Number(formAmount) <= 0 || submitting}
+            className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90 transition disabled:opacity-40 disabled:cursor-not-allowed"
           >
+            {submitting && <Loader2 className="size-3.5 animate-spin" />}
             تأكيد العملية
           </button>
         </Card>
@@ -416,13 +488,14 @@ export default function CashPage() {
                 <th>التصنيف</th>
                 <th>المسؤول</th>
                 <th>اتصرف على ايه</th>
+                <th>الإيصال</th>
                 <th></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
               {filteredLedger.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-4 py-8 text-center text-xs text-muted-foreground">
+                  <td colSpan={9} className="px-4 py-8 text-center text-xs text-muted-foreground">
                     لا توجد عمليات مطابقة
                   </td>
                 </tr>
@@ -442,13 +515,23 @@ export default function CashPage() {
                     <td className="px-4 py-3 text-xs text-muted-foreground">{l.category ?? "—"}</td>
                     <td className="px-4 py-3 text-xs text-muted-foreground">{l.who ?? "—"}</td>
                     <td className="px-4 py-3 text-xs text-muted-foreground">{l.spentOn ?? "—"}</td>
+                    <td className="px-4 py-3 text-xs">
+                      {l.receiptUrl ? (
+                        <a href={l.receiptUrl} target="_blank" rel="noreferrer" className="text-primary hover:underline">
+                          عرض
+                        </a>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </td>
                     <td className="px-4 py-3">
                       <div className="relative inline-block">
                         <button
                           onClick={() => setOpenMenuId((v) => (v === l.id ? null : l.id))}
-                          className="grid size-8 place-items-center rounded-lg hover:bg-accent"
+                          disabled={deletingId === l.id}
+                          className="grid size-8 place-items-center rounded-lg hover:bg-accent disabled:opacity-40"
                         >
-                          <MoreVertical className="size-4" />
+                          {deletingId === l.id ? <Loader2 className="size-4 animate-spin" /> : <MoreVertical className="size-4" />}
                         </button>
                         {openMenuId === l.id && (
                           <div className="absolute left-0 z-10 mt-1 w-40 rounded-xl border border-border bg-background p-1 text-xs shadow-lg">

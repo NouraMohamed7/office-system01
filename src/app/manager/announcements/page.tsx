@@ -2,12 +2,11 @@
 
 // src/app/manager/announcements/page.tsx
 //
-// نفس تصميم الصفحة الأصلية، لكن دلوقتي متربطة بالكامل بالباك اند:
-// - قائمة الأقسام بتتجاب من جدول department (مش هارد كودد).
-// - "كل الموظفين" = department_id = null.
-// - النشر والحذف بيحصل فعليًا على جدول announcements.
-// - عمود "المشاهدات" بيجيب العدد الحقيقي من announcement_seen.
-// - realtime: أي تعديل (من أي جهاز/مستخدم مدير تاني) بيحدّث القائمة فورًا.
+// قائمة الأقسام بتتجاب من جدول department (مش هارد كودد).
+// "كل الموظفين" = department_id = null.
+// النشر والحذف بيحصل فعليًا على جدول announcements.
+// عمود "المشاهدات" بيجيب العدد الحقيقي من announcement_seen.
+// realtime: أي تعديل (من أي جهاز/مستخدم مدير تاني) بيحدّث القائمة فورًا.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Card, PageHeader, Pill, StatCard } from "@/components/manager/primitives";
@@ -82,6 +81,7 @@ export default function AnnouncementsPage() {
   }, []);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount + realtime subscribe، الـ setState بيحصل جوه دالة async بعد await
     loadAll();
     const unsubscribe = subscribeAnnouncements(() => loadAll());
     return unsubscribe;
@@ -177,7 +177,7 @@ export default function AnnouncementsPage() {
         <StatCard dense label="لأقسام محددة" value={String(stats.forSpecific)} icon={Building2} tone="warning" />
       </div>
 
-      <Card className="!p-0 overflow-hidden">
+      <Card className="p-0! overflow-hidden">
         {loading ? (
           <div className="flex items-center justify-center gap-2 p-10 text-sm text-muted-foreground">
             <Loader2 className="size-4 animate-spin" /> جاري التحميل...
@@ -201,7 +201,7 @@ export default function AnnouncementsPage() {
                     <div className="grid size-11 shrink-0 place-items-center rounded-xl pill-primary">
                       <Megaphone className="size-5" />
                     </div>
-                    <div className="min-w-[220px] flex-1">
+                    <div className="min-w-55 flex-1">
                       <div className="font-semibold">{a.title}</div>
                       <div className="mt-0.5 text-xs text-muted-foreground">
                         {audienceLabel} · {timeAgo(a.created_at)}
@@ -230,7 +230,7 @@ export default function AnnouncementsPage() {
                     </button>
                   </div>
                   {expandedId === a.id && a.details && (
-                    <div className="px-4 pb-4 pe-[4.75rem]">
+                    <div className="px-4 pb-4 pe-19">
                       <div className="rounded-xl bg-accent/30 p-3 text-sm text-muted-foreground whitespace-pre-wrap">
                         {a.details}
                       </div>
