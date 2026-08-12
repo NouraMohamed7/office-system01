@@ -21,7 +21,6 @@ export type DepartmentRow = {
   id: number;
   name: string;
 };
-
 export type AnnouncementRow = {
   id: number;
   title: string;
