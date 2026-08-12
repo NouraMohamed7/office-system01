@@ -102,3 +102,99 @@ export async function getMyProfile(): Promise<MyProfile | null> {
 
 // ⚠️ ملحوظة: عمود "المدير المباشر" (manager) مش موجود في جدول users حسب الدوك،
 // فمقدرش أجيبه من الباك دلوقتي — الحقل ده مشال من صفحة البروفايل لحد ما الباك يضيفه.
+
+// ============================================================
+// أضيفي الكود ده في آخر src/modules/profile/api/profile.api.ts
+// (تحت getMyProfile اللي موجودة عندك بالفعل)
+// ============================================================
+
+// ---------------- إعدادات الإشعارات (notify_settings) ----------------
+
+export interface MyNotifySettings {
+  id: number
+  system_notify: boolean
+  attendance_notify: boolean
+  task_notify: boolean
+  cash_notify: boolean
+  comment_settings: boolean
+  report_notify: boolean
+}
+
+// ⚠️ جدول notify_settings فيه عمود manager_id بس — يعني ده مخصص لإعدادات المدير.
+// لو ده هيتستخدم في صفحة بروفايل الموظف كمان، لازم تتأكد مع الباك إند
+// هل فيه عمود مشابه للموظفين ولا الجدول ده للمديرين بس.
+export async function getMyNotifySettings(): Promise<MyNotifySettings | null> {
+  const { data: authData, error: authError } = await supabase.auth.getUser()
+  if (authError) throw authError
+
+  const authUser = authData?.user
+  if (!authUser) return null
+
+  const { data, error } = await supabase
+    .from('notify_settings')
+    .select('*')
+    .eq('manager_id', authUser.id)
+    .maybeSingle()
+
+  if (error) throw error
+  return data as MyNotifySettings | null
+}
+
+export async function updateMyNotifySettings(
+  patch: Partial<Omit<MyNotifySettings, 'id'>>
+): Promise<MyNotifySettings> {
+  const { data: authData, error: authError } = await supabase.auth.getUser()
+  if (authError) throw authError
+
+  const authUser = authData?.user
+  if (!authUser) throw new Error('لازم تسجل الدخول الأول')
+
+  const { data, error } = await supabase
+    .from('notify_settings')
+    .update(patch)
+    .eq('manager_id', authUser.id)
+    .select()
+    .maybeSingle()
+
+  if (error) throw error
+
+  // ⚠️ الدوك موثّق فيها بس "Update rows" لـ notify_settings، مفيش Insert موثّق.
+  // لو مفيش صف أصلاً (data === null) يبقى الحساب ده لسه معملوش له صف افتراضي،
+  // ولازم تتأكد مع الباك: هل بينشئ الصف ده تلقائي عند إنشاء حساب مدير جديد،
+  // ولا محتاجين نعمل upsert من الفرونت بدل update؟ سيبتها كده لحد ما تتأكد.
+  if (!data) {
+    throw new Error('مفيش إعدادات إشعارات لحسابك بعد — لازم تتأكد مع الباك إند')
+  }
+
+  return data as MyNotifySettings
+}
+
+// ---------------- الأمان (تغيير الباسورد + تسجيل الخروج) ----------------
+
+// بنتحقق من الباسورد الحالي بمحاولة signInWithPassword بيه (زي ما موثق في الدوك)،
+// لو نجحت يبقى صح، وبعدين نستخدم auth.updateUser لتغييره.
+export async function changeMyPassword(
+  currentPassword: string,
+  newPassword: string
+): Promise<void> {
+  const { data: authData, error: authError } = await supabase.auth.getUser()
+  if (authError) throw authError
+
+  const email = authData?.user?.email
+  if (!email) throw new Error('تعذر التحقق من بريدك الإلكتروني')
+
+  const { error: reauthError } = await supabase.auth.signInWithPassword({
+    email,
+    password: currentPassword,
+  })
+  if (reauthError) throw new Error('كلمة المرور الحالية غير صحيحة')
+
+  const { error: updateError } = await supabase.auth.updateUser({ password: newPassword })
+  if (updateError) throw updateError
+}
+
+// scope: 'global' بيسجل خروج من كل الأجهزة مش بس الجهاز الحالي
+export async function signOutEverywhere(): Promise<void> {
+  const { error } = await supabase.auth.signOut({ scope: 'global' })
+  if (error) throw error
+}

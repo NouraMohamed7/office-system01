@@ -1,121 +1,127 @@
-// src/app/performance/page.tsx
+// src/app/employee/performance/page.tsx
 "use client";
 
+import { useEffect, useMemo, useState } from "react";
 import { PortalLayout, Card } from "@/components/portal-layout";
-import { useMemo } from "react";
-import { Trophy, TrendingUp, TrendingDown, Medal, Sparkles, Users } from "lucide-react";
+import {
+  Award,
+  Clock,
+  FileCheck2,
+  FileText,
+  ListChecks,
+  Sparkles,
+  TrendingDown,
+  TrendingUp,
+  UserCheck,
+} from "lucide-react";
+import {
+  getMyPerformanceLedger,
+  getMyPerformanceSummary,
+  PERFORMANCE_POINT_RULES,
+  type PerformanceLedgerRow,
+  type PerformancePointSummaryRow,
+} from "@/modules/performance/api/performance.api";
 
-type PointEvent = {
-  id: string;
+const BONUS_RULES = PERFORMANCE_POINT_RULES.filter((r) => r.value >= 0);
+const PENALTY_RULES = PERFORMANCE_POINT_RULES.filter((r) => r.value < 0);
+
+const BREAKDOWN_ITEMS: {
+  key: keyof PerformancePointSummaryRow;
   label: string;
-  value: number; // موجب = مكافأة / سالب = خصم
-  date: Date;
-};
-
-type Rule = {
-  id: string;
-  label: string;
-  value: number;
-};
-
-type Teammate = {
-  name: string;
-  dept: string;
-  points: number;
-  isYou?: boolean;
-};
-
-function daysAgo(n: number) {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  return d;
-}
-
-const CURRENT_EMPLOYEE = { name: "سارة إبراهيم", dept: "التسويق" };
-
-// رصيد النقاط المتراكم قبل بداية السجل الظاهر تحت
-const BASE_POINTS = 820;
-
-const pointEvents: PointEvent[] = [
-  { id: "pe1", label: "تحقيق Target", value: 25, date: daysAgo(2) },
-  { id: "pe2", label: "إنهاء مهمة", value: 10, date: daysAgo(4) },
-  { id: "pe3", label: "رفع تقرير", value: 8, date: daysAgo(6) },
-  { id: "pe4", label: "تأخير", value: -5, date: daysAgo(9) },
-  { id: "pe5", label: "حضور يومي", value: 5, date: daysAgo(9) },
-  { id: "pe6", label: "شيت معتمد", value: 12, date: daysAgo(15) },
-  { id: "pe7", label: "مساعدة الفريق", value: 8, date: daysAgo(20) },
-  { id: "pe8", label: "غياب", value: -20, date: daysAgo(35) },
-  { id: "pe9", label: "حضور يومي", value: 5, date: daysAgo(40) },
+  icon: React.ElementType;
+}[] = [
+  { key: "present_points", label: "الحضور", icon: UserCheck },
+  { key: "on_time_points", label: "الالتزام بالمواعيد", icon: Clock },
+  { key: "report_submitted_points", label: "التقارير المُرسلة", icon: FileText },
+  { key: "report_accepted_points", label: "التقارير المقبولة", icon: FileCheck2 },
+  { key: "file_approved_points", label: "الملفات المعتمدة", icon: Award },
+  { key: "task_completed_points", label: "المهام المكتملة", icon: ListChecks },
 ];
 
-const BONUS_RULES: Rule[] = [
-  { id: "r1", label: "حضور يومي", value: 5 },
-  { id: "r2", label: "إنهاء مهمة", value: 10 },
-  { id: "r3", label: "رفع تقرير", value: 8 },
-  { id: "r4", label: "شيت معتمد", value: 12 },
-  { id: "r5", label: "تحقيق Target", value: 25 },
-  { id: "r6", label: "بدون تأخير", value: 5 },
-  { id: "r7", label: "مساعدة الفريق", value: 8 },
-  { id: "r8", label: "مهمة عاجلة", value: 15 },
-];
+const PAGE_SIZE = 15;
 
-const PENALTY_RULES: Rule[] = [
-  { id: "r9", label: "غياب", value: -20 },
-  { id: "r10", label: "تأخير", value: -5 },
-  { id: "r11", label: "رفض مهمة", value: -15 },
-  { id: "r12", label: "مخالفة تعليمات", value: -10 },
-  { id: "r13", label: "ملف خاطئ", value: -8 },
-  { id: "r14", label: "عدم إرسال تقرير", value: -12 },
-];
-
-const TEAM: Teammate[] = [
-  { name: "نورا حسن", dept: "السوشيال ميديا", points: 933 },
-  { name: "محمود علي", dept: "الكول سنتر", points: 907 },
-  { name: CURRENT_EMPLOYEE.name, dept: CURRENT_EMPLOYEE.dept, points: BASE_POINTS + pointEvents.reduce((s, e) => s + e.value, 0), isYou: true },
-  { name: "كريم سعيد", dept: "المبيعات", points: 820 },
-  { name: "دينا فتحي", dept: "التصميم", points: 807 },
-];
-
-function formatDate(d: Date) {
-  return d.toLocaleDateString("ar-EG", { day: "numeric", month: "long" });
+function formatDate(iso: string) {
+  return new Date(iso).toLocaleDateString("ar-EG", { day: "numeric", month: "long" });
 }
 
 export default function PerformancePage() {
-  // ترتيب زمني تصاعدي مع رصيد متراكم — بدون إعادة تعيين متغير خارجي (reduce نظيف)
-  const chronological = useMemo(() => {
-    const sorted = [...pointEvents].sort((a, b) => a.date.getTime() - b.date.getTime());
-    const { list } = sorted.reduce<{ list: (PointEvent & { bal: number })[]; running: number }>(
-      (acc, ev) => {
-        const running = acc.running + ev.value;
-        return { list: [...acc.list, { ...ev, bal: running }], running };
-      },
-      { list: [], running: BASE_POINTS }
-    );
-    return list;
+  const [summary, setSummary] = useState<PerformancePointSummaryRow | null>(null);
+  const [ledger, setLedger] = useState<PerformanceLedgerRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      setLoading(true);
+      setError(null);
+      try {
+        const s = await getMyPerformanceSummary();
+        if (cancelled) return;
+        setSummary(s);
+
+        const l = await getMyPerformanceLedger(s?.total_points ?? 0, 200);
+        if (!cancelled) setLedger(l);
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "تعذر تحميل بيانات الأداء");
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    load();
+    return () => {
+      cancelled = true;
+    };
   }, []);
-
-  const ledgerDesc = useMemo(() => [...chronological].reverse(), [chronological]);
-
-  const currentPoints = chronological.length ? chronological[chronological.length - 1].bal : BASE_POINTS;
 
   const monthTrend = useMemo(() => {
     const now = Date.now();
     const day = 86400000;
-    const thisMonth = pointEvents.filter((e) => now - e.date.getTime() <= 30 * day).reduce((s, e) => s + e.value, 0);
-    const lastMonth = pointEvents
-      .filter((e) => now - e.date.getTime() > 30 * day && now - e.date.getTime() <= 60 * day)
-      .reduce((s, e) => s + e.value, 0);
+    const thisMonth = ledger
+      .filter((e) => now - new Date(e.created_at).getTime() <= 30 * day)
+      .reduce((s, e) => s + e.points, 0);
+    const lastMonth = ledger
+      .filter((e) => {
+        const diff = now - new Date(e.created_at).getTime();
+        return diff > 30 * day && diff <= 60 * day;
+      })
+      .reduce((s, e) => s + e.points, 0);
     return { thisMonth, lastMonth, diff: thisMonth - lastMonth };
-  }, []);
+  }, [ledger]);
 
-  const team = useMemo(() => [...TEAM].sort((a, b) => b.points - a.points), []);
-  const rank = team.findIndex((t) => t.isYou) + 1;
-  const topPoints = team[0]?.points ?? currentPoints;
-  const progressPct = Math.min(100, Math.round((currentPoints / topPoints) * 100));
+  const visibleLedger = useMemo(() => ledger.slice(0, visibleCount), [ledger, visibleCount]);
+
+  const currentPoints = summary?.total_points ?? 0;
+  const percent = Math.min(100, Math.max(0, summary?.percent ?? 0));
+
+  if (loading) {
+    return (
+      <PortalLayout title="الأداء" subtitle="نقاطك وسجل عملياتك">
+        <div className="flex min-h-[50vh] items-center justify-center">
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-border border-t-primary" />
+        </div>
+      </PortalLayout>
+    );
+  }
+
+  if (error) {
+    return (
+      <PortalLayout title="الأداء" subtitle="نقاطك وسجل عملياتك">
+        <Card className="p-6 border-destructive/30 bg-destructive/5 text-destructive text-sm">
+          حدث خطأ أثناء تحميل بيانات الأداء: {error}
+        </Card>
+      </PortalLayout>
+    );
+  }
 
   return (
-    <PortalLayout title="الأداء" subtitle="نقاطك، ترتيبك بين الفريق، وسجل عملياتك">
-      {/* البطل: نقاطك وترتيبك */}
+    <PortalLayout title="الأداء" subtitle="نقاطك وسجل عملياتك">
+      {/* البطل: نقاطك ونسبة أدائك */}
       <Card className="p-8 mb-6 relative overflow-hidden">
         <div className="absolute inset-0 bg-gradient-to-bl from-primary/5 to-transparent pointer-events-none" />
         <div className="relative grid md:grid-cols-[auto_1fr] gap-8 items-center">
@@ -126,124 +132,118 @@ export default function PerformancePage() {
                 <div className="text-[11px] text-muted-foreground">نقطة</div>
               </div>
             </div>
-            <div className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-warning/20 text-[oklch(0.48_0.11_82)] px-3 py-1 text-xs font-bold">
-              <Trophy className="h-3.5 w-3.5" /> الترتيب #{rank} من {team.length}
-            </div>
           </div>
           <div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <h2 className="text-2xl font-bold text-foreground">
-                {CURRENT_EMPLOYEE.name} · {CURRENT_EMPLOYEE.dept}
-              </h2>
-            </div>
-            <p className="text-sm text-muted-foreground mt-2">
-              {monthTrend.diff >= 0
+            <p className="text-sm text-muted-foreground">
+              {ledger.length === 0
+                ? "لسه معندكش أي عمليات نقاط مسجّلة."
+                : monthTrend.diff >= 0
                 ? `جمعت ${monthTrend.thisMonth} نقطة الشهر ده، ده أكتر من اللي فات بـ ${monthTrend.diff} نقطة 📈`
                 : `جمعت ${monthTrend.thisMonth} نقطة الشهر ده، أقل من اللي فات بـ ${Math.abs(monthTrend.diff)} نقطة، ركّزي شوية 📉`}
             </p>
-            <div className="flex items-center gap-2 mt-4 text-sm">
-              {monthTrend.diff >= 0 ? (
-                <TrendingUp className="h-4 w-4 text-success" />
-              ) : (
-                <TrendingDown className="h-4 w-4 text-destructive" />
-              )}
-              <span className={monthTrend.diff >= 0 ? "text-success font-semibold" : "text-destructive font-semibold"}>
-                {monthTrend.diff >= 0 ? "+" : ""}
-                {monthTrend.diff} نقطة عن الشهر اللي فات
-              </span>
-            </div>
-            <div className="mt-5">
-              <div className="flex items-center justify-between text-xs text-muted-foreground mb-1.5">
-                <span>مسافتك عن صاحب أعلى نقاط في الفريق</span>
-                <span className="tabular-nums">
-                  {currentPoints} / {topPoints}
+            {ledger.length > 0 && (
+              <div className="flex items-center gap-2 mt-4 text-sm">
+                {monthTrend.diff >= 0 ? (
+                  <TrendingUp className="h-4 w-4 text-success" />
+                ) : (
+                  <TrendingDown className="h-4 w-4 text-destructive" />
+                )}
+                <span className={monthTrend.diff >= 0 ? "text-success font-semibold" : "text-destructive font-semibold"}>
+                  {monthTrend.diff >= 0 ? "+" : ""}
+                  {monthTrend.diff} نقطة عن الشهر اللي فات
                 </span>
               </div>
+            )}
+            <div className="mt-5">
+              <div className="flex items-center justify-between text-xs text-muted-foreground mb-1.5">
+                <span>نسبة أدائك</span>
+                <span className="tabular-nums">{Math.round(percent)}%</span>
+              </div>
               <div className="h-2 rounded-full bg-secondary overflow-hidden">
-                <div style={{ width: `${progressPct}%` }} className="h-full rounded-full bg-primary transition-all" />
+                <div style={{ width: `${percent}%` }} className="h-full rounded-full bg-primary transition-all" />
               </div>
             </div>
           </div>
         </div>
       </Card>
 
-      <div className="grid gap-6 lg:grid-cols-3 mb-6">
+      {/* تفاصيل النقاط */}
+      <div className="mb-6">
+        <h2 className="mb-3 text-base font-bold text-foreground">تفاصيل النقاط</h2>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+          {BREAKDOWN_ITEMS.map(({ key, label, icon: Icon }) => (
+            <Card key={key} className="p-4">
+              <div className="flex items-center gap-2.5">
+                <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary">
+                  <Icon className="size-4" strokeWidth={1.75} />
+                </div>
+                <div className="min-w-0">
+                  <p className="truncate text-[11px] text-muted-foreground">{label}</p>
+                  <p className="text-lg font-bold tabular-nums text-foreground">
+                    {summary ? Number(summary[key] ?? 0) : 0}
+                  </p>
+                </div>
+              </div>
+            </Card>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid gap-6 mb-6">
         {/* سجل النقاط */}
-        <Card className="lg:col-span-2 p-0! overflow-hidden">
+        <Card className="p-0! overflow-hidden">
           <div className="border-b border-border p-4 font-bold flex items-center gap-2">
             <Sparkles className="h-4 w-4 text-primary" /> سجل نقاطك
           </div>
-          {ledgerDesc.length === 0 ? (
+          {ledger.length === 0 ? (
             <div className="p-8 text-center text-sm text-muted-foreground">لا توجد عمليات نقاط مسجّلة بعد</div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-accent/40 text-xs text-muted-foreground">
-                  <tr className="[&>th]:px-4 [&>th]:py-3 [&>th]:text-right">
-                    <th>التاريخ</th>
-                    <th>العملية</th>
-                    <th>القيمة</th>
-                    <th>رصيدك بعدها</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {ledgerDesc.map((ev) => (
-                    <tr key={ev.id} className="hover:bg-accent/20 transition">
-                      <td className="px-4 py-3 tabular-nums text-muted-foreground">{formatDate(ev.date)}</td>
-                      <td className="px-4 py-3 font-medium text-foreground">{ev.label}</td>
-                      <td className={`px-4 py-3 font-bold tabular-nums ${ev.value >= 0 ? "text-success" : "text-destructive"}`}>
-                        {ev.value > 0 ? `+${ev.value}` : ev.value}
-                      </td>
-                      <td className="px-4 py-3 tabular-nums font-semibold text-foreground">{ev.bal}</td>
+            <>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-accent/40 text-xs text-muted-foreground">
+                    <tr className="[&>th]:px-4 [&>th]:py-3 [&>th]:text-right">
+                      <th>التاريخ</th>
+                      <th>العملية</th>
+                      <th>القيمة</th>
+                      <th>رصيدك بعدها</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Card>
-
-        {/* ترتيب الفريق */}
-        <Card className="p-4">
-          <div className="font-bold flex items-center gap-2 mb-3">
-            <Users className="h-4 w-4 text-primary" /> ترتيب الفريق
-          </div>
-          <div className="space-y-2">
-            {team.map((t, i) => (
-              <div
-                key={t.name}
-                className={`flex items-center gap-3 rounded-xl p-2.5 ${t.isYou ? "bg-primary/10 border border-primary/30" : "hover:bg-accent/30"}`}
-              >
-                <span
-                  className={`grid size-7 shrink-0 place-items-center rounded-full text-xs font-bold ${
-                    i === 0
-                      ? "bg-warning text-white"
-                      : i === 1
-                      ? "bg-muted-foreground/30 text-foreground"
-                      : i === 2
-                      ? "bg-primary/30 text-primary"
-                      : "bg-accent text-muted-foreground"
-                  }`}
-                >
-                  {i < 3 ? <Medal className="size-3.5" /> : i + 1}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-semibold text-foreground">
-                    {t.isYou ? `${t.name} (أنت)` : t.name}
-                  </div>
-                  <div className="truncate text-[11px] text-muted-foreground">{t.dept}</div>
-                </div>
-                <div className="text-sm font-bold tabular-nums text-foreground">{t.points}</div>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {visibleLedger.map((ev) => (
+                      <tr key={ev.id} className="hover:bg-accent/20 transition">
+                        <td className="px-4 py-3 tabular-nums text-muted-foreground">{formatDate(ev.created_at)}</td>
+                        <td className="px-4 py-3 font-medium text-foreground">{ev.reason}</td>
+                        <td className={`px-4 py-3 font-bold tabular-nums ${ev.points >= 0 ? "text-success" : "text-destructive"}`}>
+                          {ev.points > 0 ? `+${ev.points}` : ev.points}
+                        </td>
+                        <td className="px-4 py-3 tabular-nums font-semibold text-foreground">{ev.balance}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
-            ))}
-          </div>
+              {visibleCount < ledger.length && (
+                <div className="border-t border-border p-3 text-center">
+                  <button
+                    onClick={() => setVisibleCount((c) => c + PAGE_SIZE)}
+                    className="text-xs font-semibold text-primary hover:underline"
+                  >
+                    عرض المزيد ({ledger.length - visibleCount} متبقي)
+                  </button>
+                </div>
+              )}
+            </>
+          )}
         </Card>
       </div>
 
       {/* مرجع قواعد النقاط */}
       <Card className="p-6">
         <h3 className="font-bold text-foreground mb-1">إزاي تكسب أو تخسر نقاط</h3>
-        <p className="text-xs text-muted-foreground mb-4">قائمة مرجعية بس — نقاطك بتتحدث تلقائيًا من المدير حسب أدائك.</p>
+        <p className="text-xs text-muted-foreground mb-4">
+          قائمة مرجعية بس — نقاطك بتتحدث تلقائيًا من النظام حسب أدائك (الحضور، المهام، التقارير، الملفات).
+        </p>
         <div className="grid gap-6 md:grid-cols-2">
           <div>
             <div className="text-xs font-bold text-success mb-2">تُمنح نقاط عند</div>

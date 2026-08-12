@@ -1,57 +1,148 @@
-// src/app/page.tsx
 "use client";
 
 import { PortalLayout, Card, StatusPill } from "@/components/portal-layout";
 import { useToast } from "@/components/toast";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
+import {
+  getDashboardStats, getAttendanceToday, getDailyReportToday,
+  checkIn, getRecentNotifications, subscribeToNotifications,
+  type DashboardStats, type ActivityItem,
+} from "@/modules/dashboard/api/dashboard.api";
 import {
   CheckCircle2, ClipboardList, Target, Bell, Check,
   Clock, FileText, Upload, LifeBuoy,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState, useCallback } from "react";
+import { useRouter } from "next/navigation";
 
-const INITIAL_CHECKLIST = [
-  { id: 1, ar: "تسجيل الحضور", done: true },
-  { id: 2, ar: "مراجعة المهام", done: true },
-  { id: 3, ar: "رفع التقرير اليومي", done: false },
-  { id: 4, ar: "رفع شيت العمل", done: false },
-];
-
-const ACTIVITIES = [
-  { color: "bg-success", ar: "تم اعتماد شيت الليدز اليومي", time: "منذ 12 دقيقة" },
-  { color: "bg-primary", ar: "تم إسناد مهمة جديدة: تصميم بوست إطلاق", time: "منذ 45 دقيقة" },
-  { color: "bg-teal", ar: "علّق أحمد على تقريرك اليومي", time: "منذ ساعتين" },
-  { color: "bg-warning", ar: "تذكير: موعد تسليم تقرير الأسبوع", time: "منذ 3 ساعات" },
-  { color: "bg-destructive", ar: "تأخر تسليم مهمة: إعداد سكربت المكالمات", time: "أمس" },
-  { color: "bg-primary", ar: "حصلت على +15 نقطة أداء", time: "أمس" },
-];
+type ChecklistItem = { id: string; ar: string; done: boolean; source: "db" | "local" };
 
 const QUICK_ACTIONS = [
-  { icon: Clock, ar: "تسجيل حضور", message: "تم تسجيل حضورك بنجاح" },
-  { icon: FileText, ar: "إضافة تقرير", message: "جاري تحويلك لصفحة التقارير..." },
-  { icon: Upload, ar: "رفع شيت", message: "جاري تحويلك لصفحة رفع الشيتات..." },
-  { icon: LifeBuoy, ar: "فتح شكوى", message: "جاري تحويلك لصفحة الشكاوى..." },
+  { icon: Clock, ar: "تسجيل حضور", kind: "checkin" as const },
+  { icon: FileText, ar: "إضافة تقرير", kind: "nav" as const, href: "/employee/reports" },
+  { icon: Upload, ar: "رفع شيت", kind: "nav" as const, href: "/employee/uploads" },
+  { icon: LifeBuoy, ar: "فتح شكوى", kind: "nav" as const, href: "/employee/complaints" },
 ];
+
+function timeAgo(iso: string) {
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return "الآن";
+  if (mins < 60) return `منذ ${mins} دقيقة`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `منذ ${hrs} ساعة`;
+  return `منذ ${Math.floor(hrs / 24)} يوم`;
+}
 
 export default function Dashboard() {
   const showToast = useToast();
-  const [items, setItems] = useState(INITIAL_CHECKLIST);
+  const router = useRouter();
+  const { user, loading: userLoading, error: userError } = useCurrentUser();
 
-  const toggle = (id: number) => {
+  const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [activities, setActivities] = useState<ActivityItem[]>([]);
+  const [items, setItems] = useState<ChecklistItem[]>([
+    { id: "attendance", ar: "تسجيل الحضور", done: false, source: "db" },
+    { id: "review_tasks", ar: "مراجعة المهام", done: false, source: "local" },
+    { id: "daily_report", ar: "رفع التقرير اليومي", done: false, source: "db" },
+    { id: "work_sheet", ar: "رفع شيت العمل", done: false, source: "local" },
+  ]);
+  const [loadingData, setLoadingData] = useState(true);
+  const [checkingIn, setCheckingIn] = useState(false);
+
+  const loadDashboard = useCallback(async () => {
+    if (!user) return;
+    setLoadingData(true);
+    try {
+      const [statsRes, attendanceRes, reportRes, activityRes] = await Promise.all([
+        getDashboardStats(user.id),
+        getAttendanceToday(user.id),
+        getDailyReportToday(user.id),
+        getRecentNotifications(user.id),
+      ]);
+
+      setStats(statsRes);
+      setActivities(activityRes);
+      setItems((prev) =>
+        prev.map((it) => {
+          if (it.id === "attendance") return { ...it, done: !!attendanceRes?.check_in_at };
+          if (it.id === "daily_report") return { ...it, done: !!reportRes };
+          return it;
+        })
+      );
+    } catch (err) {
+      console.error(err);
+      showToast("error", "حصل خطأ أثناء تحميل بيانات الداشبورد");
+    } finally {
+      setLoadingData(false);
+    }
+  }, [user, showToast]);
+
+  useEffect(() => {
+    loadDashboard();
+  }, [loadDashboard]);
+
+  useEffect(() => {
+    if (!user) return;
+    const unsubscribe = subscribeToNotifications(user.id, () => {
+      getRecentNotifications(user.id).then(setActivities).catch(console.error);
+      getDashboardStats(user.id).then(setStats).catch(console.error);
+    });
+    return unsubscribe;
+  }, [user]);
+
+  const toggleLocal = (id: string) => {
     setItems((xs) => {
-      const updated = xs.map((x) => x.id === id ? { ...x, done: !x.done } : x);
+      const updated = xs.map((x) => (x.id === id && x.source === "local" ? { ...x, done: !x.done } : x));
       const target = updated.find((x) => x.id === id);
-      if (target?.done) {
-        showToast("success", `تم إنجاز: ${target.ar}`);
-      }
+      if (target?.done) showToast("success", `تم إنجاز: ${target.ar}`);
       return updated;
     });
   };
 
-  const handleQuickAction = (ar: string, message: string) => {
-    showToast("success", message);
+  const handleQuickAction = async (action: (typeof QUICK_ACTIONS)[number]) => {
+    if (action.kind === "checkin") {
+      if (checkingIn) return;
+      setCheckingIn(true);
+      try {
+        await checkIn();
+        showToast("success", "تم تسجيل حضورك بنجاح");
+        loadDashboard();
+      } catch (err: any) {
+        showToast("error", err?.message ?? "تعذر تسجيل الحضور");
+      } finally {
+        setCheckingIn(false);
+      }
+      return;
+    }
+    router.push(action.href);
   };
 
-  const today = new Date().toLocaleDateString("ar-EG", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+  const today = new Date().toLocaleDateString("ar-EG", {
+    weekday: "long", year: "numeric", month: "long", day: "numeric",
+  });
+
+  const initials = user?.name
+    ? user.name.trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("")
+    : "؟";
+
+  if (userLoading) {
+    return (
+      <PortalLayout title="الرئيسية" subtitle="نظرة سريعة على يومك">
+        <div className="animate-pulse text-sm text-muted-foreground p-6">جاري التحميل...</div>
+      </PortalLayout>
+    );
+  }
+
+  if (userError || !user) {
+    return (
+      <PortalLayout title="الرئيسية" subtitle="نظرة سريعة على يومك">
+        <Card className="p-6 text-sm text-destructive">
+          تعذر تحميل بيانات المستخدم{userError ? `: ${userError}` : ""}
+        </Card>
+      </PortalLayout>
+    );
+  }
 
   return (
     <PortalLayout title="الرئيسية" subtitle="نظرة سريعة على يومك">
@@ -59,16 +150,23 @@ export default function Dashboard() {
       <Card className="relative overflow-hidden p-6 mb-6 bg-gradient-to-l from-primary/10 via-primary/5 to-transparent">
         <div className="absolute -top-16 -left-16 h-64 w-64 rounded-full bg-primary/10 blur-3xl" />
         <div className="relative flex flex-wrap items-center gap-4">
-          <div className="h-16 w-16 rounded-full bg-teal text-teal-foreground grid place-items-center text-xl font-bold shrink-0 ring-4 ring-card">
-            ك.م
+          <div className="h-16 w-16 rounded-full bg-teal text-teal-foreground grid place-items-center text-xl font-bold shrink-0 ring-4 ring-card overflow-hidden">
+            {user.photo_url ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={user.photo_url} alt={user.name} className="h-full w-full object-cover" />
+            ) : (
+              initials
+            )}
           </div>
           <div className="min-w-0 flex-1">
             <div className="text-xs text-muted-foreground">{today}</div>
-            <h2 className="text-2xl font-bold text-foreground">صباح الخير، كريم 👋</h2>
-            <div className="text-sm text-muted-foreground">قسم التسويق · Team Leader · مصر</div>
+            <h2 className="text-2xl font-bold text-foreground">صباح الخير، {user.name || "..."} 👋</h2>
+            <div className="text-sm text-muted-foreground">
+              {[user.department_name, user.position_title, user.branch_country].filter(Boolean).join(" · ") || "—"}
+            </div>
           </div>
           <div className="hidden sm:flex items-center gap-2 text-sm text-primary font-semibold bg-primary/10 rounded-xl px-4 py-2">
-            <Target className="h-4 w-4" /> نسبة إنجازك اليوم 68%
+            <Target className="h-4 w-4" /> نسبة إنجازك اليوم {stats?.targetPercent ?? 0}%
           </div>
         </div>
       </Card>
@@ -76,10 +174,10 @@ export default function Dashboard() {
       {/* Stats */}
       <div className="text-sm font-semibold text-muted-foreground mb-3">ملخص اليوم</div>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <StatCard icon={ClipboardList} label="المهام الجديدة" value="7" tone="primary" trend="+2 اليوم" />
-        <StatCard icon={CheckCircle2} label="المهام المكتملة" value="12" tone="success" trend="+3 اليوم" />
-        <StatCard icon={Target} label="نسبة تحقيق التارجت" value="68%" tone="primary" ring />
-        <StatCard icon={Bell} label="الإشعارات الجديدة" value="4" tone="teal" trend="اليوم" />
+        <StatCard icon={ClipboardList} label="المهام الجديدة" value={loadingData ? "—" : String(stats?.newTasksCount ?? 0)} tone="primary" />
+        <StatCard icon={CheckCircle2} label="المهام المكتملة" value={loadingData ? "—" : String(stats?.completedTasksCount ?? 0)} tone="success" />
+        <StatCard icon={Target} label="نسبة تحقيق التارجت" value={loadingData ? "—" : `${stats?.targetPercent ?? 0}%`} tone="primary" percent={stats?.targetPercent ?? 0} />
+        <StatCard icon={Bell} label="الإشعارات الجديدة" value={loadingData ? "—" : String(stats?.unreadNotificationsCount ?? 0)} tone="teal" />
       </div>
 
       <div className="grid lg:grid-cols-3 gap-6">
@@ -96,9 +194,12 @@ export default function Dashboard() {
               {items.map((it) => (
                 <button
                   key={it.id}
-                  onClick={() => toggle(it.id)}
+                  onClick={() => it.source === "local" && toggleLocal(it.id)}
+                  disabled={it.source === "db"}
+                  title={it.source === "db" ? "بيتحدث تلقائيًا من بياناتك" : undefined}
                   className={`w-full flex items-center gap-3 p-3 rounded-xl border transition-all text-right
-                    ${it.done ? "bg-success/5 border-success/20" : "bg-background border-border hover:border-primary/30"}`}
+                    ${it.done ? "bg-success/5 border-success/20" : "bg-background border-border hover:border-primary/30"}
+                    ${it.source === "db" ? "cursor-default opacity-90" : ""}`}
                 >
                   <div className={`h-6 w-6 rounded-lg grid place-items-center border-2 transition
                     ${it.done ? "bg-success border-success" : "border-muted-foreground/30"}`}>
@@ -119,8 +220,9 @@ export default function Dashboard() {
               {QUICK_ACTIONS.map((q) => (
                 <button
                   key={q.ar}
-                  onClick={() => handleQuickAction(q.ar, q.message)}
-                  className="flex flex-col items-center gap-2 p-4 rounded-xl border-2 border-primary/30 text-primary hover:bg-primary/5 hover:border-primary transition"
+                  onClick={() => handleQuickAction(q)}
+                  disabled={q.kind === "checkin" && checkingIn}
+                  className="flex flex-col items-center gap-2 p-4 rounded-xl border-2 border-primary/30 text-primary hover:bg-primary/5 hover:border-primary transition disabled:opacity-50"
                 >
                   <q.icon className="h-5 w-5" />
                   <span className="text-sm font-semibold">{q.ar}</span>
@@ -135,12 +237,15 @@ export default function Dashboard() {
           <h3 className="font-bold text-foreground mb-4">آخر الأنشطة</h3>
           <div className="relative space-y-4">
             <div className="absolute right-1.5 top-2 bottom-2 w-px bg-border" />
-            {ACTIVITIES.map((a, i) => (
-              <div key={i} className="relative flex gap-3 pr-6">
-                <div className={`absolute right-0 top-1.5 h-3 w-3 rounded-full ring-4 ring-card ${a.color}`} />
+            {activities.length === 0 && !loadingData && (
+              <div className="text-sm text-muted-foreground">لا يوجد نشاط حديث</div>
+            )}
+            {activities.map((a) => (
+              <div key={a.id} className="relative flex gap-3 pr-6">
+                <div className={`absolute right-0 top-1.5 h-3 w-3 rounded-full ring-4 ring-card bg-${a.tone}`} />
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm text-foreground">{a.ar}</div>
-                  <div className="text-xs text-muted-foreground mt-0.5">{a.time}</div>
+                  <div className="text-sm text-foreground">{a.message}</div>
+                  <div className="text-xs text-muted-foreground mt-0.5">{timeAgo(a.time)}</div>
                 </div>
               </div>
             ))}
@@ -159,11 +264,11 @@ export default function Dashboard() {
   );
 }
 
-function StatCard({ icon: Icon, label, value, tone, trend, ring }: {
+function StatCard({ icon: Icon, label, value, tone, percent }: {
   icon: React.ComponentType<{ className?: string }>;
   label: string; value: string;
   tone: "primary" | "success" | "teal" | "warning";
-  trend?: string; ring?: boolean;
+  percent?: number;
 }) {
   const toneBg = {
     primary: "bg-primary/10 text-primary",
@@ -177,19 +282,18 @@ function StatCard({ icon: Icon, label, value, tone, trend, ring }: {
         <div className={`h-10 w-10 rounded-xl grid place-items-center ${toneBg}`}>
           <Icon className="h-5 w-5" />
         </div>
-        {ring && (
+        {typeof percent === "number" && (
           <div className="relative h-14 w-14">
             <svg viewBox="0 0 36 36" className="h-14 w-14 -rotate-90">
               <circle cx="18" cy="18" r="15" fill="none" stroke="currentColor" strokeWidth="3" className="text-border" />
               <circle cx="18" cy="18" r="15" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"
-                strokeDasharray={`${68 * 0.94} 100`} className="text-primary" />
+                strokeDasharray={`${Math.min(percent, 100) * 0.94} 100`} className="text-primary" />
             </svg>
           </div>
         )}
       </div>
       <div className="mt-3 text-3xl font-bold text-primary tabular-nums">{value}</div>
       <div className="text-sm text-muted-foreground mt-1">{label}</div>
-      {trend && <div className="text-xs text-success mt-2 font-semibold">{trend}</div>}
     </Card>
   );
 }

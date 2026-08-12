@@ -13,7 +13,7 @@
 //    وهو (الموظف) فاتح الصفحة، البوب أب يظهر فورًا من غير refresh.
 // 4) لما الموظف يضغط "تم الاطلاع" بننده mark_announcement_seen ونقفل.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Megaphone, X } from "lucide-react";
 import {
   getUnseenAnnouncementsWithDetails,
@@ -27,6 +27,23 @@ export function AnnouncementPopup() {
   const [current, setCurrent] = useState<AnnouncementRow | null>(null);
   const [closing, setClosing] = useState(false);
 
+  // ⚠️ الباگ الأصلي: loadUnseen كانت useCallback بـ deps فاضية، فكانت
+  // بتقفل (closure) على قيمة current وقت أول render بس (null) وتفضل
+  // شايفاها null للأبد، حتى لو فعليًا فيه إعلان معروض حاليًا. النتيجة:
+  // أي إعلان جديد ينشره المدير وهو نفس اللحظة اللي فيها إعلان معروض،
+  // كان بيرجّع نفس الإعلان المعروض تاني للـ queue (لأنه لسه فعليًا
+  // "غير مشاهد" في الداتابيز لحد ما المستخدم يضغط "تم الاطلاع") —
+  // فكان بيتكرر ظهوره تاني بعد القفل.
+  //
+  // الحل: نستخدم ref بدل ما نعتمد على الـ closure، عشان نقرأ القيمة
+  // الحالية الفعلية لـ current من غير ما نضطر نغيّر مرجع loadUnseen
+  // (لو ضفنا current في deps مباشرة، كان هيعيد الاشتراك في الـ realtime
+  // channel كل مرة current تتغير، وده أوفرهيد مش محتاجينه).
+  const currentRef = useRef<AnnouncementRow | null>(null);
+  useEffect(() => {
+    currentRef.current = current;
+  }, [current]);
+
   const loadUnseen = useCallback(async () => {
     try {
       const rows = await getUnseenAnnouncementsWithDetails();
@@ -35,7 +52,7 @@ export function AnnouncementPopup() {
         setQueue((prev) => {
           const existingIds = new Set([
             ...prev.map((r) => r.id),
-            ...(current ? [current.id] : []),
+            ...(currentRef.current ? [currentRef.current.id] : []),
           ]);
           const fresh = rows.filter((r) => !existingIds.has(r.id));
           return [...prev, ...fresh];
@@ -44,7 +61,6 @@ export function AnnouncementPopup() {
     } catch {
       // بوب أب معلوماتي بس — لو فشل الجلب منسكتش الموظف بخطأ، هيتحاول تاني المرة الجاية
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // أول تحميل

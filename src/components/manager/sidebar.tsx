@@ -1,15 +1,17 @@
 "use client";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   Home, Users, Clock, ListChecks, FileText, Truck, UploadCloud,
-  MessageSquare, Wallet, Landmark, Gift, BookOpen, TrendingUp,
+  MessageSquare, Landmark, Gift, BookOpen, TrendingUp,
   Megaphone, Settings, User, LogOut, ChevronsLeft, ChevronsRight,
-  BarChart3,
+  BarChart3, Loader2,
 } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { Building2 } from "lucide-react";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { supabase } from "@/lib/supabase/client";
 
 const nav = [
   { to: "/manager/dashboard", icon: Home, ar: "الرئيسية", en: "Dashboard" },
@@ -32,6 +34,12 @@ const nav = [
   { to: "/manager/profile", icon: User, ar: "الملف الشخصي", en: "Profile" },
 ] as const;
 
+function initialsOf(name: string) {
+  const trimmed = name.trim();
+  if (!trimmed) return "؟";
+  return trimmed[0];
+}
+
 export function ManagerSidebar({
   mobileOpen,
   onToggleMobile,
@@ -40,7 +48,25 @@ export function ManagerSidebar({
   onToggleMobile: () => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
   const pathname = usePathname();
+  const router = useRouter();
+  const { user } = useCurrentUser();
+
+  const displayName = user?.name || "...";
+  const roleLabel = user?.position_title || "مدير";
+
+  async function handleLogout() {
+    if (loggingOut) return;
+    setLoggingOut(true);
+    try {
+      await supabase.auth.signOut();
+    } catch (err) {
+      console.error(err);
+    } finally {
+      router.replace("/login");
+    }
+  }
 
   return (
     <>
@@ -66,12 +92,17 @@ export function ManagerSidebar({
         </div>
         {!collapsed && (
           <div className="mt-4 flex items-center gap-3 rounded-xl bg-accent/50 p-2.5">
-            <div className="grid size-9 shrink-0 place-items-center rounded-full bg-primary/15 text-primary font-bold">
-              أ
+            <div className="grid size-9 shrink-0 place-items-center overflow-hidden rounded-full bg-primary/15 text-primary font-bold">
+              {user?.photo_url ? (
+                // eslint-disable-next-line @next/next/no-img-element -- صورة شخصية صغيرة، مش محتاجة next/image optimization هنا
+                <img src={user.photo_url} alt={displayName} className="h-full w-full object-cover" />
+              ) : (
+                initialsOf(displayName)
+              )}
             </div>
             <div className="min-w-0 flex-1">
-              <div className="truncate text-[13px] font-semibold">أحمد الشريف</div>
-              <div className="truncate text-[11px] text-muted-foreground">مدير</div>
+              <div className="truncate text-[13px] font-semibold">{displayName}</div>
+              <div className="truncate text-[11px] text-muted-foreground">{roleLabel}</div>
             </div>
           </div>
         )}
@@ -108,18 +139,19 @@ export function ManagerSidebar({
       </nav>
 
       <div className="border-t border-border p-2">
-        <Link
-          href="/login"
-          className="mb-1 flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-destructive hover:bg-destructive/10"
+        <button
+          onClick={handleLogout}
+          disabled={loggingOut}
+          className="mb-1 flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-destructive hover:bg-destructive/10 disabled:opacity-60"
         >
-          <LogOut className="size-4.5" strokeWidth={1.75} />
+          {loggingOut ? <Loader2 className="size-4.5 animate-spin" /> : <LogOut className="size-4.5" strokeWidth={1.75} />}
           {!collapsed && (
-            <div className="flex flex-col leading-tight">
-              <span className="font-medium">تسجيل الخروج</span>
+            <div className="flex flex-col items-start leading-tight">
+              <span className="font-medium">{loggingOut ? "جاري تسجيل الخروج..." : "تسجيل الخروج"}</span>
               <span className="text-[10px] text-destructive/70">Logout</span>
             </div>
           )}
-        </Link>
+        </button>
         <button
           onClick={() => setCollapsed((v) => !v)}
           className="flex w-full items-center justify-center gap-2 rounded-xl bg-accent/50 px-3 py-2 text-xs text-muted-foreground hover:bg-accent"
