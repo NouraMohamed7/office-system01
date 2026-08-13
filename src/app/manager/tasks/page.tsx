@@ -11,19 +11,17 @@ import {
 } from "@/modules/tasks/api/tasks.api";
 import type { TaskRow, TaskStatus, TaskPriority, UserLite, DepartmentLite, TaskComment } from "@/types/tasks";
 import { TASK_PRIORITY_LABEL_AR } from "@/types/tasks";
+import { TASK_STATUS_TONE, TASK_PRIORITY_TONE } from "@/lib/constants";
 
 // أعمدة الـ Kanban = enum task_status الحقيقي بالظبط
+// Tone values consolidated from TASK_STATUS_TONE in src/lib/constants.ts
 const columns: { id: TaskStatus; label: string; tone: string }[] = [
-  { id: "pending", label: "جديدة", tone: "muted" },
-  { id: "processing", label: "جاري التنفيذ", tone: "primary" },
-  { id: "completed", label: "مكتملة", tone: "success" },
-  { id: "late", label: "متأخرة", tone: "danger" },
-  { id: "cancelled", label: "ملغية", tone: "muted" },
+  { id: "pending", label: "جديدة", tone: TASK_STATUS_TONE.pending },
+  { id: "processing", label: "جاري التنفيذ", tone: TASK_STATUS_TONE.processing },
+  { id: "completed", label: "مكتملة", tone: TASK_STATUS_TONE.completed },
+  { id: "late", label: "متأخرة", tone: TASK_STATUS_TONE.late },
+  { id: "cancelled", label: "ملغية", tone: TASK_STATUS_TONE.cancelled },
 ];
-
-const PRIORITY_TONE: Record<TaskPriority, "danger" | "warning" | "muted"> = {
-  urgent: "danger", high: "danger", medium: "warning", low: "muted",
-};
 
 function formatDue(dateStr?: string) {
   if (!dateStr) return "—";
@@ -40,7 +38,7 @@ function todayInputValue() {
 // مستخدم من الـ Pill component الأساسي.
 function PriorityPill({ p }: { p: TaskPriority }) {
   return (
-    <Pill tone={PRIORITY_TONE[p]}>
+    <Pill tone={TASK_PRIORITY_TONE[p]}>
       <span className="inline-flex items-center gap-1">
         {p === "urgent" && <Zap className="size-3" />}
         {TASK_PRIORITY_LABEL_AR[p]}
