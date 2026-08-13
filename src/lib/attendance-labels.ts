@@ -1,85 +1,25 @@
-// src/lib/attendance-labels.ts
-// مصدر واحد لترجمة قيم الـ enums الحقيقية من الباك (إنجليزي) لعرض عربي في الواجهة.
-// القيم دي مأخوذة من public.attendance_type / public.leave_type / public.leave_status
-// زي ما ظاهر في Database > Enumerated Types بالسوبابيز.
+/**
+ * src/lib/attendance-labels.ts
+ * 
+ * ⚠️ DEPRECATED — Re-export shim for backward compatibility.
+ * All attendance constants have been consolidated into src/lib/constants.ts
+ * 
+ * Please update imports to use:
+ *   import { ATTENDANCE_STATUS_LABEL, LEAVE_TYPE_LABEL, ... } from "@/lib/constants"
+ * 
+ * This file will be removed in a future refactor.
+ */
 
-// ============================================================
-// attendance_type: present, absent, late, on_leave, not_checked_in, leave_early
-// ============================================================
-export type AttendanceStatus =
-  | "present"
-  | "absent"
-  | "late"
-  | "on_leave"
-  | "not_checked_in"
-  | "leave_early";
-
-export const ATTENDANCE_STATUS_LABEL: Record<AttendanceStatus, string> = {
-  present: "حاضر",
-  absent: "غائب",
-  late: "متأخر",
-  on_leave: "إجازة",
-  not_checked_in: "لم يسجل",
-  leave_early: "انصراف مبكر",
-};
-
-export type Tone = "success" | "warning" | "danger" | "teal" | "muted" | "primary";
-
-export const ATTENDANCE_STATUS_TONE: Record<AttendanceStatus, Tone> = {
-  present: "success",
-  late: "warning",
-  absent: "danger",
-  on_leave: "teal",
-  not_checked_in: "muted",
-  leave_early: "warning",
-};
-
-// ============================================================
-// leave_type: vacation, sick, permission
-// ============================================================
-export type LeaveType = "vacation" | "sick" | "permission";
-
-export const LEAVE_TYPE_LABEL: Record<LeaveType, string> = {
-  vacation: "إجازة سنوية",
-  sick: "إجازة مرضية",
-  permission: "استئذان",
-};
-
-export const LEAVE_TYPE_OPTIONS: { value: LeaveType; label: string }[] = (
-  Object.keys(LEAVE_TYPE_LABEL) as LeaveType[]
-).map((value) => ({ value, label: LEAVE_TYPE_LABEL[value] }));
-
-// ============================================================
-// leave_status: pending, accepted, rejected, cancelled, end_leave_early
-// ============================================================
-export type LeaveStatus = "pending" | "accepted" | "rejected" | "cancelled" | "end_leave_early";
-
-export const LEAVE_STATUS_LABEL: Record<LeaveStatus, string> = {
-  pending: "قيد المراجعة",
-  accepted: "مقبولة",
-  rejected: "مرفوضة",
-  cancelled: "ملغية",
-  end_leave_early: "انتهت مبكرًا",
-};
-
-// ✅ فيكس: كانت كل صفحة (مدير/موظف) بتعمل mapping خاص بيها للون كل حالة —
-// صفحة المدير عندها const محلي LEAVE_STATUS_TONE بيتستخدم في الجدول بس
-// (مش في مودال التفاصيل، اللي كان بيستخدم ternary منفصل ناقص "end_leave_early"
-// و"cancelled" فبيرجعهم "muted" بدل الألوان الصح). صفحة الموظف مكانش عندها
-// tone map خالص، وكانت بتكرر نفس الـ ternary الناقص في مكانين (الليست
-// والمودال). النتيجة: نفس طلب الإجازة بلون مختلف حسب مكان العرض.
-// دلوقتي في مصدر واحد بيغطي كل الـ 5 حالات، ومستخدم في كل الأماكن.
-export const LEAVE_STATUS_TONE: Record<LeaveStatus, Tone> = {
-  pending: "warning",
-  accepted: "success",
-  rejected: "danger",
-  cancelled: "muted",
-  end_leave_early: "teal",
-};
-
-// المدير بيقدر يغيّر الحالة لـ 3 قيم بس حسب وصف check_leave_status في الدوك
-export const MANAGER_LEAVE_DECISIONS: { value: Extract<LeaveStatus, "accepted" | "rejected" | "cancelled">; label: string }[] = [
-  { value: "accepted", label: "قبول" },
-  { value: "rejected", label: "رفض" },
-  { value: "cancelled", label: "إلغاء" },
-];
+export {
+  type AttendanceStatus,
+  ATTENDANCE_STATUS_LABEL,
+  ATTENDANCE_STATUS_TONE,
+  type LeaveType,
+  LEAVE_TYPE_LABEL,
+  LEAVE_TYPE_OPTIONS,
+  type LeaveStatus,
+  LEAVE_STATUS_LABEL,
+  LEAVE_STATUS_TONE,
+  MANAGER_LEAVE_DECISIONS,
+  type Tone,
+} from "@/lib/constants";
