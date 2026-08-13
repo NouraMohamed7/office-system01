@@ -3,17 +3,14 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import {
   LayoutDashboard, Clock, ListTodo, FileText, Briefcase, Users,
-  Upload, LifeBuoy, BookOpen, Trophy, User, Search, Bell, ChevronRight,
+  Upload, LifeBuoy, BookOpen, Trophy, User, Search, ChevronRight,
   ChevronsRight, Menu, X, Gift,
 } from "lucide-react";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import {
-  getUnreadNotificationsCount,
-  subscribeToNotifications,
-} from "@/modules/dashboard/api/dashboard.api";
+import { NotificationsBell } from "@/components/notifications-bell";
 
 type NavItem = { to: string; ar: string; en: string; icon: React.ComponentType<{ className?: string }> };
 
@@ -44,35 +41,6 @@ export function PortalLayout({ children, title, subtitle }: { children: ReactNod
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const { user } = useCurrentUser();
-
-  const [unreadCount, setUnreadCount] = useState(0);
-  const [notifOpen, setNotifOpen] = useState(false);
-
-  // تحميل عدد الإشعارات الغير مقروءة + الاشتراك في التحديثات اللحظية
-  useEffect(() => {
-    if (!user) return;
-
-    let active = true;
-
-    getUnreadNotificationsCount(user.id)
-      .then((count) => {
-        if (active) setUnreadCount(count);
-      })
-      .catch(console.error);
-
-    const unsubscribe = subscribeToNotifications(user.id, () => {
-      getUnreadNotificationsCount(user.id)
-        .then((count) => {
-          if (active) setUnreadCount(count);
-        })
-        .catch(console.error);
-    });
-
-    return () => {
-      active = false;
-      unsubscribe();
-    };
-  }, [user]);
 
   const displayName = user?.name || "...";
   const initials = getInitials(user?.name);
@@ -182,34 +150,8 @@ export function PortalLayout({ children, title, subtitle }: { children: ReactNod
               />
             </div>
 
-            {/* الجرس — عدد حقيقي من notifications.is_read + realtime */}
-            <div className="relative">
-              <button
-                onClick={() => setNotifOpen((o) => !o)}
-                className="relative p-2 rounded-xl hover:bg-secondary transition"
-              >
-                <Bell className="h-5 w-5 text-muted-foreground" />
-                {unreadCount > 0 && (
-                  <span className="absolute top-1 left-1 min-w-[16px] h-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-bold grid place-items-center">
-                    {unreadCount > 9 ? "9+" : unreadCount}
-                  </span>
-                )}
-              </button>
-              {notifOpen && (
-                <>
-                  <div className="fixed inset-0 z-10" onClick={() => setNotifOpen(false)} />
-                  <div className="absolute left-0 top-full z-20 mt-2 w-64 rounded-xl border border-border bg-card p-4 text-sm shadow-warm">
-                    {unreadCount > 0 ? (
-                      <span className="text-foreground font-medium">
-                        عندك {unreadCount} إشعار{unreadCount > 1 ? "ات" : ""} جديدة
-                      </span>
-                    ) : (
-                      <span className="text-muted-foreground">لا توجد إشعارات جديدة</span>
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
+            {/* الجرس — كومبوننت موحّد، نفس المصدر ونفس السلوك في البورتالين */}
+            <NotificationsBell userId={user?.id} />
 
             <div className="flex items-center gap-3 pr-3 border-r border-border">
               <div className="text-right hidden sm:block">
