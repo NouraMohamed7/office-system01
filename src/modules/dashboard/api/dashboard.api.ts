@@ -1,7 +1,7 @@
 import { supabase } from "@/lib/supabase/client";
 
 /* ==========================================================================
-   EMPLOYEE DASHBOARD (existing — untouched)
+   EMPLOYEE DASHBOARD
    ========================================================================== */
 
 export type DashboardStats = {
@@ -36,6 +36,9 @@ export type ActivityItem = {
   tone: "success" | "primary" | "teal" | "warning" | "destructive";
 };
 
+// بداية اليوم بتوقيت المحلي (نفس منطق toDateOnlyString تحت — محتفظين
+// بالدالة دي منفصلة لإنها بترجع ISO timestamp كامل مش date-only string،
+// ومستخدمة في queries بتفلتر على created_at/timestamp columns)
 function startOfTodayISO() {
   const d = new Date();
   d.setHours(0, 0, 0, 0);
@@ -43,6 +46,8 @@ function startOfTodayISO() {
 }
 
 export async function getDashboardStats(userId: string): Promise<DashboardStats> {
+  if (!userId) throw new Error("getDashboardStats: userId is required");
+
   const [newTasksRes, completedTasksRes, perfRes, notifRes] = await Promise.all([
     supabase
       .from("tasks")
@@ -68,6 +73,7 @@ export async function getDashboardStats(userId: string): Promise<DashboardStats>
 
   if (newTasksRes.error) throw newTasksRes.error;
   if (completedTasksRes.error) throw completedTasksRes.error;
+  if (perfRes.error) throw perfRes.error;
   if (notifRes.error) throw notifRes.error;
 
   return {
@@ -79,6 +85,8 @@ export async function getDashboardStats(userId: string): Promise<DashboardStats>
 }
 
 export async function getAttendanceToday(userId: string): Promise<AttendanceTodayRow | null> {
+  if (!userId) throw new Error("getAttendanceToday: userId is required");
+
   const { data, error } = await supabase
     .from("attendance_today")
     .select("*")
@@ -89,6 +97,8 @@ export async function getAttendanceToday(userId: string): Promise<AttendanceToda
 }
 
 export async function getDailyReportToday(userId: string): Promise<DailyReportTodayRow | null> {
+  if (!userId) throw new Error("getDailyReportToday: userId is required");
+
   const { data, error } = await supabase
     .from("daily_reports_today")
     .select("*")
@@ -105,6 +115,8 @@ export async function checkIn() {
 }
 
 export async function getRecentNotifications(userId: string, limit = 6): Promise<ActivityItem[]> {
+  if (!userId) throw new Error("getRecentNotifications: userId is required");
+
   const { data, error } = await supabase
     .from("notifications")
     .select("id, title, body, type, created_at")
@@ -130,6 +142,11 @@ export async function getRecentNotifications(userId: string, limit = 6): Promise
 }
 
 export function subscribeToNotifications(userId: string, onChange: () => void) {
+  if (!userId) {
+    // مفيش user لسه (لسه بيتحمل) — رجّع no-op unsubscribe بدل ما نكسر الاشتراك
+    return () => {};
+  }
+
   const channel = supabase
     .channel(`notifications-${userId}`)
     .on(
@@ -138,13 +155,46 @@ export function subscribeToNotifications(userId: string, onChange: () => void) {
       onChange
     )
     .subscribe();
+
   return () => {
     supabase.removeChannel(channel);
   };
 }
 
+// عدد الإشعارات الغير مقروءة بس — أخف من getDashboardStats اللي بتجيب
+// حاجات تانية (tasks, performance) مش محتاجينها هنا (مستخدمة في الـ topbar/sidebar)
+export async function getUnreadNotificationsCount(userId: string): Promise<number> {
+  if (!userId) throw new Error("getUnreadNotificationsCount: userId is required");
+
+  const { count, error } = await supabase
+    .from("notifications")
+    .select("id", { count: "exact", head: true })
+    .eq("users_id", userId)
+    .eq("is_read", false);
+
+  if (error) throw error;
+  return count ?? 0;
+}
+
+// ⚠️ تحديث is_read مباشر على الجدول (مفيش RPC موثّق لتعليم إشعار كمقروء).
+// لازم تتأكدي إن RLS policy عندك بتسمح للمستخدم يعدّل is_read بس على
+// صفوفه هو (فلترة .eq("users_id", userId) هنا بس دفاع إضافي من الفرونت،
+// مش بديل عن الـ RLS الحقيقي على الباك).
+export async function markNotificationRead(notificationId: string, userId: string): Promise<void> {
+  if (!notificationId) throw new Error("markNotificationRead: notificationId is required");
+  if (!userId) throw new Error("markNotificationRead: userId is required");
+
+  const { error } = await supabase
+    .from("notifications")
+    .update({ is_read: true })
+    .eq("id", notificationId)
+    .eq("users_id", userId);
+
+  if (error) throw error;
+}
+
 /* ==========================================================================
-   MANAGER DASHBOARD (new)
+   MANAGER DASHBOARD
    ========================================================================== */
 
 export type ManagerEmployeeStats = {
@@ -246,29 +296,31 @@ async function getManagerEmployeeStats(): Promise<ManagerEmployeeStats> {
   };
 }
 
+// ✅ محدّثة: notSent بقت query مباشر بـ status = 'unsent' (القيمة دي مؤكدة
+// موجودة في enum report_type) بدل الحساب بالطرح (totalToday - received)
+// اللي كان ممكن ياخد فرق لو فيه صفوف بحالة تانية (accepted/rejected/edit_requested)
+// مش received فعليًا ومش unsent كمان.
 async function getManagerReportsStats(): Promise<ManagerReportsStats> {
-  const [totalRes, receivedRes, needsReviewRes] = await Promise.all([
+  const [totalRes, receivedRes, notSentRes, needsReviewRes] = await Promise.all([
     supabase.from("daily_reports_today").select("users_id", { count: "exact", head: true }),
     supabase.from("daily_reports_today").select("users_id", { count: "exact", head: true }).not("report_id", "is", null),
+    supabase.from("daily_reports_today").select("users_id", { count: "exact", head: true }).eq("status", "unsent"),
     supabase.from("daily_reports_today").select("users_id", { count: "exact", head: true }).eq("status", "pending"),
   ]);
 
-  for (const r of [totalRes, receivedRes, needsReviewRes]) {
+  for (const r of [totalRes, receivedRes, notSentRes, needsReviewRes]) {
     if (r.error) throw r.error;
   }
 
-  const totalToday = totalRes.count ?? 0;
-  const received = receivedRes.count ?? 0;
-
   return {
-    totalToday,
-    received,
-    notSent: Math.max(0, totalToday - received),
+    totalToday: totalRes.count ?? 0,
+    received: receivedRes.count ?? 0,
+    notSent: notSentRes.count ?? 0,
     needsReview: needsReviewRes.count ?? 0,
   };
 }
 
-async function getManagerFilesStats(): Promise<ManagerFilesStats> {
+export async function getManagerFilesStats(): Promise<ManagerFilesStats> {
   const [pendingRes, acceptedRes, rejectedRes, editRequestedRes] = await Promise.all([
     supabase.from("files_approval").select("id", { count: "exact", head: true }).eq("status", "pending"),
     supabase.from("files_approval").select("id", { count: "exact", head: true }).eq("status", "accepted"),
@@ -307,7 +359,8 @@ async function getManagerComplaintsStats(): Promise<ManagerComplaintsStats> {
 }
 
 // NOTE: `representatives` has no status column, so counts below come from
-// `representative_work` (active/absent/violation), scoped to today's entries.
+// `representative_work` (active/absent/violation — enum rep_work_type مؤكد
+// من الداتابيز)، scoped to today's entries.
 // Remove the `.gte("created_at", ...)` filters below if you want all-time totals instead.
 async function getManagerRepresentativesStats(): Promise<ManagerRepresentativesStats> {
   const todayStart = startOfTodayISO();
@@ -384,37 +437,4 @@ export async function getManagerDashboardData(): Promise<ManagerDashboardData> {
   ]);
 
   return { employees, reports, files, complaints, representatives, cash };
-}
-// ============================================================
-// أضيفي الكود ده في src/modules/dashboard/api/dashboard.api.ts
-// (تحت subscribeToNotifications اللي موجودة عندك بالفعل — قبل قسم
-// MANAGER DASHBOARD، أو بعده، مش فارقة، المهم يكون داخل نفس الملف
-// عشان يستخدم نفس supabase import اللي فوق)
-// ============================================================
-
-// عدد الإشعارات الغير مقروءة بس — أخف من getDashboardStats اللي بتجيب
-// حاجات تانية (tasks, performance) مش محتاجينها هنا (مستخدمة في الـ topbar)
-export async function getUnreadNotificationsCount(userId: string): Promise<number> {
-  const { count, error } = await supabase
-    .from("notifications")
-    .select("id", { count: "exact", head: true })
-    .eq("users_id", userId)
-    .eq("is_read", false);
-
-  if (error) throw error;
-  return count ?? 0;
-}
-
-// ⚠️ تحديث is_read مباشر على الجدول (مفيش RPC موثّق لتعليم إشعار كمقروء).
-// لازم تتأكدي إن RLS policy عندك بتسمح للمستخدم يعدّل is_read بس على
-// صفوفه هو (فلترة .eq("users_id", userId) هنا بس دفاع إضافي من الفرونت،
-// مش بديل عن الـ RLS الحقيقي على الباك).
-export async function markNotificationRead(notificationId: string, userId: string): Promise<void> {
-  const { error } = await supabase
-    .from("notifications")
-    .update({ is_read: true })
-    .eq("id", notificationId)
-    .eq("users_id", userId);
-
-  if (error) throw error;
 }

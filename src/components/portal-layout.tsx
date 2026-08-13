@@ -3,12 +3,18 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   LayoutDashboard, Clock, ListTodo, FileText, Briefcase, Users,
   Upload, LifeBuoy, BookOpen, Trophy, User, Search, Bell, ChevronRight,
   ChevronsRight, Menu, X, Gift,
 } from "lucide-react";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
+import {
+  getUnreadNotificationsCount,
+  subscribeToNotifications,
+} from "@/modules/dashboard/api/dashboard.api";
+
 type NavItem = { to: string; ar: string; en: string; icon: React.ComponentType<{ className?: string }> };
 
 const NAV: NavItem[] = [
@@ -26,10 +32,51 @@ const NAV: NavItem[] = [
   { to: "/employee/profile", ar: "الملف الشخصي", en: "Profile", icon: User },
 ];
 
+// استخرج أول حرفين من الاسم (نفس المنطق المستخدم في dashboard page.tsx)
+function getInitials(name: string | null | undefined) {
+  const trimmed = (name ?? "").trim();
+  if (!trimmed) return "؟";
+  return trimmed.split(/\s+/).slice(0, 2).map((w) => w[0]).join("");
+}
+
 export function PortalLayout({ children, title, subtitle }: { children: ReactNode; title: string; subtitle?: string }) {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const { user } = useCurrentUser();
+
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [notifOpen, setNotifOpen] = useState(false);
+
+  // تحميل عدد الإشعارات الغير مقروءة + الاشتراك في التحديثات اللحظية
+  useEffect(() => {
+    if (!user) return;
+
+    let active = true;
+
+    getUnreadNotificationsCount(user.id)
+      .then((count) => {
+        if (active) setUnreadCount(count);
+      })
+      .catch(console.error);
+
+    const unsubscribe = subscribeToNotifications(user.id, () => {
+      getUnreadNotificationsCount(user.id)
+        .then((count) => {
+          if (active) setUnreadCount(count);
+        })
+        .catch(console.error);
+    });
+
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [user]);
+
+  const displayName = user?.name || "...";
+  const initials = getInitials(user?.name);
+  const roleLine = [user?.department_name, user?.position_title].filter(Boolean).join(" · ") || "—";
 
   return (
     <div className="min-h-screen bg-background">
@@ -54,12 +101,17 @@ export function PortalLayout({ children, title, subtitle }: { children: ReactNod
             </div>
             {!collapsed && (
               <div className="mt-4 flex items-center gap-3 p-2.5 rounded-xl bg-secondary/60">
-                <div className="h-9 w-9 rounded-full bg-teal text-teal-foreground grid place-items-center text-sm font-semibold shrink-0">
-                  ك.م
+                <div className="h-9 w-9 rounded-full bg-teal text-teal-foreground grid place-items-center text-sm font-semibold shrink-0 overflow-hidden">
+                  {user?.photo_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={user.photo_url} alt={displayName} className="h-full w-full object-cover" />
+                  ) : (
+                    initials
+                  )}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <div className="text-sm font-semibold text-foreground truncate">كريم محمود</div>
-                  <div className="text-xs text-muted-foreground truncate">Marketing · Team Leader</div>
+                  <div className="text-sm font-semibold text-foreground truncate">{displayName}</div>
+                  <div className="text-xs text-muted-foreground truncate">{roleLine}</div>
                 </div>
               </div>
             )}
@@ -129,16 +181,49 @@ export function PortalLayout({ children, title, subtitle }: { children: ReactNod
                 className="h-10 w-64 rounded-xl bg-secondary/60 border border-transparent focus:border-primary/40 focus:bg-card outline-none pr-10 pl-3 text-sm transition"
               />
             </div>
-            <button className="relative p-2 rounded-xl hover:bg-secondary transition">
-              <Bell className="h-5 w-5 text-muted-foreground" />
-              <span className="absolute top-1.5 left-1.5 h-2 w-2 rounded-full bg-primary" />
-            </button>
+
+            {/* الجرس — عدد حقيقي من notifications.is_read + realtime */}
+            <div className="relative">
+              <button
+                onClick={() => setNotifOpen((o) => !o)}
+                className="relative p-2 rounded-xl hover:bg-secondary transition"
+              >
+                <Bell className="h-5 w-5 text-muted-foreground" />
+                {unreadCount > 0 && (
+                  <span className="absolute top-1 left-1 min-w-[16px] h-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-bold grid place-items-center">
+                    {unreadCount > 9 ? "9+" : unreadCount}
+                  </span>
+                )}
+              </button>
+              {notifOpen && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setNotifOpen(false)} />
+                  <div className="absolute left-0 top-full z-20 mt-2 w-64 rounded-xl border border-border bg-card p-4 text-sm shadow-warm">
+                    {unreadCount > 0 ? (
+                      <span className="text-foreground font-medium">
+                        عندك {unreadCount} إشعار{unreadCount > 1 ? "ات" : ""} جديدة
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">لا توجد إشعارات جديدة</span>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+
             <div className="flex items-center gap-3 pr-3 border-r border-border">
               <div className="text-right hidden sm:block">
-                <div className="text-sm font-semibold text-foreground">كريم محمود</div>
-                <div className="text-xs text-muted-foreground">Team Leader</div>
+                <div className="text-sm font-semibold text-foreground">{displayName}</div>
+                <div className="text-xs text-muted-foreground">{user?.position_title || "—"}</div>
               </div>
-              <div className="h-9 w-9 rounded-full bg-teal text-teal-foreground grid place-items-center text-sm font-semibold">ك.م</div>
+              <div className="h-9 w-9 rounded-full bg-teal text-teal-foreground grid place-items-center text-sm font-semibold overflow-hidden">
+                {user?.photo_url ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={user.photo_url} alt={displayName} className="h-full w-full object-cover" />
+                ) : (
+                  initials
+                )}
+              </div>
             </div>
           </div>
           {subtitle && <div className="px-4 lg:px-8 pb-3 text-sm text-muted-foreground">{subtitle}</div>}
