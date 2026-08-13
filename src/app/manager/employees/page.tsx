@@ -1,7 +1,8 @@
 // src/app/manager/employees/page.tsx
 "use client";
 
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { Avatar, Button, Card, Input, PageHeader, Pill, Select, StatCard, TableShell } from "@/components/manager/primitives";
 import { useToast } from "@/components/toast";
@@ -15,14 +16,24 @@ import {
   createEmployee,
   updateEmployee,
   updateEmployeeStatus,
+  deleteEmployee,
   getAllPositions,
   getAllBranches,
 } from "@/modules/employees/api/employees.api";
 import type { PositionRecord, BranchRecord } from "@/types/user";
-
-type Tone = "success" | "warning" | "danger" | "teal" | "muted" | "primary";
-
-type EmployeeStatus = "نشط" | "معطل" | "في إجازة" | "متأخر" | "غائب";
+import {
+  EMP_STATUS_LABEL_AR,
+  EMP_STATUS_TONE,
+  EMP_STATUS_OPTIONS,
+  normalizeEmpStatus,
+  type EmpStatus,
+} from "@/lib/emp-status-labels";
+import {
+  normalizePhone,
+  validateEmployeeCore,
+  validateEmployeeEmail,
+  validateEmployeePassword,
+} from "@/lib/validation/employee-form";
 
 type Employee = {
   id: string;
@@ -38,29 +49,13 @@ type Employee = {
   saudiPhone: string;
   email: string;
   password: string;
-  status: EmployeeStatus;
-  tone: Tone;
+  status: EmpStatus;
   last: string;
   photoUrl?: string | null;
   // ⚠️ id بقى UUID مش رقم تسلسلي، فمينفعش نرتب بيه رقميًا زي الأول.
   // بنستخدم created_at بدل كده في ترتيب "الأحدث إضافة".
   createdAt: string;
 };
-
-const STATUS_TONE: Record<EmployeeStatus, Tone> = {
-  "نشط": "success",
-  "معطل": "muted",
-  "في إجازة": "teal",
-  "متأخر": "warning",
-  "غائب": "danger",
-};
-
-const EGYPT_PHONE_RE = /^01[0125][0-9]{8}$/;
-const SAUDI_PHONE_RE = /^(?:\+?966|00966|0)?5[0-9]{8}$/;
-
-function normalizePhone(v: string) {
-  return v.replace(/[\s-]/g, "");
-}
 
 const ARABIC_TO_LATIN: Record<string, string> = {
   "ا": "a", "أ": "a", "إ": "e", "آ": "a", "ب": "b", "ت": "t", "ث": "th", "ج": "g", "ح": "h", "خ": "kh",
@@ -101,10 +96,9 @@ function generatePassword(length = 10) {
 
 type FormState = {
   name: string;
-  englishName: string;
-  dept: string;
-  position: string;
-  branch: string;
+  deptId: number | "";
+  positionId: number | "";
+  branchId: number | "";
   personalPhone: string;
   workPhone: string;
   saudiPhone: string;
@@ -113,9 +107,31 @@ type FormState = {
 };
 
 const emptyForm: FormState = {
-  name: "", englishName: "", dept: "", position: "", branch: "",
+  name: "", deptId: "", positionId: "", branchId: "",
   personalPhone: "", workPhone: "", saudiPhone: "", email: "", password: "",
 };
+
+function mapEmployeeRow(e: Awaited<ReturnType<typeof getEmployees>>[number]): Employee {
+  return {
+    id: e.id,
+    name: e.full_name,
+    dept: e.department?.name ?? "-",
+    deptId: e.department?.id,
+    position: e.position?.title ?? "-",
+    positionId: e.position?.id,
+    branch: e.branch?.city ?? "-",
+    branchId: e.branch?.id,
+    personalPhone: e.personalPhone,
+    workPhone: e.workPhone,
+    saudiPhone: e.saudiPhone,
+    email: e.email,
+    password: "", // مش هيترجع من الباك لأسباب أمنية
+    status: normalizeEmpStatus(e.emp_status),
+    last: "-",
+    photoUrl: e.photo_url ?? null,
+    createdAt: e.created_at ?? "",
+  };
+}
 
 export default function EmployeesPage() {
   const showToast = useToast();
@@ -127,6 +143,7 @@ export default function EmployeesPage() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
@@ -144,29 +161,7 @@ export default function EmployeesPage() {
         setDepartments(depts);
         setPositions(poss);
         setBranches(brs);
-
-        const mapped: Employee[] = emps.map((e) => ({
-          id: e.id,
-          name: e.full_name,
-          dept: e.department?.name ?? "-",
-          deptId: e.department?.id,
-          position: e.position?.title ?? "-",
-          positionId: e.position?.id,
-          branch: e.branch?.city ?? "-",
-          branchId: e.branch?.id,
-          personalPhone: e.personalPhone,
-          workPhone: e.workPhone,
-          saudiPhone: e.saudiPhone,
-          email: e.email,
-          password: "", // مش هيترجع من الباك لأسباب أمنية
-          status: (e.emp_status as EmployeeStatus) || "نشط",
-          tone: STATUS_TONE[(e.emp_status as EmployeeStatus) || "نشط"] ?? "muted",
-          last: "-",
-          photoUrl: e.photo_url ?? null,
-          createdAt: e.created_at ?? "",
-        }));
-
-        setEmployees(mapped);
+        setEmployees(emps.map(mapEmployeeRow));
       } catch (err) {
         setLoadError(err instanceof Error ? err.message : "حصل خطأ في تحميل البيانات");
       } finally {
@@ -179,9 +174,46 @@ export default function EmployeesPage() {
 
   const [search, setSearch] = useState("");
   const [deptFilter, setDeptFilter] = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState<EmpStatus | "">("");
   const [sortBy, setSortBy] = useState("newest");
+
+  // ---- Row action menu (Portal-based عشان مايتقصش داخل الكارد اللي عندها overflow-hidden) ----
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
+  const menuButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+
+  function toggleMenu(id: string) {
+    if (openMenuId === id) {
+      setOpenMenuId(null);
+      setMenuPos(null);
+      return;
+    }
+    const btn = menuButtonRefs.current[id];
+    if (btn) {
+      const rect = btn.getBoundingClientRect();
+      const menuWidth = 176; // w-44
+      setMenuPos({
+        top: rect.bottom + 4,
+        left: Math.max(8, rect.right - menuWidth),
+      });
+    }
+    setOpenMenuId(id);
+  }
+
+  useEffect(() => {
+    function closeOnScroll() {
+      setOpenMenuId(null);
+      setMenuPos(null);
+    }
+    if (openMenuId) {
+      window.addEventListener("scroll", closeOnScroll, true);
+      window.addEventListener("resize", closeOnScroll);
+    }
+    return () => {
+      window.removeEventListener("scroll", closeOnScroll, true);
+      window.removeEventListener("resize", closeOnScroll);
+    };
+  }, [openMenuId]);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -216,9 +248,9 @@ export default function EmployeesPage() {
 
   const stats = useMemo(() => ({
     total: employees.length,
-    active: employees.filter((e) => e.status === "نشط").length,
-    onLeave: employees.filter((e) => e.status === "في إجازة").length,
-    lateAbsent: employees.filter((e) => e.status === "متأخر" || e.status === "غائب").length,
+    active: employees.filter((e) => e.status === "active").length,
+    onLeave: employees.filter((e) => e.status === "on_leave").length,
+    suspended: employees.filter((e) => e.status === "suspended").length,
   }), [employees]);
 
   function openAddModal() {
@@ -236,10 +268,9 @@ export default function EmployeesPage() {
     setEditingId(emp.id);
     setForm({
       name: emp.name,
-      englishName: "",
-      dept: emp.dept,
-      position: emp.position,
-      branch: emp.branch,
+      deptId: emp.deptId ?? "",
+      positionId: emp.positionId ?? "",
+      branchId: emp.branchId ?? "",
       personalPhone: emp.personalPhone,
       workPhone: emp.workPhone,
       saudiPhone: emp.saudiPhone,
@@ -253,16 +284,14 @@ export default function EmployeesPage() {
     setPhotoPreview(emp.photoUrl ?? null);
     setModalOpen(true);
     setOpenMenuId(null);
+    setMenuPos(null);
   }
 
   function updateField<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => {
       const next = { ...f, [key]: value };
-      if ((key === "name" || key === "englishName") && !emailTouched) {
-        const base = next.englishName || next.name;
-        if (base.trim()) {
-          next.email = generateEmail(base, employees.filter((e) => e.id !== editingId));
-        }
+      if (key === "name" && !emailTouched && typeof next.name === "string" && next.name.trim()) {
+        next.email = generateEmail(next.name, employees.filter((e) => e.id !== editingId));
       }
       if (key === "name" && !next.password) {
         next.password = generatePassword();
@@ -277,8 +306,7 @@ export default function EmployeesPage() {
   }
 
   function regenerateEmail() {
-    const base = form.englishName || form.name;
-    setForm((f) => ({ ...f, email: generateEmail(base, employees.filter((e) => e.id !== editingId)) }));
+    setForm((f) => ({ ...f, email: generateEmail(f.name, employees.filter((e) => e.id !== editingId)) }));
     setEmailTouched(false);
   }
 
@@ -294,44 +322,45 @@ export default function EmployeesPage() {
     }
   }
 
+  // ✅ الفيكس: الفاليديشن بقت في موديول مشترك (src/lib/validation/employee-form.ts)
+  // وبتستخدم نفس القواعد بالظبط اللي صفحة البروفايل ([id]/page.tsx) بتستخدمها —
+  // مفيش تناقض في القواعد بين الصفحتين تاني (required phones + فحص تكرار موحّد).
   function validate(): boolean {
-    const next: Partial<Record<keyof FormState, string>> = {};
+    const coreErrors = validateEmployeeCore(
+      {
+        name: form.name,
+        deptId: form.deptId,
+        positionId: form.positionId,
+        branchId: form.branchId,
+        personalPhone: form.personalPhone,
+        workPhone: form.workPhone,
+        saudiPhone: form.saudiPhone,
+      },
+      {
+        requirePhones: true,
+        existing: employees.map((e) => ({
+          id: e.id,
+          name: e.name,
+          personalPhone: e.personalPhone,
+          workPhone: e.workPhone,
+          saudiPhone: e.saudiPhone,
+        })),
+        excludeId: editingId,
+      }
+    );
 
-    if (!form.name.trim() || form.name.trim().length < 3) {
-      next.name = "اكتب اسم الموظف كامل (3 أحرف على الأقل)";
-    }
-    if (!form.dept) next.dept = "اختر القسم";
-    if (!form.position) next.position = "اختر الوظيفة";
-    if (!form.branch) next.branch = "اختر الفرع";
+    const next: Partial<Record<keyof FormState, string>> = { ...coreErrors };
 
-    const personal = normalizePhone(form.personalPhone);
-    if (!personal) next.personalPhone = "رقم التلفون الشخصي مطلوب";
-    else if (!EGYPT_PHONE_RE.test(personal)) next.personalPhone = "رقم مصري غير صحيح (مثال: 01012345678)";
+    const emailError = validateEmployeeEmail(
+      form.email,
+      employees.map((e) => ({ id: e.id, email: e.email })),
+      editingId
+    );
+    if (emailError) next.email = emailError;
 
-    const work = normalizePhone(form.workPhone);
-    if (!work) next.workPhone = "رقم تلفون الشغل مطلوب";
-    else if (!EGYPT_PHONE_RE.test(work)) next.workPhone = "رقم مصري غير صحيح (مثال: 01012345678)";
-    else if (personal && work && personal === work) next.workPhone = "لازم يبقى مختلف عن الرقم الشخصي";
-
-    const saudi = normalizePhone(form.saudiPhone);
-    if (!saudi) next.saudiPhone = "الرقم السعودي مطلوب";
-    else if (!SAUDI_PHONE_RE.test(saudi)) next.saudiPhone = "رقم سعودي غير صحيح (مثال: 0512345678)";
-
-    if (!form.email.trim()) next.email = "الإيميل مطلوب";
-    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) next.email = "صيغة الإيميل غير صحيحة";
-    else if (employees.some((e) => e.email === form.email.trim() && e.id !== editingId)) next.email = "الإيميل ده مستخدم بالفعل";
-
-    if (!editingId && (!form.password || form.password.length < 6)) {
-      next.password = "الباسورد لازم 6 خانات على الأقل";
-    }
-
-    const allPhones = [personal, work, saudi].filter(Boolean);
-    const phoneTaken = employees.some((e) => {
-      if (e.id === editingId) return false;
-      return allPhones.includes(e.personalPhone) || allPhones.includes(e.workPhone) || allPhones.includes(e.saudiPhone);
-    });
-    if (phoneTaken && !next.personalPhone && !next.workPhone && !next.saudiPhone) {
-      next.personalPhone = "أحد الأرقام مستخدم بالفعل مع موظف آخر";
+    if (!editingId) {
+      const passwordError = validateEmployeePassword(form.password);
+      if (passwordError) next.password = passwordError;
     }
 
     setErrors(next);
@@ -345,9 +374,13 @@ export default function EmployeesPage() {
       return;
     }
 
-    const selectedDept = departments.find((d) => d.name === form.dept);
-    const selectedPos = positions.find((p) => p.title === form.position);
-    const selectedBranch = branches.find((b) => b.city === form.branch);
+    // ✅ الفيكس: بنبعت الـ IDs المختارة فعليًا من الـ Select (form.deptId/positionId/branchId)
+    // بدل ما ندور تاني بالاسم (departments.find(d => d.name === form.dept)) — الدور بالاسم
+    // كان بيمسك أول قسم/فرع/وظيفة يطابق الاسم بس، وده خطر لو فيه قسمين بنفس الاسم أو
+    // فرعين في نفس المدينة، ممكن يحفظ ID غلط من غير ما حد يلاحظ.
+    const selectedDept = departments.find((d) => d.id === form.deptId);
+    const selectedPos = positions.find((p) => p.id === form.positionId);
+    const selectedBranch = branches.find((b) => b.id === form.branchId);
 
     if (!selectedDept || !selectedPos || !selectedBranch) {
       showToast("error", "القسم أو الوظيفة أو الفرع المختار غير صحيح");
@@ -372,21 +405,30 @@ export default function EmployeesPage() {
           photo: photoFile,
         });
 
-        setEmployees((list) => list.map((emp) => emp.id === editingId ? {
-          ...emp,
-          name: form.name.trim(),
-          dept: form.dept,
-          deptId: selectedDept.id,
-          position: form.position,
-          positionId: selectedPos.id,
-          branch: form.branch,
-          branchId: selectedBranch.id,
-          personalPhone: normalizePhone(form.personalPhone),
-          workPhone: normalizePhone(form.workPhone),
-          saudiPhone: normalizePhone(form.saudiPhone),
-          email: form.email.trim(),
-          photoUrl: photoPreview ?? emp.photoUrl,
-        } : emp));
+        // ✅ بعد نجاح التحديث بنعيد جلب بيانات الموظف الحقيقية من الباك
+        // (فيها رابط الصورة الحقيقي بعد الرفع) بدل ما نخزن الـ base64
+        // preview المحلي كأنه هو الرابط النهائي.
+        const { getEmployeeById } = await import("@/modules/employees/api/employees.api");
+        const fresh = await getEmployeeById(editingId);
+
+        setEmployees((list) => list.map((emp) => {
+          if (emp.id !== editingId) return emp;
+          if (fresh) return mapEmployeeRow(fresh);
+          return {
+            ...emp,
+            name: form.name.trim(),
+            dept: selectedDept.name,
+            deptId: selectedDept.id,
+            position: selectedPos.title,
+            positionId: selectedPos.id,
+            branch: selectedBranch.city,
+            branchId: selectedBranch.id,
+            personalPhone: normalizePhone(form.personalPhone),
+            workPhone: normalizePhone(form.workPhone),
+            saudiPhone: normalizePhone(form.saudiPhone),
+            email: form.email.trim(),
+          };
+        }));
 
         showToast("success", `تم تحديث بيانات ${form.name}`);
         setModalOpen(false);
@@ -425,19 +467,18 @@ export default function EmployeesPage() {
       const newEmployee: Employee = {
         id: typedResult?.user?.id || String(Date.now()),
         name: form.name.trim(),
-        dept: form.dept,
+        dept: selectedDept.name,
         deptId: selectedDept.id,
-        position: form.position,
+        position: selectedPos.title,
         positionId: selectedPos.id,
-        branch: form.branch,
+        branch: selectedBranch.city,
         branchId: selectedBranch.id,
         personalPhone: normalizePhone(form.personalPhone),
         workPhone: normalizePhone(form.workPhone),
         saudiPhone: normalizePhone(form.saudiPhone),
         email: form.email.trim(),
         password: form.password,
-        status: "نشط",
-        tone: "success",
+        status: "active",
         last: "لم يسجل الدخول بعد",
         photoUrl: photoPreview,
         createdAt: new Date().toISOString(),
@@ -452,29 +493,48 @@ export default function EmployeesPage() {
     }
   }
 
-  // ✅ متصلة بالباك (update-user بحقل emp_status)
-  // ⚠️ الباك بيرجع/بياخد القيمة بالإنجليزي (active/inactive)
+  // بنبعت قيمة enum إنجليزية حقيقية (active/suspended) بدل
+  // "inactive" اللي مش موجودة في public.emp_status خالص.
   async function toggleStatus(emp: Employee) {
-    const nextStatus: EmployeeStatus = emp.status === "معطل" ? "نشط" : "معطل";
-    const backendStatus: "active" | "inactive" = nextStatus === "معطل" ? "inactive" : "active";
+    const nextStatus: EmpStatus = emp.status === "suspended" ? "active" : "suspended";
 
     try {
-      await updateEmployeeStatus(emp.id, backendStatus);
-      setEmployees((list) => list.map((e) => e.id === emp.id ? { ...e, status: nextStatus, tone: STATUS_TONE[nextStatus] } : e));
-      showToast("success", nextStatus === "معطل" ? `تم تعطيل حساب ${emp.name}` : `تم تفعيل حساب ${emp.name}`);
+      await updateEmployeeStatus(emp.id, nextStatus);
+      setEmployees((list) => list.map((e) => e.id === emp.id ? { ...e, status: nextStatus } : e));
+      showToast("success", nextStatus === "suspended" ? `تم تعطيل حساب ${emp.name}` : `تم تفعيل حساب ${emp.name}`);
     } catch (err) {
       const message = err instanceof Error ? err.message : "حصل خطأ غير متوقع";
       showToast("error", `فشل تغيير حالة الموظف: ${message}`);
     }
     setOpenMenuId(null);
+    setMenuPos(null);
   }
 
-  // ⚠️ لسه شغالة محلي بس — مفيش endpoint حذف موظف (delete-user) في دوك الباك حاليًا
-  function deleteEmployee(emp: Employee) {
-    if (!window.confirm(`متأكد إنك عايز تحذف ${emp.name}؟ الإجراء ده مش هيتراجع.`)) return;
-    setEmployees((list) => list.filter((e) => e.id !== emp.id));
-    showToast("success", `تم حذف ${emp.name} (محليًا فقط — مفيش endpoint حذف من الباك لسه)`);
-    setOpenMenuId(null);
+  // متصلة فعليًا بـ delete-user Edge Function
+  // (بتمسح كل بيانات الموظف نهائيًا: مهام/حضور/تقارير/تعليقات/ملفات/حساب دخول)
+  async function handleDeleteEmployee(emp: Employee) {
+    const confirmed = window.confirm(
+      `متأكد إنك عايز تحذف ${emp.name}؟\n\nهيتم حذف كل بياناته نهائيًا: الملف الشخصي، المهام، الحضور، التقارير، التعليقات، الإشعارات، والملفات، وحساب الدخول.\nالإجراء ده لا يمكن التراجع عنه.`
+    );
+    if (!confirmed) return;
+
+    setDeletingId(emp.id);
+    try {
+      const result = await deleteEmployee(emp.id);
+      setEmployees((list) => list.filter((e) => e.id !== emp.id));
+      if (result.storage_warnings?.length) {
+        showToast("success", `تم حذف ${emp.name} (فيه تحذيرات في مسح بعض الملفات — راجع اللوج)`);
+      } else {
+        showToast("success", `تم حذف ${emp.name} نهائيًا`);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "حصل خطأ غير متوقع";
+      showToast("error", `فشل حذف الموظف: ${message}`);
+    } finally {
+      setDeletingId(null);
+      setOpenMenuId(null);
+      setMenuPos(null);
+    }
   }
 
   function handleExportExcel() {
@@ -492,7 +552,7 @@ export default function EmployeesPage() {
       "هاتف الشغل": e.workPhone,
       "الهاتف السعودي": e.saudiPhone,
       "الإيميل": e.email,
-      "الحالة": e.status,
+      "الحالة": EMP_STATUS_LABEL_AR[e.status],
       "آخر حضور": e.last,
     }));
 
@@ -532,7 +592,7 @@ export default function EmployeesPage() {
         <StatCard dense label="إجمالي الموظفين" value={stats.total} icon={Users} tone="primary" />
         <StatCard dense label="نشط" value={stats.active} tone="success" />
         <StatCard dense label="في إجازة" value={stats.onLeave} tone="teal" />
-        <StatCard dense label="متأخر/غائب" value={stats.lateAbsent} tone="warning" />
+        <StatCard dense label="موقوف" value={stats.suspended} tone="warning" />
       </div>
 
       <Card className="p-4">
@@ -558,11 +618,11 @@ export default function EmployeesPage() {
 
           <Select
             value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
+            onChange={(e) => setStatusFilter(e.target.value as EmpStatus | "")}
             className="h-10 rounded-xl border border-border bg-background px-3 py-2 text-xs text-muted-foreground outline-none hover:bg-accent"
           >
             <option value="">كل الحالات</option>
-            {(["نشط", "في إجازة", "متأخر", "غائب", "معطل"] as const).map((s) => <option key={s} value={s}>{s}</option>)}
+            {EMP_STATUS_OPTIONS.map((s) => <option key={s} value={s}>{EMP_STATUS_LABEL_AR[s]}</option>)}
           </Select>
 
           <div className="mr-auto">
@@ -606,31 +666,17 @@ export default function EmployeesPage() {
                   <td className="px-4 py-3 text-muted-foreground">{e.dept}</td>
                   <td className="px-4 py-3 text-muted-foreground">{e.position}</td>
                   <td className="px-4 py-3 text-muted-foreground">{e.branch}</td>
-                  <td className="px-4 py-3"><Pill tone={e.tone}>{e.status}</Pill></td>
+                  <td className="px-4 py-3"><Pill tone={EMP_STATUS_TONE[e.status]}>{EMP_STATUS_LABEL_AR[e.status]}</Pill></td>
                   <td className="px-4 py-3 text-xs text-muted-foreground">{e.last}</td>
                   <td className="relative px-4 py-3">
                     <button
-                      onClick={() => setOpenMenuId(openMenuId === e.id ? null : e.id)}
-                      className="grid size-8 place-items-center rounded-lg hover:bg-accent"
+                      ref={(el) => { menuButtonRefs.current[e.id] = el; }}
+                      onClick={() => toggleMenu(e.id)}
+                      disabled={deletingId === e.id}
+                      className="grid size-8 place-items-center rounded-lg hover:bg-accent disabled:opacity-50"
                     >
                       <MoreVertical className="size-4" />
                     </button>
-                    {openMenuId === e.id && (
-                      <>
-                        <div className="fixed inset-0 z-10" onClick={() => setOpenMenuId(null)} />
-                        <div className="absolute left-4 top-full z-20 mt-1 w-44 overflow-hidden rounded-xl border border-border bg-card shadow-warm">
-                          <button onClick={() => openEditModal(e)} className="flex w-full items-center gap-2 px-3.5 py-2.5 text-right text-sm hover:bg-accent">
-                            <Pencil className="size-4 text-primary" /> تعديل البيانات
-                          </button>
-                          <button onClick={() => toggleStatus(e)} className="flex w-full items-center gap-2 px-3.5 py-2.5 text-right text-sm hover:bg-accent">
-                            <Power className="size-4 text-warning" /> {e.status === "معطل" ? "تفعيل الحساب" : "تعطيل الحساب"}
-                          </button>
-                          <button onClick={() => deleteEmployee(e)} className="flex w-full items-center gap-2 px-3.5 py-2.5 text-right text-sm text-destructive hover:bg-destructive/10">
-                            <Trash2 className="size-4" /> حذف الموظف
-                          </button>
-                        </div>
-                      </>
-                    )}
                   </td>
                 </tr>
               ))}
@@ -645,6 +691,38 @@ export default function EmployeesPage() {
           </table>
         </TableShell>
       </Card>
+
+      {/* القايمة دي بترندر في document.body عن طريق Portal بدل ما تترندر جوه
+          الـ Card اللي عندها overflow-hidden — عشان كده كانت بتتقص لآخر موظف
+          في الجدول. */}
+      {openMenuId && menuPos && typeof document !== "undefined" && createPortal(
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => { setOpenMenuId(null); setMenuPos(null); }} />
+          <div
+            style={{ position: "fixed", top: menuPos.top, left: menuPos.left }}
+            className="z-50 w-44 overflow-hidden rounded-xl border border-border bg-card shadow-warm"
+          >
+            {(() => {
+              const emp = employees.find((x) => x.id === openMenuId);
+              if (!emp) return null;
+              return (
+                <>
+                  <button onClick={() => openEditModal(emp)} className="flex w-full items-center gap-2 px-3.5 py-2.5 text-right text-sm hover:bg-accent">
+                    <Pencil className="size-4 text-primary" /> تعديل البيانات
+                  </button>
+                  <button onClick={() => toggleStatus(emp)} className="flex w-full items-center gap-2 px-3.5 py-2.5 text-right text-sm hover:bg-accent">
+                    <Power className="size-4 text-warning" /> {emp.status === "suspended" ? "تفعيل الحساب" : "تعطيل الحساب"}
+                  </button>
+                  <button onClick={() => handleDeleteEmployee(emp)} className="flex w-full items-center gap-2 px-3.5 py-2.5 text-right text-sm text-destructive hover:bg-destructive/10">
+                    <Trash2 className="size-4" /> حذف الموظف
+                  </button>
+                </>
+              );
+            })()}
+          </div>
+        </>,
+        document.body
+      )}
 
       {modalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/30 p-4" onClick={() => setModalOpen(false)}>
@@ -669,16 +747,6 @@ export default function EmployeesPage() {
                 />
               </Field>
 
-              <Field label="الاسم بالإنجليزي (اختياري — لتوليد إيميل أدق)">
-                <Input
-                  value={form.englishName}
-                  onChange={(e) => updateField("englishName", e.target.value)}
-                  className={inputClass(false)}
-                  placeholder="مثال: Nora Hassan"
-                  dir="ltr"
-                />
-              </Field>
-
               <Field label="صورة الموظف (اختياري)">
                 <div className="flex items-center gap-3">
                   {photoPreview ? (
@@ -695,24 +763,38 @@ export default function EmployeesPage() {
                 </div>
               </Field>
 
-              <Field label="القسم" error={errors.dept} required>
-                <Select value={form.dept} onChange={(e) => updateField("dept", e.target.value)} className={inputClass(!!errors.dept)}>
+              {/* ✅ الفيكس: قيمة الـ option بقت d.id (رقم) بدل d.name (نص) —
+                  لو فيه قسمين بنفس الاسم كان ممكن يتحفظ ID غلط بدون ما حد يلاحظ */}
+              <Field label="القسم" error={errors.deptId} required>
+                <Select
+                  value={form.deptId}
+                  onChange={(e) => updateField("deptId", e.target.value ? Number(e.target.value) : "")}
+                  className={inputClass(!!errors.deptId)}
+                >
                   <option value="">اختر القسم</option>
-                  {departments.map((d) => <option key={d.id} value={d.name}>{d.name}</option>)}
+                  {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
                 </Select>
               </Field>
 
-              <Field label="الوظيفة" error={errors.position} required>
-                <Select value={form.position} onChange={(e) => updateField("position", e.target.value)} className={inputClass(!!errors.position)}>
+              <Field label="الوظيفة" error={errors.positionId} required>
+                <Select
+                  value={form.positionId}
+                  onChange={(e) => updateField("positionId", e.target.value ? Number(e.target.value) : "")}
+                  className={inputClass(!!errors.positionId)}
+                >
                   <option value="">اختر الوظيفة</option>
-                  {positions.map((p) => <option key={p.id} value={p.title}>{p.title}</option>)}
+                  {positions.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}
                 </Select>
               </Field>
 
-              <Field label="الفرع" error={errors.branch} required>
-                <Select value={form.branch} onChange={(e) => updateField("branch", e.target.value)} className={inputClass(!!errors.branch)}>
+              <Field label="الفرع" error={errors.branchId} required>
+                <Select
+                  value={form.branchId}
+                  onChange={(e) => updateField("branchId", e.target.value ? Number(e.target.value) : "")}
+                  className={inputClass(!!errors.branchId)}
+                >
                   <option value="">اختر الفرع</option>
-                  {branches.map((b) => <option key={b.id} value={b.city}>{b.city}</option>)}
+                  {branches.map((b) => <option key={b.id} value={b.id}>{b.city}</option>)}
                 </Select>
               </Field>
 
@@ -808,7 +890,7 @@ export default function EmployeesPage() {
               )}
               {editingId && (
                 <p className="rounded-xl bg-accent/50 p-3 text-xs text-muted-foreground">
-                  تعديل الإيميل أو الباسورد بيتم من مكان تاني (auth.updateUser) — مش من الفورم ده حاليًا.
+                  تعديل الإيميل أو الباسورد مش متاح من الفورم ده حاليًا — محتاج Edge Function جديدة من الباك (admin.updateUserById) عشان المدير يقدر يغيّرهم لموظف تاني.
                 </p>
               )}
 

@@ -62,6 +62,21 @@ export const LEAVE_STATUS_LABEL: Record<LeaveStatus, string> = {
   end_leave_early: "انتهت مبكرًا",
 };
 
+// ✅ فيكس: كانت كل صفحة (مدير/موظف) بتعمل mapping خاص بيها للون كل حالة —
+// صفحة المدير عندها const محلي LEAVE_STATUS_TONE بيتستخدم في الجدول بس
+// (مش في مودال التفاصيل، اللي كان بيستخدم ternary منفصل ناقص "end_leave_early"
+// و"cancelled" فبيرجعهم "muted" بدل الألوان الصح). صفحة الموظف مكانش عندها
+// tone map خالص، وكانت بتكرر نفس الـ ternary الناقص في مكانين (الليست
+// والمودال). النتيجة: نفس طلب الإجازة بلون مختلف حسب مكان العرض.
+// دلوقتي في مصدر واحد بيغطي كل الـ 5 حالات، ومستخدم في كل الأماكن.
+export const LEAVE_STATUS_TONE: Record<LeaveStatus, Tone> = {
+  pending: "warning",
+  accepted: "success",
+  rejected: "danger",
+  cancelled: "muted",
+  end_leave_early: "teal",
+};
+
 // المدير بيقدر يغيّر الحالة لـ 3 قيم بس حسب وصف check_leave_status في الدوك
 export const MANAGER_LEAVE_DECISIONS: { value: Extract<LeaveStatus, "accepted" | "rejected" | "cancelled">; label: string }[] = [
   { value: "accepted", label: "قبول" },

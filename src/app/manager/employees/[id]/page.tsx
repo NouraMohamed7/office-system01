@@ -5,10 +5,11 @@ import { use, useEffect, useState } from "react";
 import { Avatar, Card, PageHeader, Pill, SectionTitle, StatCard } from "@/components/manager/primitives";
 import {
   Mail, Phone, MapPin, Briefcase, Building2, Calendar, Loader2,
-  Pencil, X, RefreshCw, Eye, EyeOff,
+  Pencil, X,
 } from "lucide-react";
 import {
   getEmployeeById,
+  getEmployees,
   getEmployeeTaskStats,
   getEmployeeReportsCount,
   getEmployeeFilesCount,
@@ -23,21 +24,11 @@ import {
 import { getDepartments, type Department } from "@/modules/department/api/department.api";
 import type { PositionRecord, BranchRecord } from "@/types/user";
 import { useToast } from "@/components/toast";
-
-const STATUS_TONE: Record<string, "success" | "warning" | "danger" | "teal" | "muted" | "primary"> = {
-  "نشط": "success",
-  "معطل": "muted",
-  "في إجازة": "teal",
-  "متأخر": "warning",
-  "غائب": "danger",
-};
-
-const EGYPT_PHONE_RE = /^01[0125][0-9]{8}$/;
-const SAUDI_PHONE_RE = /^(?:\+?966|00966|0)?5[0-9]{8}$/;
-
-function normalizePhone(v: string) {
-  return v.replace(/[\s-]/g, "");
-}
+import { EMP_STATUS_LABEL_AR, EMP_STATUS_TONE } from "@/lib/emp-status-labels";
+import {
+  normalizePhone,
+  validateEmployeeCore,
+} from "@/lib/validation/employee-form";
 
 function formatJoinDate(iso?: string) {
   if (!iso) return "—";
@@ -46,9 +37,9 @@ function formatJoinDate(iso?: string) {
 
 type FormState = {
   name: string;
-  dept: string;
-  position: string;
-  branch: string;
+  deptId: number | "";
+  positionId: number | "";
+  branchId: number | "";
   personalPhone: string;
   workPhone: string;
   saudiPhone: string;
@@ -67,6 +58,10 @@ export default function EmployeeProfile({ params }: { params: Promise<{ id: stri
   const [departments, setDepartments] = useState<Department[]>([]);
   const [positions, setPositions] = useState<PositionRecord[]>([]);
   const [branches, setBranches] = useState<BranchRecord[]>([]);
+  // ✅ الفيكس: بنجيب باقي الموظفين هنا كمان (زي صفحة الليست بالظبط) عشان
+  // نقدر نعمل فحص تكرار أرقام تليفون حقيقي، بدل ما مودال التعديل هنا يقبل
+  // أي رقم من غير ما يتأكد إنه مش مستخدم مع موظف تاني.
+  const [allEmployees, setAllEmployees] = useState<EmployeeRow[]>([]);
 
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -74,7 +69,7 @@ export default function EmployeeProfile({ params }: { params: Promise<{ id: stri
   // --- Edit modal state ---
   const [modalOpen, setModalOpen] = useState(false);
   const [form, setForm] = useState<FormState>({
-    name: "", dept: "", position: "", branch: "",
+    name: "", deptId: "", positionId: "", branchId: "",
     personalPhone: "", workPhone: "", saudiPhone: "",
   });
   const [errors, setErrors] = useState<Partial<Record<keyof FormState, string>>>({});
@@ -84,7 +79,7 @@ export default function EmployeeProfile({ params }: { params: Promise<{ id: stri
 
   async function loadAll() {
     try {
-      const [emp, tasks, reports, files, attendance, depts, poss, brs] = await Promise.all([
+      const [emp, tasks, reports, files, attendance, depts, poss, brs, everyone] = await Promise.all([
         getEmployeeById(id),
         getEmployeeTaskStats(id),
         getEmployeeReportsCount(id),
@@ -93,6 +88,7 @@ export default function EmployeeProfile({ params }: { params: Promise<{ id: stri
         getDepartments(),
         getAllPositions(),
         getAllBranches(),
+        getEmployees(),
       ]);
       setEmployee(emp);
       setTaskStats(tasks);
@@ -102,6 +98,7 @@ export default function EmployeeProfile({ params }: { params: Promise<{ id: stri
       setDepartments(depts);
       setPositions(poss);
       setBranches(brs);
+      setAllEmployees(everyone);
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : "حصل خطأ في تحميل بيانات الموظف");
     } finally {
@@ -118,9 +115,9 @@ export default function EmployeeProfile({ params }: { params: Promise<{ id: stri
     if (!employee) return;
     setForm({
       name: employee.full_name,
-      dept: employee.department?.name ?? "",
-      position: employee.position?.title ?? "",
-      branch: employee.branch?.city ?? "",
+      deptId: employee.department?.id ?? "",
+      positionId: employee.position?.id ?? "",
+      branchId: employee.branch?.id ?? "",
       personalPhone: employee.personalPhone,
       workPhone: employee.workPhone,
       saudiPhone: employee.saudiPhone,
@@ -146,26 +143,37 @@ export default function EmployeeProfile({ params }: { params: Promise<{ id: stri
     }
   }
 
+  // ✅ الفيكس: نفس موديول الفاليديشن اللي صفحة الليست بتستخدمه بالظبط
+  // (src/lib/validation/employee-form.ts)، بنفس القواعد: أرقام التليفون
+  // التلاتة مطلوبة + فحص تكرار مع باقي الموظفين. قبل كده كانت الأرقام
+  // هنا اختيارية ومن غير فحص تكرار خالص، وده كان بيسمح إن حد يمسح رقم
+  // تليفون موظف أو يحط رقم مكرر مع موظف تاني لو دخل من الصفحة دي بدل الليست.
   function validate(): boolean {
-    const next: Partial<Record<keyof FormState, string>> = {};
-    if (!form.name.trim() || form.name.trim().length < 3) {
-      next.name = "اكتب اسم الموظف كامل (3 أحرف على الأقل)";
-    }
-    if (!form.dept) next.dept = "اختر القسم";
-    if (!form.position) next.position = "اختر الوظيفة";
-    if (!form.branch) next.branch = "اختر الفرع";
+    const coreErrors = validateEmployeeCore(
+      {
+        name: form.name,
+        deptId: form.deptId,
+        positionId: form.positionId,
+        branchId: form.branchId,
+        personalPhone: form.personalPhone,
+        workPhone: form.workPhone,
+        saudiPhone: form.saudiPhone,
+      },
+      {
+        requirePhones: true,
+        existing: allEmployees.map((e) => ({
+          id: e.id,
+          name: e.full_name,
+          personalPhone: e.personalPhone,
+          workPhone: e.workPhone,
+          saudiPhone: e.saudiPhone,
+        })),
+        excludeId: id,
+      }
+    );
 
-    const personal = normalizePhone(form.personalPhone);
-    if (personal && !EGYPT_PHONE_RE.test(personal)) next.personalPhone = "رقم مصري غير صحيح (مثال: 01012345678)";
-
-    const work = normalizePhone(form.workPhone);
-    if (work && !EGYPT_PHONE_RE.test(work)) next.workPhone = "رقم مصري غير صحيح (مثال: 01012345678)";
-
-    const saudi = normalizePhone(form.saudiPhone);
-    if (saudi && !SAUDI_PHONE_RE.test(saudi)) next.saudiPhone = "رقم سعودي غير صحيح (مثال: 0512345678)";
-
-    setErrors(next);
-    return Object.keys(next).length === 0;
+    setErrors(coreErrors);
+    return Object.keys(coreErrors).length === 0;
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -175,9 +183,12 @@ export default function EmployeeProfile({ params }: { params: Promise<{ id: stri
       return;
     }
 
-    const selectedDept = departments.find((d) => d.name === form.dept);
-    const selectedPos = positions.find((p) => p.title === form.position);
-    const selectedBranch = branches.find((b) => b.city === form.branch);
+    // ✅ الفيكس: بنبعت الـ ID المختار فعليًا من الـ Select مباشرة، بدل
+    // الدور بالاسم (departments.find(d => d.name === form.dept)) اللي كان
+    // ممكن يمسك قسم/فرع/وظيفة غلط لو فيه اتنين بنفس الاسم.
+    const selectedDept = departments.find((d) => d.id === form.deptId);
+    const selectedPos = positions.find((p) => p.id === form.positionId);
+    const selectedBranch = branches.find((b) => b.id === form.branchId);
 
     if (!selectedDept || !selectedPos || !selectedBranch) {
       showToast("error", "القسم أو الوظيفة أو الفرع المختار غير صحيح");
@@ -202,7 +213,8 @@ export default function EmployeeProfile({ params }: { params: Promise<{ id: stri
 
       showToast("success", `تم تحديث بيانات ${form.name}`);
       setModalOpen(false);
-      // نعيد تحميل بيانات الموظف عشان نتأكد إن اللي اتحفظ هو اللي هيظهر فعليًا
+      // نعيد تحميل بيانات الموظف عشان نتأكد إن اللي اتحفظ (وخصوصًا رابط
+      // الصورة الحقيقي بعد الرفع) هو اللي هيظهر فعليًا.
       await loadAll();
     } catch (err) {
       const message = err instanceof Error ? err.message : "حصل خطأ غير متوقع";
@@ -228,8 +240,9 @@ export default function EmployeeProfile({ params }: { params: Promise<{ id: stri
     return <div className="p-6 text-sm text-muted-foreground">الموظف غير موجود</div>;
   }
 
-  const status = employee.emp_status || "نشط";
-  const tone = STATUS_TONE[status] ?? "muted";
+  const status = employee.emp_status;
+  const label = EMP_STATUS_LABEL_AR[status as keyof typeof EMP_STATUS_LABEL_AR] ?? status;
+  const tone = EMP_STATUS_TONE[status as keyof typeof EMP_STATUS_TONE] ?? "muted";
   const location = [employee.branch?.city, employee.branch?.address].filter(Boolean).join(" — ") || "—";
 
   return (
@@ -262,7 +275,7 @@ export default function EmployeeProfile({ params }: { params: Promise<{ id: stri
           </div>
 
           <div className="flex items-center gap-2">
-            <Pill tone={tone}>{status}</Pill>
+            <Pill tone={tone}>{label}</Pill>
             <button
               onClick={openEditModal}
               className="flex items-center gap-1.5 h-9 rounded-lg border border-border px-3 text-xs font-semibold hover:bg-accent"
@@ -274,7 +287,7 @@ export default function EmployeeProfile({ params }: { params: Promise<{ id: stri
       </Card>
 
       {/* المهام + التقارير + الملفات = بيانات حقيقية من الباك (tasks / daily_reports / files) */}
-      {/* النقاط = لسه mock، مفيش جدول points/rewards في الباك */}
+      {/* النقاط = لسه mock — استخدم جدول performance_points_summary الحقيقي بدل الرقم الثابت لو محتاجينه دلوقتي */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6">
         <StatCard dense label="المهام" value={String(taskStats?.total ?? 0)} tone="primary" />
         <StatCard dense label="المكتملة" value={String(taskStats?.completed ?? 0)} tone="success" />
@@ -353,41 +366,53 @@ export default function EmployeeProfile({ params }: { params: Promise<{ id: stri
                 </div>
               </Field>
 
-              <Field label="القسم" error={errors.dept} required>
-                <select value={form.dept} onChange={(e) => updateField("dept", e.target.value)} className={inputClass(!!errors.dept)}>
+              <Field label="القسم" error={errors.deptId} required>
+                <select
+                  value={form.deptId}
+                  onChange={(e) => updateField("deptId", e.target.value ? Number(e.target.value) : "")}
+                  className={inputClass(!!errors.deptId)}
+                >
                   <option value="">اختر القسم</option>
-                  {departments.map((d) => <option key={d.id} value={d.name}>{d.name}</option>)}
+                  {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
                 </select>
               </Field>
 
-              <Field label="الوظيفة" error={errors.position} required>
-                <select value={form.position} onChange={(e) => updateField("position", e.target.value)} className={inputClass(!!errors.position)}>
+              <Field label="الوظيفة" error={errors.positionId} required>
+                <select
+                  value={form.positionId}
+                  onChange={(e) => updateField("positionId", e.target.value ? Number(e.target.value) : "")}
+                  className={inputClass(!!errors.positionId)}
+                >
                   <option value="">اختر الوظيفة</option>
-                  {positions.map((p) => <option key={p.id} value={p.title}>{p.title}</option>)}
+                  {positions.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}
                 </select>
               </Field>
 
-              <Field label="الفرع" error={errors.branch} required>
-                <select value={form.branch} onChange={(e) => updateField("branch", e.target.value)} className={inputClass(!!errors.branch)}>
+              <Field label="الفرع" error={errors.branchId} required>
+                <select
+                  value={form.branchId}
+                  onChange={(e) => updateField("branchId", e.target.value ? Number(e.target.value) : "")}
+                  className={inputClass(!!errors.branchId)}
+                >
                   <option value="">اختر الفرع</option>
-                  {branches.map((b) => <option key={b.id} value={b.city}>{b.city}</option>)}
+                  {branches.map((b) => <option key={b.id} value={b.id}>{b.city}</option>)}
                 </select>
               </Field>
 
-              <Field label="رقم التلفون الشخصي" error={errors.personalPhone}>
+              <Field label="رقم التلفون الشخصي" error={errors.personalPhone} required>
                 <input value={form.personalPhone} onChange={(e) => updateField("personalPhone", e.target.value)} className={inputClass(!!errors.personalPhone)} dir="ltr" placeholder="01012345678" />
               </Field>
 
-              <Field label="رقم تلفون الشغل" error={errors.workPhone}>
+              <Field label="رقم تلفون الشغل" error={errors.workPhone} required>
                 <input value={form.workPhone} onChange={(e) => updateField("workPhone", e.target.value)} className={inputClass(!!errors.workPhone)} dir="ltr" placeholder="01098765432" />
               </Field>
 
-              <Field label="الرقم السعودي" error={errors.saudiPhone}>
+              <Field label="الرقم السعودي" error={errors.saudiPhone} required>
                 <input value={form.saudiPhone} onChange={(e) => updateField("saudiPhone", e.target.value)} className={inputClass(!!errors.saudiPhone)} dir="ltr" placeholder="0512345678" />
               </Field>
 
               <p className="rounded-xl bg-accent/50 p-3 text-xs text-muted-foreground">
-                تعديل الإيميل أو الباسورد بيتم من مكان تاني — مش من الفورم ده حاليًا.
+                تعديل الإيميل أو الباسورد مش متاح من الفورم ده حاليًا — محتاج Edge Function جديدة من الباك.
               </p>
 
               <div className="flex gap-2 pt-2">

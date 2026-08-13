@@ -3,7 +3,7 @@
 
 import { PortalLayout, Card, StatusPill } from "@/components/portal-layout";
 import { useToast } from "@/components/toast";
-import { Clock, Check, LogIn, LogOut, Coffee, PlayCircle, Loader2, Palmtree, X, Pencil, Trash2, StopCircle } from "lucide-react";
+import { Clock, Check, LogIn, LogOut, Coffee, PlayCircle, Loader2, Palmtree, X, Pencil, Trash2, StopCircle, Eye } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
   checkIn as apiCheckIn,
@@ -14,6 +14,7 @@ import {
   startBreak as apiStartBreak,
   endBreak as apiEndBreak,
   getBreaksByAttendanceId,
+  getBreaksSummaryByAttendanceIds,
   type AttendanceRecord,
   type MonthSummary,
   type BreakRecord,
@@ -24,14 +25,18 @@ import {
   LEAVE_TYPE_LABEL,
   LEAVE_TYPE_OPTIONS,
   LEAVE_STATUS_LABEL,
+  LEAVE_STATUS_TONE,
   type LeaveType,
 } from "@/lib/attendance-labels";
+import type { LeaveRequest } from "@/types/attendance";
 
 // ⚠️ قواعد مؤكدة فعليًا من الباك (اتفحصت مباشرة عبر الـ RPCs):
 // - update_leave / delete_leave: بيرفضوا برسالة "Cannot update/delete a leave
 //   that has already started" لو start_date <= النهاردة، بغض النظر عن الحالة.
 // - end_leave_early: بيرفض برسالة "Only accepted leaves can be ended early"
-//   لو الحالة مش accepted.
+//   لو الحالة مش accepted. منضيفش عليها هنا شرط start_date لأن المفروض
+//   تنفع تتاستخدم أثناء الإجازة (يعني start_date <= النهاردة <= end_date)
+//   — ده بالظبط عكس isLeaveStarted بتاعة باقي الإجراءات، فبنسيبها زي ما هي.
 function isLeaveStarted(startDate: string): boolean {
   const today = new Date().toISOString().slice(0, 10);
   return startDate <= today;
@@ -48,6 +53,16 @@ function computeSecondsBetween(startISO: string, endISO: string | null): number 
   return Math.max(0, Math.floor((end - start) / 1000));
 }
 
+function formatMinutesAsHhMm(mins: number): string {
+  const h = Math.floor(mins / 60).toString().padStart(2, "0");
+  const m = (mins % 60).toString().padStart(2, "0");
+  return `${h}:${m}`;
+}
+
+// أنواع الأكشن اللي ممكن تتنفذ على صف إجازة واحد — مستخدمة عشان نعرف
+// أي زرار بالظبط نعطّله/نحط عليه اللودينج، بدل ما نعطّل الصف كله بأكشن غلط.
+type LeaveRowAction = "cancel" | "end_early";
+
 export default function AttendancePage() {
   const showToast = useToast();
   const [now, setNow] = useState<Date | null>(null);
@@ -55,6 +70,8 @@ export default function AttendancePage() {
   // ---- بيانات حقيقية من الباك ----
   const [record, setRecord] = useState<AttendanceRecord | null>(null);
   const [history, setHistory] = useState<AttendanceRecord[]>([]);
+  // إجمالي دقايق البريك لكل سجل في "سجل الحضور السابق"
+  const [historyBreakMinutes, setHistoryBreakMinutes] = useState<Map<number, number>>(new Map());
   const [monthSummary, setMonthSummary] = useState<MonthSummary | null>(null);
   const [loadingToday, setLoadingToday] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -71,6 +88,18 @@ export default function AttendancePage() {
     refresh: refreshLeaves,
   } = useMyLeaveRequests();
   const leaveActions = useLeaveActions();
+
+  // فيكس مشكلة "error في end_leave_early من غير ما تتمسح" — leaveActions.loading
+  // كان state واحد مشترك بين كل أكشنز الإجازة (حفظ الفورم / إلغاء / إنهاء بدري)،
+  // وأزرار الصف (تعديل/إلغاء/إنهاء بدري) مكانش عليها أي disabled خالص. ده كان بيسمح
+  // بضغط متكرر/متزامن يبعت نفس الـ RPC مرتين، النداء التاني بيفشل برسالة من الباك
+  // (لأن الحالة اتغيرت بالنداء الأول) — إيرور بيظهر من غير أي سبب واضح للمستخدم
+  // ومفيش حماية تمنعه. الحل: نتبع أي صف/أكشن بالظبط شغال دلوقتي، ونعطّل زراره بس.
+  const [busyLeave, setBusyLeave] = useState<{ id: number; action: LeaveRowAction } | null>(null);
+
+  // كارد تفاصيل الإجازة — مودال منفصل يعرض تفاصيل طلب الإجازة كاملة
+  // (خصوصًا السبب لو فقرة طويلة) بدون أي قطع/truncate.
+  const [detailsLeave, setDetailsLeave] = useState<LeaveRequest | null>(null);
 
   const [leaveOpen, setLeaveOpen] = useState(false);
   const [editingLeaveId, setEditingLeaveId] = useState<number | null>(null);
@@ -111,6 +140,12 @@ export default function AttendancePage() {
         if (todayRec) {
           const todayBreaks = await getBreaksByAttendanceId(todayRec.id);
           setBreaks(todayBreaks);
+        }
+
+        // إجمالي دقايق البريك لكل سجل في السجل السابق دفعة واحدة
+        if (hist.length > 0) {
+          const summaryMap = await getBreaksSummaryByAttendanceIds(hist.map((h) => h.id));
+          setHistoryBreakMinutes(summaryMap);
         }
       } catch (err) {
         showToast("error", err instanceof Error ? err.message : "حصل خطأ في تحميل بيانات الحضور");
@@ -269,6 +304,11 @@ export default function AttendancePage() {
       showToast("error", "اكتب سبب الإجازة");
       return;
     }
+    // فاليديشن: من غير ده ممكن تبعت تاريخ نهاية قبل تاريخ البداية
+    if (leaveForm.end_date < leaveForm.start_date) {
+      showToast("error", "تاريخ النهاية لازم يكون بعد أو يساوي تاريخ البداية");
+      return;
+    }
     try {
       if (editingLeaveId !== null) {
         await leaveActions.editLeave({
@@ -295,22 +335,35 @@ export default function AttendancePage() {
   }
 
   async function cancelLeave(leaveId: number) {
+    // حماية ضد الضغط المتكرر/المتزامن (سبب الإيرور اللي بيظهر من غير سبب واضح)
+    if (busyLeave) return;
+    setBusyLeave({ id: leaveId, action: "cancel" });
     try {
       await leaveActions.removeLeave(leaveId);
       await refreshLeaves();
       showToast("success", "تم إلغاء طلب الإجازة");
     } catch (err) {
       showToast("error", err instanceof Error ? err.message : "تعذر إلغاء طلب الإجازة");
+    } finally {
+      setBusyLeave(null);
     }
   }
 
   async function endLeaveNow(leaveId: number) {
+    // نفس الحماية — دي كانت أكتر عملية معرّضة للمشكلة لإنها بتتاح لأطول فترة
+    // (طول مدة الإجازة كلها)، فاحتمال ضغط مزدوج عليها أعلى من باقي الأكشنز.
+    if (busyLeave) return;
+    setBusyLeave({ id: leaveId, action: "end_early" });
     try {
       await leaveActions.endEarly(leaveId);
       await refreshLeaves();
       showToast("success", "تم إنهاء الإجازة بدري");
     } catch (err) {
+      // رسالة الباك بترجع نصًا واضح (Only accepted leaves can be ended
+      // early) — بنعرضها زي ما هي بدل ما نلفّها برسالة عامة غامضة.
       showToast("error", err instanceof Error ? err.message : "تعذر إنهاء الإجازة");
+    } finally {
+      setBusyLeave(null);
     }
   }
 
@@ -443,43 +496,88 @@ export default function AttendancePage() {
               const started = isLeaveStarted(l.start_date);
               // تعديل/إلغاء: متاحين بس لو الإجازة لسه ما بدأتش (مطابق لرسالة الباك)
               const canEditOrCancel = !started;
-              // إنهاء بدري: متاح بس لو الحالة accepted (مطابق لرسالة الباك)
+              // إنهاء بدري: متاح بس لو الحالة accepted (مطابق لرسالة الباك بالظبط)
               const canEndEarly = l.status === "accepted";
               const hasAnyAction = canEditOrCancel || canEndEarly;
+              const isCancelling = busyLeave?.id === l.id && busyLeave.action === "cancel";
+              const isEndingEarly = busyLeave?.id === l.id && busyLeave.action === "end_early";
+              const rowBusy = busyLeave?.id === l.id;
 
+              // السبب بيتقصّ بصريًا هنا (line-clamp-2) بس دايمًا فيه طريقة
+              // مضمونة تشوفه كامل من غير قطع: زرار "عرض التفاصيل" بيفتح كارد.
               return (
                 <div key={l.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border p-3 text-sm">
-                  <div>
+                  <button
+                    type="button"
+                    onClick={() => setDetailsLeave(l)}
+                    className="min-w-0 flex-1 text-right"
+                    title="عرض التفاصيل كاملة"
+                  >
                     <div className="font-semibold flex items-center gap-2 flex-wrap">
                       {LEAVE_TYPE_LABEL[l.leave_type]} — {l.start_date} إلى {l.end_date}
-                      <StatusPill tone={l.status === "accepted" ? "success" : l.status === "rejected" ? "danger" : l.status === "pending" ? "warning" : "muted"}>
+                      {/* ✅ فيكس: كان بيستخدم ternary ناقص (نفس المشكلة اللي في
+                          المودال تحت) بيرجّع "muted" لأي حالة مش accepted/rejected/
+                          pending، يعني "cancelled" و"end_leave_early" بلون واحد
+                          غلط. دلوقتي بيستخدم LEAVE_STATUS_TONE الموحّد. */}
+                      <StatusPill tone={LEAVE_STATUS_TONE[l.status]}>
                         {LEAVE_STATUS_LABEL[l.status]}
                       </StatusPill>
                     </div>
-                    <div className="text-muted-foreground text-xs">{l.reason}</div>
-                  </div>
+                    <div className="text-muted-foreground text-xs line-clamp-2 mt-0.5">{l.reason}</div>
+                  </button>
                   {hasAnyAction ? (
                     <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        onClick={() => setDetailsLeave(l)}
+                        className="rounded-lg border border-border p-2 hover:bg-accent"
+                        title="عرض التفاصيل"
+                      >
+                        <Eye className="h-4 w-4" />
+                      </button>
                       {canEditOrCancel && (
-                        <button onClick={() => openEditLeaveForm(l)} className="rounded-lg border border-border p-2 hover:bg-accent" title="تعديل">
+                        <button
+                          onClick={() => openEditLeaveForm(l)}
+                          disabled={rowBusy}
+                          className="rounded-lg border border-border p-2 hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed"
+                          title="تعديل"
+                        >
                           <Pencil className="h-4 w-4" />
                         </button>
                       )}
                       {canEndEarly && (
-                        <button onClick={() => endLeaveNow(l.id)} className="rounded-lg border border-border p-2 hover:bg-accent" title="إنهاء بدري">
-                          <StopCircle className="h-4 w-4 text-warning" />
+                        <button
+                          onClick={() => endLeaveNow(l.id)}
+                          disabled={rowBusy}
+                          className="rounded-lg border border-border p-2 hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed"
+                          title="إنهاء بدري"
+                        >
+                          {isEndingEarly ? <Loader2 className="h-4 w-4 animate-spin text-warning" /> : <StopCircle className="h-4 w-4 text-warning" />}
                         </button>
                       )}
                       {canEditOrCancel && (
-                        <button onClick={() => cancelLeave(l.id)} className="rounded-lg border border-border p-2 hover:bg-destructive/10" title="إلغاء">
-                          <Trash2 className="h-4 w-4 text-destructive" />
+                        <button
+                          onClick={() => cancelLeave(l.id)}
+                          disabled={rowBusy}
+                          className="rounded-lg border border-border p-2 hover:bg-destructive/10 disabled:opacity-40 disabled:cursor-not-allowed"
+                          title="إلغاء"
+                        >
+                          {isCancelling ? <Loader2 className="h-4 w-4 animate-spin text-destructive" /> : <Trash2 className="h-4 w-4 text-destructive" />}
                         </button>
                       )}
                     </div>
                   ) : (
-                    <span className="text-xs text-muted-foreground shrink-0">
-                      {started ? "بدأت الإجازة — لا يمكن التعديل" : "لا يوجد إجراء متاح"}
-                    </span>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        onClick={() => setDetailsLeave(l)}
+                        className="rounded-lg border border-border p-2 hover:bg-accent"
+                        title="عرض التفاصيل"
+                      >
+                        <Eye className="h-4 w-4" />
+                      </button>
+                      <span className="text-xs text-muted-foreground">
+                        {started ? "بدأت الإجازة — لا يمكن التعديل" : "لا يوجد إجراء متاح"}
+                      </span>
+                    </div>
                   )}
                 </div>
               );
@@ -549,27 +647,34 @@ export default function AttendancePage() {
                 <th className="pb-3 font-semibold">التاريخ</th>
                 <th className="pb-3 font-semibold">الحضور</th>
                 <th className="pb-3 font-semibold">الانصراف</th>
+                <th className="pb-3 font-semibold">الاستراحة</th>
                 <th className="pb-3 font-semibold">الحالة</th>
               </tr>
             </thead>
             <tbody>
               {history.length === 0 && !loadingToday && (
                 <tr>
-                  <td colSpan={4} className="py-6 text-center text-muted-foreground">مفيش سجل سابق</td>
+                  <td colSpan={5} className="py-6 text-center text-muted-foreground">مفيش سجل سابق</td>
                 </tr>
               )}
-              {history.map((r) => (
-                <tr key={r.id} className="border-b border-border/60 hover:bg-primary/5 transition">
-                  <td className="py-3 text-foreground">{r.attendance_date}</td>
-                  <td className="py-3 text-muted-foreground tabular-nums">{formatTime(r.check_in_at)}</td>
-                  <td className="py-3 text-muted-foreground tabular-nums">{formatTime(r.check_out_at)}</td>
-                  <td className="py-3">
-                    <StatusPill tone={r.status === "present" ? "success" : r.status === "late" ? "warning" : "danger"}>
-                      {ATTENDANCE_STATUS_LABEL[r.status]}
-                    </StatusPill>
-                  </td>
-                </tr>
-              ))}
+              {history.map((r) => {
+                const breakMins = historyBreakMinutes.get(r.id) ?? 0;
+                return (
+                  <tr key={r.id} className="border-b border-border/60 hover:bg-primary/5 transition">
+                    <td className="py-3 text-foreground">{r.attendance_date}</td>
+                    <td className="py-3 text-muted-foreground tabular-nums">{formatTime(r.check_in_at)}</td>
+                    <td className="py-3 text-muted-foreground tabular-nums">{formatTime(r.check_out_at)}</td>
+                    <td className="py-3 text-muted-foreground tabular-nums">
+                      {breakMins > 0 ? formatMinutesAsHhMm(breakMins) : "—"}
+                    </td>
+                    <td className="py-3">
+                      <StatusPill tone={r.status === "present" ? "success" : r.status === "late" ? "warning" : "danger"}>
+                        {ATTENDANCE_STATUS_LABEL[r.status]}
+                      </StatusPill>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -608,7 +713,14 @@ export default function AttendancePage() {
                   <input
                     type="date"
                     value={leaveForm.start_date}
-                    onChange={(e) => setLeaveForm((f) => ({ ...f, start_date: e.target.value }))}
+                    onChange={(e) =>
+                      setLeaveForm((f) => {
+                        const start_date = e.target.value;
+                        // لو تاريخ النهاية بقى قبل البداية الجديدة، نزوّده تلقائيًا
+                        const end_date = f.end_date < start_date ? start_date : f.end_date;
+                        return { ...f, start_date, end_date };
+                      })
+                    }
                     className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary/50"
                   />
                 </label>
@@ -617,6 +729,7 @@ export default function AttendancePage() {
                   <input
                     type="date"
                     value={leaveForm.end_date}
+                    min={leaveForm.start_date}
                     onChange={(e) => setLeaveForm((f) => ({ ...f, end_date: e.target.value }))}
                     className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary/50"
                   />
@@ -657,6 +770,64 @@ export default function AttendancePage() {
                 {editingLeaveId !== null ? "حفظ التعديل" : "إرسال الطلب"}
               </button>
             </div>
+          </div>
+        </>
+      )}
+
+      {/* ============================================================
+          مودال: تفاصيل طلب الإجازة (كارد) — بيعرض السبب كامل من غير قطع
+          حتى لو فقرة طويلة جدًا (scroll جوه الكارد نفسه لو لزم الأمر).
+      ============================================================ */}
+      {detailsLeave && (
+        <>
+          <div className="fixed inset-0 z-40 bg-black/40" onClick={() => setDetailsLeave(null)} />
+          <div className="fixed inset-x-4 top-1/2 z-50 mx-auto max-w-lg -translate-y-1/2 rounded-2xl border border-border bg-card p-6 shadow-warm max-h-[85vh] overflow-y-auto">
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-bold flex items-center gap-2">
+                  <Palmtree className="h-5 w-5 text-teal" />
+                  {LEAVE_TYPE_LABEL[detailsLeave.leave_type]}
+                </h3>
+                <div className="mt-1">
+                  {/* ✅ فيكس: نفس التوحيد — بيستخدم LEAVE_STATUS_TONE بدل الـ
+                      ternary الناقص القديم. */}
+                  <StatusPill tone={LEAVE_STATUS_TONE[detailsLeave.status]}>
+                    {LEAVE_STATUS_LABEL[detailsLeave.status]}
+                  </StatusPill>
+                </div>
+              </div>
+              <button onClick={() => setDetailsLeave(null)} className="text-muted-foreground hover:text-foreground shrink-0">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 text-sm mb-4">
+              <div className="rounded-xl bg-accent/30 p-3">
+                <div className="text-xs text-muted-foreground mb-1">من تاريخ</div>
+                <div className="font-semibold tabular-nums">{detailsLeave.start_date}</div>
+              </div>
+              <div className="rounded-xl bg-accent/30 p-3">
+                <div className="text-xs text-muted-foreground mb-1">إلى تاريخ</div>
+                <div className="font-semibold tabular-nums">{detailsLeave.end_date}</div>
+              </div>
+            </div>
+
+            <div>
+              <div className="text-xs text-muted-foreground mb-1">السبب</div>
+              {/* النص كامل هنا بدون truncate، ومع whitespace-pre-wrap عشان
+                  الفقرات/الأسطر الطويلة تتلف بشكل طبيعي وتفضل قابلة للقراءة
+                  بالكامل، والكارد نفسه فيه scroll لو النص طويل جدًا. */}
+              <div className="rounded-xl border border-border bg-background p-3 text-sm whitespace-pre-wrap break-words leading-relaxed">
+                {detailsLeave.reason || "— بدون سبب مكتوب —"}
+              </div>
+            </div>
+
+            <button
+              onClick={() => setDetailsLeave(null)}
+              className="mt-5 w-full rounded-xl border border-border py-2.5 text-sm font-semibold hover:bg-accent"
+            >
+              إغلاق
+            </button>
           </div>
         </>
       )}

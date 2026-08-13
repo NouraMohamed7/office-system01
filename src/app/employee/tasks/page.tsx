@@ -4,7 +4,7 @@ import { PortalLayout, Card, StatusPill } from "@/components/portal-layout";
 import { useToast } from "@/components/toast";
 import {
   Calendar, Circle, PlayCircle, CheckCircle2, AlertTriangle,
-  UserRound, LayoutGrid, List, Loader2, Plus, X,
+  UserRound, LayoutGrid, List, Loader2, Plus, X, Zap, Info,
 } from "lucide-react";
 import { useEffect, useMemo, useState, useCallback } from "react";
 import {
@@ -15,7 +15,8 @@ import type { TaskRow, TaskComment, TaskStatus, TaskPriority, DepartmentLite, Us
 import { TASK_PRIORITY_LABEL_AR } from "@/types/tasks";
 
 // الموظف بيحدد حالته بنفسه بين التلاتة دول بس.
-// "late" و"cancelled" بيحددهم السيرفر/المدير مش الموظف.
+// "late" بيتحسب تلقائي حسب الموعد النهائي، و"cancelled" بيحددها المدير —
+// عشان كده مش موجودين كخيارات هنا (ده مقصود مش باگ، شوف hint تحت التوجل).
 type EmployeeStatus = Extract<TaskStatus, "pending" | "processing" | "completed">;
 
 const STATUS_OPTIONS: { key: EmployeeStatus; ar: string; icon: typeof Circle }[] = [
@@ -24,8 +25,11 @@ const STATUS_OPTIONS: { key: EmployeeStatus; ar: string; icon: typeof Circle }[]
   { key: "completed", ar: "خلصتها", icon: CheckCircle2 },
 ];
 
+// 🔧 FIX (Issue 1 & 5): "عالية" و"عاجلة" كانوا بنفس اللون بالظبط فحسّياً
+// حاسس إن "عاجلة" مش موجودة كخيار منفصل. دلوقتي urgent ليها شكل مميز
+// (halo + نبضة) عشان تتفرق بصريًا عن high من أول نظرة.
 const PRIORITY_DOT: Record<TaskPriority, string> = {
-  urgent: "bg-destructive",
+  urgent: "bg-destructive ring-2 ring-destructive/40 animate-pulse",
   high: "bg-destructive",
   medium: "bg-warning",
   low: "bg-success",
@@ -93,6 +97,14 @@ export default function TasksPage() {
     return subscribeToTasks(() => loadTasks());
   }, [loadTasks]);
 
+  // 🔧 FIX (Issue 4-جزئي/UX): لو الـ drawer مفتوح على مهمة والقائمة اتحدثت
+  // (من realtime أو من تحديث محلي)، نفس نسخة المهمة المعروضة تفضل متزامنة
+  useEffect(() => {
+    if (!selected) return;
+    const fresh = tasks.find((t) => t.id === selected.id);
+    if (fresh && fresh !== selected) setSelected(fresh);
+  }, [tasks, selected]);
+
   const stats = useMemo(() => {
     const total = tasks.length;
     const completed = tasks.filter((t) => t.status === "completed").length;
@@ -105,7 +117,6 @@ export default function TasksPage() {
   const updateStatus = async (taskId: number, newStatus: EmployeeStatus) => {
     const prevTasks = tasks;
     setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, status: newStatus } : t)));
-    setSelected((prev) => (prev && prev.id === taskId ? { ...prev, status: newStatus } : prev));
     try {
       await updateTaskStatus(taskId, newStatus);
       showToast("success", `تم تحديث حالتك: ${STATUS_OPTIONS.find((o) => o.key === newStatus)?.ar}`);
@@ -119,6 +130,7 @@ export default function TasksPage() {
     title: string;
     description: string;
     priority: TaskPriority;
+    startDate: string;
     endDate: string;
   }) => {
     setSubmitting(true);
@@ -126,7 +138,7 @@ export default function TasksPage() {
       const res = await createMyOwnTask({
         title: data.title,
         description: data.description || undefined,
-        start_date: todayInputValue(),
+        start_date: data.startDate || todayInputValue(),
         end_date: data.endDate || undefined,
         priority: data.priority,
       });
@@ -279,9 +291,21 @@ function TaskCard({ task, departmentName, onOpen, onStatusChange }: { task: Task
           <div className="text-sm font-semibold text-foreground leading-snug flex-1">{task.title}</div>
         </div>
         <div className="text-xs text-muted-foreground line-clamp-2 mb-2">{task.description}</div>
-        <div className="text-[11px] text-muted-foreground flex items-center gap-1 mb-3">
+        <div className="text-[11px] text-muted-foreground flex items-center gap-1 mb-1">
           <UserRound className="h-3 w-3" /> قسم {departmentName}
         </div>
+        {/* 🔧 FIX (Issue 6/8): عرض تاريخ البداية جنب النهاية بدل ما يظهر بس end_date */}
+        <div className="text-[11px] text-muted-foreground flex items-center gap-1 mb-2">
+          <Calendar className="h-3 w-3" /> من {formatDue(task.start_date)} لحد {formatDue(task.end_date)}
+        </div>
+        {typeof task.completion_percent === "number" && (
+          <div className="mb-3">
+            <div className="h-1.5 w-full rounded-full bg-secondary overflow-hidden">
+              <div className="h-full bg-primary rounded-full" style={{ width: `${task.completion_percent}%` }} />
+            </div>
+            <div className="text-[10px] text-muted-foreground mt-1">{task.completion_percent}% مكتمل</div>
+          </div>
+        )}
         <div className="flex items-center justify-between text-xs text-muted-foreground mb-3">
           <div className={`flex items-center gap-1 ${late ? "text-destructive font-semibold" : ""}`}>
             {late && <AlertTriangle className="h-3 w-3" />}
@@ -314,18 +338,22 @@ function AddTaskModal({
     title: string;
     description: string;
     priority: TaskPriority;
+    startDate: string;
     endDate: string;
   }) => void;
 }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState<TaskPriority>("medium");
+  // 🔧 FIX (Issue 6): تاريخ البداية بقى ظاهر ومتحكم فيه بدل ما يتبعت hidden = النهاردة
+  const [startDate, setStartDate] = useState(todayInputValue());
   const [endDate, setEndDate] = useState("");
   const [error, setError] = useState("");
 
   const handleSubmit = () => {
     if (!title.trim()) return setError("اكتب عنوان المهمة");
-    onSubmit({ title: title.trim(), description, priority, endDate });
+    if (endDate && endDate < startDate) return setError("موعد التسليم لازم يكون بعد أو يساوي تاريخ البداية");
+    onSubmit({ title: title.trim(), description, priority, startDate, endDate });
   };
 
   return (
@@ -356,33 +384,55 @@ function AddTaskModal({
               className="w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none resize-none"
             />
           </div>
+
+          {/* 🔧 FIX (Issue 6): تاريخ البداية والنهاية جنب بعض بدل ما البداية تكون مخفية */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-semibold text-muted-foreground mb-2">الأولوية</label>
-              <div className="inline-flex w-full rounded-xl bg-secondary p-1">
-                {(Object.keys(TASK_PRIORITY_LABEL_AR) as TaskPriority[]).map((key) => (
-                  <button
-                    key={key}
-                    type="button"
-                    onClick={() => setPriority(key)}
-                    className={`flex-1 rounded-lg px-2 py-2 text-xs font-semibold transition ${priority === key ? "bg-card text-primary shadow-warm" : "text-muted-foreground"}`}
-                  >
-                    {TASK_PRIORITY_LABEL_AR[key]}
-                  </button>
-                ))}
-              </div>
+              <label className="block text-xs font-semibold text-muted-foreground mb-2">تاريخ البداية</label>
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => { setStartDate(e.target.value); if (error) setError(""); }}
+                className="w-full h-11 rounded-xl border border-border bg-background px-3 text-sm focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none"
+              />
             </div>
             <div>
               <label className="block text-xs font-semibold text-muted-foreground mb-2">تاريخ التسليم</label>
               <input
                 type="date"
                 value={endDate}
-                min={todayInputValue()}
+                min={startDate}
                 onChange={(e) => { setEndDate(e.target.value); if (error) setError(""); }}
                 className="w-full h-11 rounded-xl border border-border bg-background px-3 text-sm focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none"
               />
             </div>
           </div>
+
+          {/* 🔧 FIX (Issue 1 & 5): الأولوية بقت في صف مستقل بعرض كامل بدل ما
+              تتزنق في نص عمود جوه grid-cols-2 — "عاجلة" بقت ظاهرة ومقروءة كاملة */}
+          <div>
+            <label className="block text-xs font-semibold text-muted-foreground mb-2">الأولوية</label>
+            <div className="grid grid-cols-4 gap-1.5">
+              {(Object.keys(TASK_PRIORITY_LABEL_AR) as TaskPriority[]).map((key) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setPriority(key)}
+                  className={`flex items-center justify-center gap-1 rounded-lg px-1.5 py-2 text-xs font-semibold transition ${
+                    priority === key
+                      ? key === "urgent"
+                        ? "bg-destructive text-destructive-foreground shadow-warm"
+                        : "bg-card text-primary shadow-warm"
+                      : "bg-secondary text-muted-foreground"
+                  }`}
+                >
+                  {key === "urgent" && <Zap className="h-3 w-3" />}
+                  {TASK_PRIORITY_LABEL_AR[key]}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {error && <p className="text-xs text-destructive font-semibold">{error}</p>}
         </div>
         <div className="flex items-center gap-3 mt-6">
@@ -448,7 +498,10 @@ function TaskDrawer({
           <div>
             <div className="flex items-center gap-2 mb-2">
               <PriorityDot p={task.priority} />
-              <span className="text-xs font-semibold text-muted-foreground">{TASK_PRIORITY_LABEL_AR[task.priority]}</span>
+              <span className={`text-xs font-semibold flex items-center gap-1 ${task.priority === "urgent" ? "text-destructive" : "text-muted-foreground"}`}>
+                {task.priority === "urgent" && <Zap className="h-3 w-3" />}
+                {TASK_PRIORITY_LABEL_AR[task.priority]}
+              </span>
               {late && <span className="inline-flex items-center gap-1 rounded-full bg-destructive/15 text-destructive px-2 py-0.5 text-[11px] font-bold"><AlertTriangle className="h-3 w-3" /> متأخرة</span>}
               {task.status === "cancelled" && <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-bold text-muted-foreground">ملغية</span>}
             </div>
@@ -464,19 +517,40 @@ function TaskDrawer({
               <div className="text-xs font-semibold text-muted-foreground mb-2">الوصف</div>
               <p className="text-sm text-foreground leading-relaxed">{task.description || "لا يوجد وصف"}</p>
             </div>
+            {/* 🔧 FIX (Issue 6): تاريخ البداية بقى ظاهر جنب النهاية */}
             <div className="grid grid-cols-2 gap-4">
+              <div>
+                <div className="text-xs font-semibold text-muted-foreground mb-2">تاريخ البداية</div>
+                <div className="flex items-center gap-2 text-sm text-foreground"><Calendar className="h-4 w-4 text-primary" />{formatDue(task.start_date)}</div>
+              </div>
               <div>
                 <div className="text-xs font-semibold text-muted-foreground mb-2">تاريخ التسليم</div>
                 <div className="flex items-center gap-2 text-sm text-foreground"><Calendar className="h-4 w-4 text-primary" />{formatDue(task.end_date)}</div>
               </div>
-              <div>
-                <div className="text-xs font-semibold text-muted-foreground mb-2">الوقت المتبقي</div>
-                <div className={`text-sm ${late ? "text-destructive font-semibold" : "text-foreground"}`}>{dueHint(task)}</div>
-              </div>
             </div>
             <div>
-              <div className="text-xs font-semibold text-muted-foreground mb-2">المرفقات المرسلة من المدير</div>
-              <p className="text-xs text-muted-foreground">عرض مرفقات المهام القديمة غير متاح حاليًا — محتاج جدول ربط من الباك بين المهام والملفات (الدوك بيرجع الملفات وقت الإنشاء/التعديل بس، من غير endpoint لقراءتها لاحقًا).</p>
+              <div className="text-xs font-semibold text-muted-foreground mb-2">الوقت المتبقي</div>
+              <div className={`text-sm ${late ? "text-destructive font-semibold" : "text-foreground"}`}>{dueHint(task)}</div>
+            </div>
+            {/* 🔧 FIX (Issue 8): نسبة الإنجاز لو موجودة */}
+            {typeof task.completion_percent === "number" && (
+              <div>
+                <div className="text-xs font-semibold text-muted-foreground mb-2">نسبة الإنجاز</div>
+                <div className="h-2 w-full rounded-full bg-secondary overflow-hidden">
+                  <div className="h-full bg-primary rounded-full" style={{ width: `${task.completion_percent}%` }} />
+                </div>
+                <div className="text-xs text-muted-foreground mt-1">{task.completion_percent}%</div>
+              </div>
+            )}
+            <div>
+              <div className="text-xs font-semibold text-muted-foreground mb-2">المرفقات</div>
+              {/* ⚠️ ISSUE 9 — backend gap: مفيش endpoint حاليًا لقراءة ملفات مهمة
+                  موجودة بالفعل، الملفات بترجع وقت الإنشاء بس. راجع getTaskFiles
+                  في tasks.api.ts */}
+              <p className="text-xs text-muted-foreground flex items-start gap-1.5">
+                <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                عرض مرفقات المهمة مش متاح حاليًا — محتاج endpoint من الباك لقراءة الملفات المرتبطة بالمهمة بعد إنشائها.
+              </p>
             </div>
           </section>
 
@@ -485,7 +559,9 @@ function TaskDrawer({
           {canToggle && (
             <section className="space-y-3">
               <div className="text-xs font-bold text-foreground">حالتك في المهمة</div>
-              <p className="text-xs text-muted-foreground -mt-1">حدّث حالتك كل ما تتقدم في الشغل، المدير بيشوفها لحظة بلحظة.</p>
+              <p className="text-xs text-muted-foreground -mt-1">
+                حدّث حالتك كل ما تتقدم في الشغل، المدير بيشوفها لحظة بلحظة. حالة "متأخرة" بتتحدد تلقائيًا لو المهمة فاتت موعدها، مش من الموظف.
+              </p>
               <StatusToggle status={task.status} onChange={onStatusChange} />
             </section>
           )}

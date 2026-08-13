@@ -17,6 +17,23 @@ async function getCurrentUserId(): Promise<string> {
   return data.user.id;
 }
 
+/**
+ * ⚠️ للعرض في الـ UI بس (تظهر/تخفي زرار، توجيه لصفحة تانية...) —
+ * مش حماية حقيقية. الصلاحية الفعلية بتتقرر من RLS/RPC على السيرفر
+ * زي ما موضح في الملاحظات فوق (Issue 4 / Issue 7). حتى لو الفرونت
+ * قال "أنت مدير"، الباك هو اللي بيرفض أو يقبل الطلب فعليًا.
+ */
+export async function getCurrentUserRoleId(): Promise<number | null> {
+  const userId = await getCurrentUserId();
+  const { data, error } = await supabase
+    .from("users_with_email")
+    .select("role_id")
+    .eq("id", userId)
+    .maybeSingle();
+  if (error) return null;
+  return (data as any)?.role_id ?? null;
+}
+
 /* ============================================================
    READ — المهام
 ============================================================ */
@@ -47,11 +64,6 @@ export async function getAllTasks(): Promise<TaskRow[]> {
    READ — بيانات مساعدة
 ============================================================ */
 
-/**
- * خريطة id → اسم/صورة/قسم.
- * ⚠️ راجع الملاحظة في types/tasks.ts بخصوص department_id — لو العمود
- * مش موجود في الـ view، هيرجع undefined لكل مستخدم والفرونت هيعمل fallback.
- */
 export async function getUsersMap(): Promise<Record<string, UserLite>> {
   const { data, error } = await supabase
     .from("users_with_email")
@@ -82,6 +94,19 @@ export async function getDepartments(): Promise<DepartmentLite[]> {
   return data ?? [];
 }
 
+/**
+ * 🔧 ISSUE 9 — placeholder.
+ * لا يوجد حاليًا في الباك أي endpoint/جدول موثق لقراءة الملفات المرتبطة
+ * بمهمة موجودة بالفعل — create-task و update-task بيرجعوا الملفات وقت
+ * الإنشاء/التعديل بس (في الـ response)، من غير أي طريقة لإعادة جلبها بعد كده.
+ * الدالة دي موجودة كـ "عقد" ثابت (contract) عشان الـ UI ينادي عليها بشكل
+ * موحّد الآن، وتتحول لطلب Supabase حقيقي أول ما الباك يوفر الجدول/الـ RPC
+ * (غالبًا هيبقى join على attachment_type = 'tasks').
+ */
+export async function getTaskFiles(_taskId: number | string): Promise<TaskFile[]> {
+  return [];
+}
+
 /* ============================================================
    CREATE — مدير فقط — multipart/form-data
 ============================================================ */
@@ -97,10 +122,6 @@ export async function createTask(
     formData.append("department_id", String(payload.department_id));
   }
   if (payload.start_date) formData.append("start_date", payload.start_date);
-  // ⚠️ عمود end_date عليه NOT NULL في جدول tasks فعليًا (اتأكد من الخطأ اللي
-  // بيرجعه الباك: null value in column "end_date" violates not-null constraint)،
-  // رغم إن الدوك كاتبها اختياري. فبنبعتها دايمًا، ولو مش متحددة بنستخدم
-  // start_date كـ fallback بدل ما الطلب يفشل من الباك.
   formData.append("end_date", payload.end_date || payload.start_date);
   if (payload.priority) formData.append("priority", payload.priority);
   (payload.files ?? []).forEach((f) => formData.append("file", f));
@@ -115,14 +136,16 @@ export async function createTask(
 /**
  * الموظف بينشئ مهمة لنفسه فقط.
  *
- * ⚠️ ملحوظة مهمة: endpoint "create-task" موثق رسميًا كـ "Auth: Manager only".
- * يعني الموظف مش هيقدر ينده عليه. البديل هنا: insert مباشر في جدول tasks
- * (بدل Edge Function)، والصلاحية بتتحدد بـ RLS على الباك. **محتاج تأكيد من
- * الباك ديفلوبر إن فيه RLS policy بتسمح للموظف بعمل insert في tasks لما
- * assigned_to = auth.uid()**، وإلا هيرجع خطأ صلاحيات (403 / RLS violation).
+ * ⚠️ ISSUE 7 — endpoint "create-task" موثق رسميًا كـ "Auth: Manager only".
+ * الموظف مش هيقدر ينده عليه، فالبديل هنا insert مباشر في جدول tasks،
+ * وده معتمد بالكامل على وجود RLS policy على الباك تسمح بـ:
+ *   assigned_to = auth.uid()  AND  status = 'pending'
+ * لو الـ policy دي مش موجودة، الـ insert هيترفض بخطأ RLS — وده على الأغلب
+ * هو سبب "error in create task" المُبلّغ عنه. لحد ما يتأكد الباك، بنلتقط
+ * الخطأ ده تحديدًا ونطلع رسالة مفهومة بدل الخطأ الخام من Postgres.
  *
- * كمان: مفيش رفع ملفات في المسار ده (الـ files بيتجاهلوا) لإن insert المباشر
- * مش بيمر على منطق رفع الملفات اللي في الـ Edge Function.
+ * كمان: مفيش رفع ملفات في المسار ده (insert مباشر مش بيمر على منطق رفع
+ * الملفات اللي في الـ Edge Function) — مرتبط بـ ISSUE 9.
  */
 export async function createMyOwnTask(
   payload: Omit<CreateTaskPayload, "assigned_to" | "department_id">
@@ -156,29 +179,41 @@ export async function createMyOwnTask(
     .select()
     .single();
 
-  if (error) throw error;
+  if (error) {
+    // 🔧 FIX (Issue 7): رسالة مفهومة بدل خطأ Postgres الخام لو المشكلة صلاحيات RLS
+    if (error.code === "42501" || /row-level security|permission denied/i.test(error.message)) {
+      throw new Error(
+        "مش مسموح لك تضيف مهمة لنفسك دلوقتي — الصلاحية دي محتاجة تفعيل من الباك (RLS) أولًا، كلم فريق التقني."
+      );
+    }
+    throw error;
+  }
   return { message: "تم إضافة المهمة بنجاح", task: data as TaskRow, files: [] };
 }
 
 /**
  * ينشئ مهمة منفصلة لكل موظف من قائمة المختارين — نفس المحتوى بالظبط.
- * حل بديل من الفرونت لأن الباك بيدعم assigned_to واحد بس لكل صف مهمة.
  */
 export async function createTaskForMultipleAssignees(
   payload: Omit<CreateTaskPayload, "assigned_to"> & { assigned_to: string[] }
-): Promise<{ successCount: number; failed: { userId: string; error: string }[] }> {
+): Promise<{ successCount: number; failed: { userId: string; error: string }[]; files: TaskFile[] }> {
   const results = await Promise.allSettled(
     payload.assigned_to.map((userId) => createTask({ ...payload, assigned_to: userId }))
   );
 
   const failed: { userId: string; error: string }[] = [];
   let successCount = 0;
+  let files: TaskFile[] = [];
   results.forEach((r, i) => {
-    if (r.status === "fulfilled") successCount++;
-    else failed.push({ userId: payload.assigned_to[i], error: r.reason?.message ?? "خطأ غير معروف" });
+    if (r.status === "fulfilled") {
+      successCount++;
+      if (r.value.files?.length) files = r.value.files; // نفس الملفات بترفق لكل نسخة
+    } else {
+      failed.push({ userId: payload.assigned_to[i], error: r.reason?.message ?? "خطأ غير معروف" });
+    }
   });
 
-  return { successCount, failed };
+  return { successCount, failed, files };
 }
 
 /* ============================================================
@@ -218,13 +253,9 @@ export async function deleteTask(taskId: number | string): Promise<void> {
 
 /* ============================================================
    STATUS UPDATE — RPC
-   ⚠️ موثقة في الدوك باسم "update_task_status (emp)" فقط — ممكن يكون فيها
-   check داخلي إن الكولر لازم يكون هو صاحب المهمة (assigned_to). لو كده،
-   استخدام المدير للـ RPC ده في الـ Kanban (updateTaskStatusAsManager) ممكن
-   يرجع صلاحيات error. محتاج تأكيد/تعديل من الباك لو حصل كده.
 ============================================================ */
 
-/** الموظف بيحدّث حالته بنفسه — موثقة رسميًا */
+/** الموظف بيحدّث حالته بنفسه — موثقة رسميًا باسم update_task_status (emp) */
 export async function updateTaskStatus(taskId: number | string, status: TaskStatus): Promise<void> {
   const { error } = await supabase.rpc("update_task_status", {
     p_task_id: Number(taskId),
@@ -233,7 +264,15 @@ export async function updateTaskStatus(taskId: number | string, status: TaskStat
   if (error) throw error;
 }
 
-/** المدير بينقل المهمة بين أعمدة الـ Kanban — بننادي نفس الـ RPC (راجع الملحوظة فوق) */
+/**
+ * المدير بينقل المهمة بين أعمدة الـ Kanban.
+ *
+ * ⚠️ ISSUE 4 — بننادي نفس الـ RPC "update_task_status" اللي موثق في الدوك
+ * باسم "(emp)" بس. لو فيه check داخلي إن الكولر لازم يكون هو الـ assigned_to،
+ * نداء المدير هيترفض والـ optimistic update في الصفحة هيعمل rollback —
+ * وده سبب إحساس "الكارت مبيتحدثش". بنلتقط خطأ الصلاحيات هنا تحديدًا
+ * ونطلع رسالة واضحة بدل ما تفضل ظاهرة كباگ غامض في الفرونت.
+ */
 export async function updateTaskStatusAsManager(
   taskId: number | string,
   status: TaskStatus
@@ -242,7 +281,14 @@ export async function updateTaskStatusAsManager(
     p_task_id: Number(taskId),
     p_status: status,
   });
-  if (error) throw error;
+  if (error) {
+    if (error.code === "42501" || /permission|صلاحي|not allowed/i.test(error.message)) {
+      throw new Error(
+        "الباك مش بيسمح للمدير يغيّر حالة المهمة بالـ RPC الحالي (update_task_status موثق للموظف بس) — محتاج تعديل من الباك."
+      );
+    }
+    throw error;
+  }
 }
 
 /* ============================================================

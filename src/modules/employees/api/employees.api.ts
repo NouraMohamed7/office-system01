@@ -7,6 +7,8 @@ import type {
   PhoneRecord,
   UserRecord,
 } from '@/types/user'
+import { normalizeEmpStatus, type EmpStatus } from '@/lib/emp-status-labels'
+import { toInternationalPhone } from '@/lib/validation/employee-form'
 
 export type EmployeeRow = PersonRow
 
@@ -35,6 +37,39 @@ function classifyPhones(numbers: string[]): { personalPhone: string; workPhone: 
     workPhone: egyptians[1] ?? '',
     saudiPhone: saudi,
   }
+}
+
+// ------------------------------------------------------------------
+// ✅ الفيكس: استخراج رسالة الخطأ الحقيقية من الـ Edge Function.
+//
+// supabase.functions.invoke() لما الـ Edge Function ترجع status غير 2xx،
+// بيرجع FunctionsHttpError واللي error.message بتاعه بيكون نص عام
+// ("Edge Function returned a non-2xx status code") مش الرسالة العربية
+// الحقيقية من الباك (زي "الإيميل مستخدم بالفعل" أو "هذا الإجراء متاح
+// للمدير فقط"). الرسالة الحقيقية موجودة جوه response body، فبنحاول:
+//   1) data?.error (لو الـ SDK رجّعها في data برضه)
+//   2) error.context.json() (الـ response الحقيقي لـ FunctionsHttpError)
+//   3) error.message كـ fallback أخير
+// ------------------------------------------------------------------
+async function extractErrorMessage(error: unknown, data: unknown): Promise<string> {
+  if (data && typeof data === 'object' && 'error' in (data as Record<string, unknown>)) {
+    const msg = (data as Record<string, unknown>).error
+    if (typeof msg === 'string' && msg) return msg
+  }
+
+  const err = error as { context?: Response; message?: string }
+  if (err?.context && typeof err.context.json === 'function') {
+    try {
+      const body = await err.context.json()
+      if (body && typeof body === 'object' && 'error' in body && typeof body.error === 'string') {
+        return body.error
+      }
+    } catch {
+      // الـ body مش JSON قابل للقراءة (اتقرا قبل كده أو مش JSON أصلاً) — نكمل على fallback
+    }
+  }
+
+  return err?.message || 'حصل خطأ غير متوقع'
 }
 
 async function getPhonesByUserIds(userIds: string[]): Promise<Map<string, string[]>> {
@@ -102,9 +137,8 @@ export async function getEmployees(): Promise<EmployeeRow[]> {
       full_name: u.name ?? '',
       // ⚠️ جدول users مفيهوش عمود email فعليًا (شايفينه في الـ response اللي وصلنا).
       // الإيميل موجود بس في auth.users، ومفيش صلاحية نجيبه من هنا لمستخدمين تانيين.
-      // لو محتاجينه في اللستة، لازم endpoint في الباك (Edge Function) يرجّعه join مع auth.users.
       email: u.email ?? '',
-      emp_status: u.emp_status ?? 'نشط',
+      emp_status: normalizeEmpStatus(u.emp_status),
       department: departmentsList.find((d) => d.id === u.department_id) ?? null,
       position: positionsList.find((p) => p.id === u.position_id) ?? null,
       branch: branchesList.find((b) => b.id === u.branch_id) ?? null,
@@ -159,7 +193,7 @@ export async function getEmployeeById(id: string): Promise<EmployeeRow | null> {
     id: u.id,
     full_name: u.name ?? '',
     email: u.email ?? '',
-    emp_status: u.emp_status ?? 'نشط',
+    emp_status: normalizeEmpStatus(u.emp_status),
     department: (department as DepartmentRecord) ?? null,
     position: (position as PositionRecord) ?? null,
     branch: (branch as BranchRecord) ?? null,
@@ -169,22 +203,6 @@ export async function getEmployeeById(id: string): Promise<EmployeeRow | null> {
     photo_url: u.photo_url ?? null,
     created_at: u.created_at,
   }
-}
-
-// تحويل الأرقام المحلية لصيغة دولية (+20 لمصر, +966 للسعودية) زي ما الباك بيطلب
-function toInternationalPhone(local: string): string {
-  const digits = local.replace(/\D/g, '')
-
-  if (/^01[0125][0-9]{8}$/.test(digits)) {
-    return `+20${digits.slice(1)}`
-  }
-  if (/^05[0-9]{8}$/.test(digits)) {
-    return `+966${digits.slice(1)}`
-  }
-  if (/^5[0-9]{8}$/.test(digits)) {
-    return `+966${digits}`
-  }
-  return local.startsWith('+') ? local : `+${digits}`
 }
 
 // إضافة موظف جديد — create-user (form-data)
@@ -219,8 +237,9 @@ export async function createEmployee(payload: {
   })
 
   if (error) {
-    console.error('خطأ في إضافة الموظف:', error)
-    throw error
+    const message = await extractErrorMessage(error, data)
+    console.error('خطأ في إضافة الموظف:', message)
+    throw new Error(message)
   }
 
   return data
@@ -235,7 +254,7 @@ export async function updateEmployee(payload: {
   department_id?: number
   position_id?: number
   branch_id?: number
-  emp_status?: string
+  emp_status?: EmpStatus
   photo?: File | null
 }) {
   const formData = new FormData()
@@ -259,16 +278,36 @@ export async function updateEmployee(payload: {
   })
 
   if (error) {
-    console.error('خطأ في تعديل بيانات الموظف:', error)
-    throw error
+    const message = await extractErrorMessage(error, data)
+    console.error('خطأ في تعديل بيانات الموظف:', message)
+    throw new Error(message)
   }
 
   return data
 }
 
 // تفعيل/تعطيل موظف (بيستخدم نفس update-user بحقل emp_status بس)
-export async function updateEmployeeStatus(userId: string, emp_status: string) {
+// ⚠️ لازم قيمة إنجليزية حقيقية من enum public.emp_status
+// (active / on_leave / suspended / resigned / pending) — مش "inactive".
+export async function updateEmployeeStatus(userId: string, emp_status: EmpStatus) {
   return updateEmployee({ user_id: userId, emp_status })
+}
+
+// حذف موظف نهائيًا — delete-user Edge Function (Manager only)
+// بيمسح: الملف الشخصي، الهاتف، المهام، الحضور، التقارير، التعليقات،
+// الإشعارات، الملفات، وحساب الدخول. غير قابل للتراجع.
+export async function deleteEmployee(userId: string): Promise<{ message: string; storage_warnings: string[] }> {
+  const { data, error } = await supabase.functions.invoke('delete-user', {
+    body: { user_id: userId },
+  })
+
+  if (error) {
+    const message = await extractErrorMessage(error, data)
+    console.error('خطأ في حذف الموظف:', message)
+    throw new Error(message)
+  }
+
+  return data
 }
 
 // لستة الوظائف والفروع (عشان الـ Select بتاعة الفورم)
@@ -283,10 +322,6 @@ export async function getAllBranches(): Promise<BranchRecord[]> {
   if (error) throw error
   return (data || []) as BranchRecord[]
 }
-
-// ⚠️ ملحوظة: مفيش endpoint لحذف موظف (delete-user) في الدوك اللي وصلني لحد دلوقتي.
-// دالة "حذف موظف" في صفحة الموظفين لسه شغالة محلي بس (in-memory) مش متصلة بالباك،
-// هتفضل كده لحد ما الباك يوفر endpoint للحذف.
 
 // ============================================================
 //  Employee Stats — تاسكات / تقارير / ملفات / حضور
@@ -349,8 +384,6 @@ export type EmployeeAttendanceStats = {
 // (حاضر/غائب/متأخر...؟) مش موثقة عندي، فمعتمدتش عليه.
 // "حضور" = عدد صفوف الشهر الحالي (كل صف = يوم حضر فيه فعليًا).
 // "تأخير" = late_minutes > 0.
-// "غياب" لسه مش متاح: يحتاج مقارنة مع أيام العمل الرسمية للموظف (جدول/مصدر
-// مش موجود في الدوك) — سيبته mock في الصفحة.
 export async function getEmployeeAttendanceStats(userId: string): Promise<EmployeeAttendanceStats> {
   const now = new Date()
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10)
@@ -371,4 +404,3 @@ export async function getEmployeeAttendanceStats(userId: string): Promise<Employ
     lateDays: rows.filter((r) => (r.late_minutes ?? 0) > 0).length,
   }
 }
-

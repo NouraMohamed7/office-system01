@@ -120,6 +120,28 @@ function currentMonthRange(): { firstDay: string; lastDay: string } {
   return { firstDay, lastDay };
 }
 
+/** دقايق البريك الفعلية لسجل واحد — بيفضّل break_mins الجاهز من الباك،
+ *  ولو مش موجود (سجل قديم/edge case) بيحسبه من الفرق بين start/end. لو
+ *  البريك لسه مفتوح (end_time = null) بيرجع null عشان نميّزه عن "صفر". */
+function breakDurationMinutes(b: BreakRecord): number | null {
+  if (b.break_mins !== null) return b.break_mins;
+  if (!b.end_time) return null; // بريك لسه مفتوح
+  const mins = Math.round((new Date(b.end_time).getTime() - new Date(b.start_time).getTime()) / 60000);
+  return mins > 0 ? mins : 0;
+}
+
+/** بياخد أحدث سجل من مجموعة سجلات (بالمقارنة بـ check_in_at)، عشان نستخدمها
+ *  في أي مكان محتاج "آخر سجل حضور" بدل ما نعتمد على الداتابيز ترجع صف واحد
+ *  بالظبط (اللي مش مضمون، زي ما موثق في dedupedByUser بصفحة المدير). */
+function pickLatestByCheckIn<T extends { check_in_at: string | null }>(rows: T[]): T | null {
+  if (rows.length === 0) return null;
+  let latest = rows[0];
+  for (const r of rows) {
+    if ((r.check_in_at ?? "") >= (latest.check_in_at ?? "")) latest = r;
+  }
+  return latest;
+}
+
 // ============================================================
 // Manager: كل موظفين اليوم (attendance_today view)
 // ============================================================
@@ -249,6 +271,13 @@ export async function checkOut(): Promise<unknown> {
 // Employee: حالة اليوم بتاعي
 // ============================================================
 
+// ✅ فيكس: كانت بتستخدم .maybeSingle() اللي بيرمي error (PGRST116) لو رجع
+// أكتر من صف واحد لنفس اليوم — وده سيناريو معترف بيه وموثق فعليًا في نفس
+// المشروع (نفس المشكلة موجودة ومتعالجة في صفحة المدير عبر dedupedByUser).
+// لو حصل هنا، الاستثناء كان بيوقف تحميل الصفحة كلها ويوهم الموظف إن حالته
+// "لم يسجل حضور" حتى لو هو بالفعل مسجل فعليًا. دلوقتي بنجيب كل صفوف اليوم
+// ونرجّع الأحدث بالمقارنة بـ check_in_at، بدون أي افتراض إن الداتابيز
+// هترجع صف واحد بالظبط.
 export async function getMyAttendanceToday(): Promise<AttendanceRecord | null> {
   const userId = await getCurrentUserId();
 
@@ -256,11 +285,10 @@ export async function getMyAttendanceToday(): Promise<AttendanceRecord | null> {
     .from("attendance")
     .select("*")
     .eq("users_id", userId)
-    .eq("attendance_date", todayISODate())
-    .maybeSingle();
+    .eq("attendance_date", todayISODate());
 
   if (error) throw error;
-  return data;
+  return pickLatestByCheckIn((data ?? []) as AttendanceRecord[]);
 }
 
 // ============================================================
@@ -343,6 +371,24 @@ export async function getBreaksByAttendanceIds(attendanceIds: number[]): Promise
     .order("start_time", { ascending: true });
   if (error) throw error;
   return data ?? [];
+}
+
+// دالة موجودة وشغالة — بترجع Map<attendance_id, إجمالي الدقايق> لكل سجلات
+// الـ ids الممررة، بضمّ كل البريكات المرتبطة بكل سجل (مش بريك واحد بس).
+export async function getBreaksSummaryByAttendanceIds(
+  attendanceIds: number[]
+): Promise<Map<number, number>> {
+  const summary = new Map<number, number>();
+  if (attendanceIds.length === 0) return summary;
+
+  const breaks = await getBreaksByAttendanceIds(attendanceIds);
+
+  for (const b of breaks) {
+    const mins = breakDurationMinutes(b) ?? 0; // بريك مفتوح في سجل سابق (حالة نادرة) بيتحسب صفر بدل ما يكسر المجموع
+    summary.set(b.attendance_id, (summary.get(b.attendance_id) ?? 0) + mins);
+  }
+
+  return summary;
 }
 
 export function subscribeToBreaks(onChange: () => void) {
@@ -448,9 +494,6 @@ export async function endLeaveEarly(p_leave_id: number): Promise<unknown> {
 
 // ============================================================
 // قراءة طلبات الإجازة — جدول public.leaves
-// (مؤكد وجوده: الـ enum public.leave_status اللي عمود status فيه
-// بيستخدمه ظاهر فعليًا في الداتابيز pending/accepted/rejected/
-// cancelled/end_leave_early — نفس القيم اللي الكود ده متبني عليها)
 // ============================================================
 
 export async function getLeaveRequests(filters: {

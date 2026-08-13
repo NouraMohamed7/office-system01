@@ -6,7 +6,7 @@ import { Avatar, Card, PageHeader, Pill, StatCard } from "@/components/manager/p
 import { useToast } from "@/components/toast";
 import {
   Users, UserCheck, Clock, UserX, Palmtree, ClipboardX,
-  Download, Loader2,
+  Download, Loader2, Eye,
   Settings, Save, CheckCircle2, XCircle, Ban,
 } from "lucide-react";
 import {
@@ -34,11 +34,13 @@ import {
   ATTENDANCE_STATUS_TONE,
   LEAVE_TYPE_LABEL,
   LEAVE_STATUS_LABEL,
+  LEAVE_STATUS_TONE,
   type AttendanceStatus,
   type Tone,
   type LeaveType,
   type LeaveStatus,
 } from "@/lib/attendance-labels";
+import { StatusPill } from "@/components/portal-layout";
 
 type Status = AttendanceStatus;
 // قرارات المدير الوحيدة اللي check_leave_status بيقبلها فعليًا
@@ -56,8 +58,11 @@ type Row = {
   outISO: string | null;
   st: Status;
   tone: Tone;
-  breakStartISO: string | null;
-  breakEndISO: string | null;
+  // فيكس: قبل كده كنا بنخزن بريك واحد بس (آخر واحد) فكان بيتحسب غلط
+  // لو الموظف اخد أكتر من بريك في نفس اليوم. دلوقتي بنخزن الإجمالي الفعلي
+  // + هل فيه بريك مفتوح دلوقتي، عشان نعرض المجموع الصح.
+  breakTotalMinutes: number;
+  isOnBreakNow: boolean;
 };
 
 // جدول طلبات الإجازة الدائم في صفحة المدير — كل الحالات (pending / accepted / rejected / cancelled)
@@ -69,14 +74,6 @@ type LeaveRow = {
   end_date: string;
   reason: string;
   status: LeaveStatus;
-};
-
-const LEAVE_STATUS_TONE: Record<LeaveStatus, Tone> = {
-  pending: "warning",
-  accepted: "success",
-  rejected: "danger",
-  cancelled: "muted",
-  end_leave_early: "teal",
 };
 
 // ⚠️ مؤكد فعليًا من الباك: check_leave_status بالإلغاء (cancelled) بيرفض
@@ -92,34 +89,42 @@ function formatTimeAr(iso: string | null) {
   return new Date(iso).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
-function computeMinutesBetween(startISO: string | null, endISO: string | null): number | null {
-  if (!startISO || !endISO) return null;
-  const start = new Date(startISO).getTime();
-  const end = new Date(endISO).getTime();
-  if (Number.isNaN(start) || Number.isNaN(end)) return null;
-  let mins = Math.round((end - start) / 60000);
-  if (mins < 0) mins += 24 * 60;
-  return mins;
-}
-
-function formatMinutesAsHours(mins: number | null): string {
-  if (mins === null) return "—";
+function formatMinutesAsHours(mins: number): string {
   const h = Math.floor(mins / 60);
   const m = mins % 60;
   return `${h}:${String(m).padStart(2, "0")}`;
 }
 
-function formatBreakCell(breakStartISO: string | null, breakEndISO: string | null): string {
-  if (!breakStartISO) return "—";
-  if (!breakEndISO) return "جاري الآن...";
-  const mins = computeMinutesBetween(breakStartISO, breakEndISO);
-  return formatMinutesAsHours(mins);
+// فيكس مشكلة "فين وقت البريك؟" على مستوى المدير — كانت بتاخد بريك واحد
+// بس (آخر واحد في الترتيب) بدل ما تجمع كل البريكات المرتبطة بسجل الحضور.
+// دلوقتي بتاخد قايمة البريكات كاملة، تجمع دقايق المكتمل منها، وتعلّم لو
+// فيه بريك مفتوح (شغال) دلوقتي عشان نوريه واضح في الجدول.
+function summarizeBreaks(userBreaks: BreakRecord[]): { totalMinutes: number; isOnBreakNow: boolean } {
+  let totalMinutes = 0;
+  let isOnBreakNow = false;
+  for (const b of userBreaks) {
+    if (b.break_mins !== null) {
+      totalMinutes += b.break_mins;
+    } else if (b.end_time) {
+      const mins = Math.round((new Date(b.end_time).getTime() - new Date(b.start_time).getTime()) / 60000);
+      totalMinutes += mins > 0 ? mins : 0;
+    } else {
+      isOnBreakNow = true;
+    }
+  }
+  return { totalMinutes, isOnBreakNow };
+}
+
+function formatBreakCell(totalMinutes: number, isOnBreakNow: boolean): string {
+  if (totalMinutes === 0 && !isOnBreakNow) return "—";
+  if (totalMinutes === 0 && isOnBreakNow) return "جاري الآن...";
+  return isOnBreakNow ? `${formatMinutesAsHours(totalMinutes)} (+ جارية الآن)` : formatMinutesAsHours(totalMinutes);
 }
 
 function mapTodayRowToRow(
   r: AttendanceTodayRow,
   deptMap: Map<string, string>,
-  breakMap: Map<string, BreakRecord>
+  breaksByUser: Map<string, BreakRecord[]>
 ): Row {
   const inTime = formatTimeAr(r.check_in_at);
   const outTime = formatTimeAr(r.check_out_at);
@@ -133,7 +138,7 @@ function mapTodayRowToRow(
     status = "not_checked_in";
   }
 
-  const lastBreak = breakMap.get(r.users_id);
+  const { totalMinutes, isOnBreakNow } = summarizeBreaks(breaksByUser.get(r.users_id) ?? []);
 
   return {
     id: r.users_id,
@@ -145,8 +150,8 @@ function mapTodayRowToRow(
     outISO: r.check_out_at,
     st: status,
     tone: ATTENDANCE_STATUS_TONE[status],
-    breakStartISO: lastBreak?.start_time ?? null,
-    breakEndISO: lastBreak?.end_time ?? null,
+    breakTotalMinutes: totalMinutes,
+    isOnBreakNow,
   };
 }
 
@@ -158,7 +163,7 @@ function exportRowsToCsv(rows: Row[]) {
       r.dept,
       r.in,
       r.out,
-      formatBreakCell(r.breakStartISO, r.breakEndISO),
+      formatBreakCell(r.breakTotalMinutes, r.isOnBreakNow),
       ATTENDANCE_STATUS_LABEL[r.st],
     ].join(","))
   );
@@ -257,6 +262,14 @@ export default function AttendancePage() {
   } = useManagerLeaveRequests();
   const leaveActions = useLeaveActions();
 
+  // فيكس مشكلة الإيرور اللي بيظهر من غير ما يتمسح — leaveActions.loading
+  // كان state عام واحد، فمفيش ضمان إن ضغطتين سريعتين على قرارين مختلفين
+  // (أو نفس القرار مرتين) ميعملوش تعارض. بنتبع الصف اللي شغال عليه دلوقتي بس.
+  const [busyLeaveId, setBusyLeaveId] = useState<number | null>(null);
+
+  // كارد تفاصيل الإجازة — بيعرض السبب كامل بدون truncate
+  const [detailsLeave, setDetailsLeave] = useState<LeaveRow | null>(null);
+
   const load = useCallback(async () => {
     try {
       const [todayRowsRaw, employees, depts, attendanceRecords] = await Promise.all([
@@ -292,13 +305,17 @@ export default function AttendancePage() {
       const attendanceIdToUser = new Map<number, string>();
       for (const rec of attendanceRecords) attendanceIdToUser.set(rec.id, rec.users_id);
 
-      const breakMap = new Map<string, BreakRecord>();
+      // فيكس: تجميع كل البريكات بتاعة كل موظف (مش بريك واحد بس)
+      const breaksByUser = new Map<string, BreakRecord[]>();
       for (const b of allBreaks) {
         const uid = attendanceIdToUser.get(b.attendance_id);
-        if (uid) breakMap.set(uid, b);
+        if (!uid) continue;
+        const list = breaksByUser.get(uid) ?? [];
+        list.push(b);
+        breaksByUser.set(uid, list);
       }
 
-      setRows(todayRows.map((r) => mapTodayRowToRow(r, deptMap, breakMap)));
+      setRows(todayRows.map((r) => mapTodayRowToRow(r, deptMap, breaksByUser)));
       setDepartments(depts);
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : "حصل خطأ في تحميل بيانات الحضور");
@@ -417,6 +434,15 @@ export default function AttendancePage() {
       showToast("error", "اختار الفرع الأول");
       return;
     }
+    // فاليديشن: التأكد إن أوقات الدوام منطقية قبل ما نبعتها للباك
+    if (settingsForm.start_time >= settingsForm.end_time) {
+      showToast("error", "وقت بداية الدوام لازم يكون قبل وقت النهاية");
+      return;
+    }
+    if (settingsForm.effective_to && settingsForm.effective_to < settingsForm.effective_from) {
+      showToast("error", "تاريخ نهاية السريان لازم يكون بعد تاريخ البداية");
+      return;
+    }
     setSavingSettings(true);
     try {
       const payload = {
@@ -451,12 +477,19 @@ export default function AttendancePage() {
   // ============================================================
 
   async function decideOnLeave(leaveId: number, status: LeaveDecision) {
+    // حماية ضد الضغط المتكرر/المتزامن على نفس الطلب أو طلبات مختلفة
+    // في نفس اللحظة — ده اللي كان بيسبب إيرور "من فراغ" لإن leaveActions.loading
+    // كان مشترك وملهوش أي منع فعلي للضغط المزدوج على مستوى الصف.
+    if (busyLeaveId !== null) return;
+    setBusyLeaveId(leaveId);
     try {
       await leaveActions.setLeaveStatus(leaveId, status);
       showToast("success", `تم تحديث حالة طلب الإجازة رقم ${leaveId}`);
       await refreshLeaves();
     } catch (err) {
       showToast("error", err instanceof Error ? err.message : "تعذر تحديث حالة الإجازة");
+    } finally {
+      setBusyLeaveId(null);
     }
   }
 
@@ -550,7 +583,7 @@ export default function AttendancePage() {
                   <td className="px-4 py-3 tabular">{r.in}</td>
                   <td className="px-4 py-3 tabular">{r.out}</td>
                   <td className="px-4 py-3 tabular text-muted-foreground">
-                    {formatBreakCell(r.breakStartISO, r.breakEndISO)}
+                    {formatBreakCell(r.breakTotalMinutes, r.isOnBreakNow)}
                   </td>
                   <td className="px-4 py-3">
                     <span key={r.st} className="inline-block animate-in fade-in zoom-in-95 duration-200">
@@ -615,55 +648,71 @@ export default function AttendancePage() {
                   </td>
                 </tr>
               )}
-              {leaveRows.map((l) => (
-                <tr key={l.id} className="row-hover hover:row-hover-active">
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-3">
-                      <Avatar name={l.employeeName} />
-                      <span className="font-semibold">{l.employeeName}</span>
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 text-muted-foreground">{LEAVE_TYPE_LABEL[l.leave_type]}</td>
-                  <td className="px-4 py-3 tabular">{l.start_date}</td>
-                  <td className="px-4 py-3 tabular">{l.end_date}</td>
-                  <td className="px-4 py-3 text-muted-foreground max-w-60 truncate" title={l.reason}>{l.reason}</td>
-                  <td className="px-4 py-3">
-                    <Pill tone={LEAVE_STATUS_TONE[l.status]}>{LEAVE_STATUS_LABEL[l.status]}</Pill>
-                  </td>
-                  <td className="px-4 py-3">
-                    {l.status === "pending" ? (
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => decideOnLeave(l.id, "accepted")}
-                          disabled={leaveActions.loading}
-                          className="inline-flex items-center gap-1 rounded-lg bg-success/15 px-2.5 py-1.5 text-xs font-semibold text-success hover:bg-success/25 disabled:opacity-50"
-                        >
-                          <CheckCircle2 className="size-3.5" /> قبول
-                        </button>
-                        <button
-                          onClick={() => decideOnLeave(l.id, "rejected")}
-                          disabled={leaveActions.loading}
-                          className="inline-flex items-center gap-1 rounded-lg bg-destructive/15 px-2.5 py-1.5 text-xs font-semibold text-destructive hover:bg-destructive/25 disabled:opacity-50"
-                        >
-                          <XCircle className="size-3.5" /> رفض
-                        </button>
-                        {/* الإلغاء ممنوع لو الإجازة بدأت فعلاً (رسالة الباك) */}
-                        {!isLeaveStarted(l.start_date) && (
-                          <button
-                            onClick={() => decideOnLeave(l.id, "cancelled")}
-                            disabled={leaveActions.loading}
-                            className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold hover:bg-accent disabled:opacity-50"
-                          >
-                            <Ban className="size-3.5" /> إلغاء
-                          </button>
-                        )}
+              {leaveRows.map((l) => {
+                const rowBusy = busyLeaveId === l.id;
+                return (
+                  <tr key={l.id} className="row-hover hover:row-hover-active">
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-3">
+                        <Avatar name={l.employeeName} />
+                        <span className="font-semibold">{l.employeeName}</span>
                       </div>
-                    ) : (
-                      <span className="text-xs text-muted-foreground">تم اتخاذ القرار</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                    <td className="px-4 py-3 text-muted-foreground">{LEAVE_TYPE_LABEL[l.leave_type]}</td>
+                    <td className="px-4 py-3 tabular">{l.start_date}</td>
+                    <td className="px-4 py-3 tabular">{l.end_date}</td>
+                    <td className="px-4 py-3">
+                      {/* الفيكس الأساسي لمشكلة "التفاصيل المفروض تتعرض في كارد":
+                          truncate + title كان الاعتماد الوحيد لقراءة سبب طويل، وده
+                          مش شغال أصلاً على الموبايل. دلوقتي زرار "عرض" بيفتح كارد
+                          فيه النص كامل بدون أي قطع. */}
+                      <button
+                        onClick={() => setDetailsLeave(l)}
+                        className="flex max-w-60 items-center gap-1.5 text-muted-foreground hover:text-foreground truncate"
+                        title="اضغط لعرض السبب كامل"
+                      >
+                        <span className="truncate">{l.reason || "—"}</span>
+                        <Eye className="size-3.5 shrink-0" />
+                      </button>
+                    </td>
+                    <td className="px-4 py-3">
+                      <Pill tone={LEAVE_STATUS_TONE[l.status]}>{LEAVE_STATUS_LABEL[l.status]}</Pill>
+                    </td>
+                    <td className="px-4 py-3">
+                      {l.status === "pending" ? (
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => decideOnLeave(l.id, "accepted")}
+                            disabled={rowBusy}
+                            className="inline-flex items-center gap-1 rounded-lg bg-success/15 px-2.5 py-1.5 text-xs font-semibold text-success hover:bg-success/25 disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            {rowBusy ? <Loader2 className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />} قبول
+                          </button>
+                          <button
+                            onClick={() => decideOnLeave(l.id, "rejected")}
+                            disabled={rowBusy}
+                            className="inline-flex items-center gap-1 rounded-lg bg-destructive/15 px-2.5 py-1.5 text-xs font-semibold text-destructive hover:bg-destructive/25 disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            {rowBusy ? <Loader2 className="size-3.5 animate-spin" /> : <XCircle className="size-3.5" />} رفض
+                          </button>
+                          {/* الإلغاء ممنوع لو الإجازة بدأت فعلاً (رسالة الباك) */}
+                          {!isLeaveStarted(l.start_date) && (
+                            <button
+                              onClick={() => decideOnLeave(l.id, "cancelled")}
+                              disabled={rowBusy}
+                              className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              {rowBusy ? <Loader2 className="size-3.5 animate-spin" /> : <Ban className="size-3.5" />} إلغاء
+                            </button>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">تم اتخاذ القرار</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -742,6 +791,7 @@ export default function AttendancePage() {
                       <span className="text-muted-foreground">مهلة التأخير (دقيقة)</span>
                       <input
                         type="number"
+                        min={0}
                         value={settingsForm.late_tolerance_minutes}
                         onChange={(e) => setSettingsForm((f) => ({ ...f, late_tolerance_minutes: e.target.value }))}
                         className="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary/50"
@@ -788,6 +838,7 @@ export default function AttendancePage() {
                       <input
                         type="date"
                         value={settingsForm.effective_to}
+                        min={settingsForm.effective_from}
                         onChange={(e) => setSettingsForm((f) => ({ ...f, effective_to: e.target.value }))}
                         className="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary/50"
                       />
@@ -815,6 +866,61 @@ export default function AttendancePage() {
                 </div>
               </div>
             )}
+          </div>
+        </>
+      )}
+
+      {/* ============================================================
+          مودال: تفاصيل طلب الإجازة (كارد) — السبب كامل بدون قطع
+      ============================================================ */}
+      {detailsLeave && (
+        <>
+          <div className="fixed inset-0 z-40 bg-black/40" onClick={() => setDetailsLeave(null)} />
+          <div className="fixed inset-x-4 top-1/2 z-50 mx-auto max-w-lg -translate-y-1/2 rounded-2xl border border-border bg-card p-6 shadow-warm max-h-[85vh] overflow-y-auto">
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-bold flex items-center gap-2">
+                  <Avatar name={detailsLeave.employeeName} size={32} />
+                  {detailsLeave.employeeName}
+                </h3>
+                <div className="mt-2 flex items-center gap-2 flex-wrap">
+                  {/* ✅ فيكس: كان بيستخدم ternary ناقص هنا (cancelled/end_leave_early
+                      كانوا بيرجعوا "muted" بدل الألوان الصح)، فنفس الطلب كان يظهر
+                      بلون في الجدول ولون مختلف في المودال. دلوقتي بيستخدم نفس
+                      مصدر الألوان الموحّد (LEAVE_STATUS_TONE) المستخدم في الجدول. */}
+                  <StatusPill tone={LEAVE_STATUS_TONE[detailsLeave.status]}>
+                    {LEAVE_STATUS_LABEL[detailsLeave.status]}
+                  </StatusPill>
+                  <span className="text-xs text-muted-foreground">{LEAVE_TYPE_LABEL[detailsLeave.leave_type]}</span>
+                </div>
+              </div>
+              <button onClick={() => setDetailsLeave(null)} className="text-muted-foreground hover:text-foreground shrink-0">✕</button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 text-sm mb-4">
+              <div className="rounded-xl bg-accent/30 p-3">
+                <div className="text-xs text-muted-foreground mb-1">من تاريخ</div>
+                <div className="font-semibold tabular-nums">{detailsLeave.start_date}</div>
+              </div>
+              <div className="rounded-xl bg-accent/30 p-3">
+                <div className="text-xs text-muted-foreground mb-1">إلى تاريخ</div>
+                <div className="font-semibold tabular-nums">{detailsLeave.end_date}</div>
+              </div>
+            </div>
+
+            <div>
+              <div className="text-xs text-muted-foreground mb-1">السبب</div>
+              <div className="rounded-xl border border-border bg-background p-3 text-sm whitespace-pre-wrap break-words leading-relaxed">
+                {detailsLeave.reason || "— بدون سبب مكتوب —"}
+              </div>
+            </div>
+
+            <button
+              onClick={() => setDetailsLeave(null)}
+              className="mt-5 w-full rounded-xl border border-border py-2.5 text-sm font-semibold hover:bg-accent"
+            >
+              إغلاق
+            </button>
           </div>
         </>
       )}

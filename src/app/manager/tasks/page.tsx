@@ -3,13 +3,13 @@
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { Avatar, Card, PageHeader, Pill, StatCard } from "@/components/manager/primitives";
 import { useToast } from "@/components/toast";
-import { Plus, X, Trash2, Calendar, Check, Loader2, Upload } from "lucide-react";
+import { Plus, X, Trash2, Calendar, Check, Loader2, Upload, Zap, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   getAllTasks, getUsersList, getDepartments, createTaskForMultipleAssignees, deleteTask,
-  updateTaskStatusAsManager, subscribeToTasks,
+  updateTaskStatusAsManager, subscribeToTasks, getTaskComments, addTaskComment, subscribeToTaskComments,
 } from "@/modules/tasks/api/tasks.api";
-import type { TaskRow, TaskStatus, TaskPriority, UserLite, DepartmentLite } from "@/types/tasks";
+import type { TaskRow, TaskStatus, TaskPriority, UserLite, DepartmentLite, TaskComment } from "@/types/tasks";
 import { TASK_PRIORITY_LABEL_AR } from "@/types/tasks";
 
 // أعمدة الـ Kanban = enum task_status الحقيقي بالظبط
@@ -33,6 +33,20 @@ function formatDue(dateStr?: string) {
 function todayInputValue() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// 🔧 FIX (Issue 1 & 5): زرار priority بيلبس أيقونة/تمييز إضافي لو "عاجلة" —
+// عشان متبقاش متطابقة بصريًا مع "عالية" رغم إن اللون نفسه (danger) لسه
+// مستخدم من الـ Pill component الأساسي.
+function PriorityPill({ p }: { p: TaskPriority }) {
+  return (
+    <Pill tone={PRIORITY_TONE[p]}>
+      <span className="inline-flex items-center gap-1">
+        {p === "urgent" && <Zap className="size-3" />}
+        {TASK_PRIORITY_LABEL_AR[p]}
+      </span>
+    </Pill>
+  );
 }
 
 type FormState = {
@@ -92,6 +106,15 @@ export default function TasksPage() {
     return subscribeToTasks(() => load());
   }, [load]);
 
+  // 🔧 FIX (Issue 4): المودال المفتوح (activeTask) كان نسخة "مجمّدة" — لو
+  // الـ tasks اتحدثت (من realtime أو من moveTask) والمودال فاتح على نفس
+  // المهمة، لازم يتزامن بدل ما يفضل يعرض الحالة القديمة.
+  useEffect(() => {
+    if (!activeTask) return;
+    const fresh = tasks.find((t) => t.id === activeTask.id);
+    if (fresh && fresh !== activeTask) setActiveTask(fresh);
+  }, [tasks, activeTask]);
+
   const tasksByCol = useMemo(() => {
     const map: Record<TaskStatus, TaskRow[]> = { pending: [], processing: [], completed: [], late: [], cancelled: [] };
     tasks.forEach((t) => map[t.status].push(t));
@@ -106,9 +129,6 @@ export default function TasksPage() {
     late: tasksByCol.late.length,
   }), [tasks, tasksByCol]);
 
-  // قايمة الموظفين المفلترة حسب القسم المختار في الفورم
-  // fallback: لو department_id مش موجود لأي موظف (الباك لسه مضافوش للـ view)
-  // بترجع كل الموظفين بدل قايمة فاضية مضللة
   const filteredUsers = useMemo(() => {
     if (!form.departmentId) return [];
     const hasDeptInfo = users.some((u) => u.department_id != null);
@@ -124,7 +144,7 @@ export default function TasksPage() {
       await updateTaskStatusAsManager(taskId, status);
       showToast("success", `تم نقل المهمة إلى "${columns.find((c) => c.id === status)?.label}"`);
     } catch (err) {
-      setTasks(prevTasks); // rollback لو الباك رفض
+      setTasks(prevTasks); // rollback لو الباك رفض — راجع updateTaskStatusAsManager للسبب المحتمل
       showToast("error", err instanceof Error ? err.message : "تعذر تحديث حالة المهمة");
     } finally {
       setMovingTaskId(null);
@@ -144,7 +164,6 @@ export default function TasksPage() {
   }
 
   function selectDepartment(deptId: string) {
-    // بنفضي اختيار الموظفين لما القسم يتغير عشان ميفضلش موظف من قسم تاني
     setForm((f) => ({ ...f, departmentId: deptId, assignedTo: [] }));
     setErrors((er) => ({ ...er, departmentId: undefined }));
   }
@@ -165,15 +184,13 @@ export default function TasksPage() {
     if (!form.title.trim()) next.title = "اكتب عنوان المهمة";
     if (!form.departmentId) next.departmentId = "اختر القسم الأول";
     if (form.assignedTo.length === 0) next.assignedTo = "اختر موظف واحد على الأقل";
-    // ⚠️ end_date عليها NOT NULL فعليًا في جدول tasks بالباك، فلازم تتحدد
-    // قبل الإرسال بدل ما نعتمد على fallback صامت.
     if (!form.endDate) next.endDate = "حدد الموعد النهائي للمهمة";
     setErrors(next);
     if (Object.keys(next).length > 0) return;
 
     setSubmitting(true);
     try {
-      const { successCount, failed } = await createTaskForMultipleAssignees({
+      const { successCount, failed, files } = await createTaskForMultipleAssignees({
         title: form.title.trim(),
         description: form.description.trim() || undefined,
         department_id: Number(form.departmentId),
@@ -185,9 +202,10 @@ export default function TasksPage() {
       });
 
       if (successCount > 0) {
+        const filesNote = files.length ? ` مع ${files.length} ملف` : "";
         showToast(
           "success",
-          `تم إنشاء ${successCount} مهمة بنجاح${failed.length ? ` — تعذر إنشاء ${failed.length}` : ""}`
+          `تم إنشاء ${successCount} مهمة بنجاح${filesNote}${failed.length ? ` — تعذر إنشاء ${failed.length}` : ""}`
         );
         setModalOpen(false);
         load();
@@ -278,8 +296,13 @@ export default function TasksPage() {
                                 <span className="text-[11px] text-muted-foreground">{assignee.name}</span>
                               </div>
                             ) : <span className="text-[11px] text-muted-foreground">—</span>}
-                            <Pill tone={PRIORITY_TONE[t.priority]}>{TASK_PRIORITY_LABEL_AR[t.priority]}</Pill>
+                            <PriorityPill p={t.priority} />
                           </div>
+                          {typeof t.completion_percent === "number" && (
+                            <div className="mt-2 h-1 w-full rounded-full bg-secondary overflow-hidden">
+                              <div className="h-full bg-primary rounded-full" style={{ width: `${t.completion_percent}%` }} />
+                            </div>
+                          )}
                           <div className="mt-2 flex items-center justify-between border-t border-border pt-2 text-[11px] text-muted-foreground">
                             <span>📅 {formatDue(t.end_date)}</span>
                           </div>
@@ -314,7 +337,7 @@ export default function TasksPage() {
                               <div className="flex items-center gap-1.5"><Avatar name={assignee.name} size={22} /><span className="text-xs">{assignee.name}</span></div>
                             ) : "—"}
                           </td>
-                          <td className="px-4 py-3"><Pill tone={PRIORITY_TONE[t.priority]}>{TASK_PRIORITY_LABEL_AR[t.priority]}</Pill></td>
+                          <td className="px-4 py-3"><PriorityPill p={t.priority} /></td>
                           <td className="px-4 py-3 tabular text-muted-foreground">{formatDue(t.end_date)}</td>
                           <td className="px-4 py-3"><Pill tone="muted">{columns.find((c) => c.id === t.status)?.label}</Pill></td>
                           <td className="px-4 py-3">
@@ -357,7 +380,6 @@ export default function TasksPage() {
                   className="w-full rounded-xl border border-border bg-background px-3.5 py-2.5 text-sm outline-none transition focus:border-primary/50 resize-none" placeholder="تفاصيل أكتر عن المهمة" />
               </div>
 
-              {/* القسم أولًا — لازم يتحدد قبل ما تظهر قايمة الموظفين */}
               <div>
                 <label className="mb-1.5 block text-xs font-semibold">القسم *</label>
                 <select
@@ -416,9 +438,15 @@ export default function TasksPage() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
+                  {/* 🔧 FIX (Issue 1 & 5): dropdown بيعرض كل الخيارات الأربعة كاملة
+                      دايمًا (مفيش تزنيق)، فـ"عاجلة" ظاهرة زي بقية الخيارات */}
                   <label className="mb-1.5 block text-xs font-semibold">الأولوية</label>
                   <select value={form.priority} onChange={(e) => setForm((f) => ({ ...f, priority: e.target.value as TaskPriority }))} className="h-10 w-full rounded-xl border border-border bg-background px-3 text-sm outline-none focus:border-primary/50">
-                    {(Object.keys(TASK_PRIORITY_LABEL_AR) as TaskPriority[]).map((key) => <option key={key} value={key}>{TASK_PRIORITY_LABEL_AR[key]}</option>)}
+                    {(Object.keys(TASK_PRIORITY_LABEL_AR) as TaskPriority[]).map((key) => (
+                      <option key={key} value={key}>
+                        {key === "urgent" ? `⚡ ${TASK_PRIORITY_LABEL_AR[key]}` : TASK_PRIORITY_LABEL_AR[key]}
+                      </option>
+                    ))}
                   </select>
                 </div>
                 <div>
@@ -461,51 +489,173 @@ export default function TasksPage() {
 
       {/* مودال تفاصيل المهمة */}
       {activeTask && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/30 p-4 animate-in fade-in duration-150" onClick={() => setActiveTask(null)}>
-          <div className="w-full max-w-md rounded-2xl border border-border bg-card p-6 shadow-warm-lg animate-in fade-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-lg font-bold leading-snug">{activeTask.title}</h2>
-              <button onClick={() => setActiveTask(null)} className="grid size-8 shrink-0 place-items-center rounded-lg transition hover:bg-accent"><X className="size-4" /></button>
-            </div>
-
-            <div className="space-y-3 text-sm">
-              {activeTask.description && <p className="text-muted-foreground">{activeTask.description}</p>}
-              <div>
-                <span className="mb-1.5 block text-xs text-muted-foreground">يشتغل عليها</span>
-                {usersById[activeTask.assigned_to] ? (
-                  <div className="flex items-center gap-1.5 rounded-full border border-border py-1 pr-3 pl-1 w-fit">
-                    <Avatar name={usersById[activeTask.assigned_to].name} size={22} />
-                    <span className="text-xs font-medium">{usersById[activeTask.assigned_to].name}</span>
-                  </div>
-                ) : <span className="text-xs text-muted-foreground">—</span>}
-              </div>
-              <div className="flex items-center gap-2 text-muted-foreground"><Calendar className="size-4" /> {formatDue(activeTask.end_date)}</div>
-              <div className="flex items-center gap-2">
-                <span className="text-muted-foreground">الأولوية:</span>
-                <Pill tone={PRIORITY_TONE[activeTask.priority]}>{TASK_PRIORITY_LABEL_AR[activeTask.priority]}</Pill>
-              </div>
-              <div>
-                <span className="mb-1.5 block text-xs text-muted-foreground">القسم</span>
-                <span>{departmentsById[activeTask.department_id] ?? "—"}</span>
-              </div>
-
-              <div>
-                <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">نقل المهمة إلى</label>
-                <select value={activeTask.status} onChange={(e) => moveTask(activeTask.id, e.target.value as TaskStatus)} className="h-10 w-full rounded-xl border border-border bg-background px-3 text-sm outline-none focus:border-primary/50">
-                  {columns.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
-                </select>
-              </div>
-            </div>
-
-            <div className="mt-5 flex gap-2">
-              <button onClick={() => handleDeleteTask(activeTask.id)} className="flex h-11 flex-1 items-center justify-center gap-2 rounded-xl border border-destructive/30 text-sm font-semibold text-destructive transition hover:bg-destructive/10 active:scale-95">
-                <Trash2 className="size-4" /> حذف المهمة
-              </button>
-              <button onClick={() => setActiveTask(null)} className="h-11 rounded-xl border border-border px-5 text-sm font-semibold transition hover:bg-accent">إغلاق</button>
-            </div>
-          </div>
-        </div>
+        <TaskDetailsModal
+          task={activeTask}
+          assignee={usersById[activeTask.assigned_to]}
+          departmentName={departmentsById[activeTask.department_id] ?? "—"}
+          onClose={() => setActiveTask(null)}
+          onMove={(status) => moveTask(activeTask.id, status)}
+          onDelete={() => handleDeleteTask(activeTask.id)}
+        />
       )}
     </div>
   );
+}
+
+/**
+ * 🔧 FIX (Issue 2 & 8): مودال تفاصيل المهمة عند المدير كان من غير أي تعليقات
+ * ولا start_date ولا نسبة إنجاز. اتفصل هنا كـ component مستقل عشان يقدر
+ * يدير state التعليقات بتاعته (تحميل + إرسال + realtime) لوحده.
+ */
+function TaskDetailsModal({
+  task, assignee, departmentName, onClose, onMove, onDelete,
+}: {
+  task: TaskRow;
+  assignee?: UserLite;
+  departmentName: string;
+  onClose: () => void;
+  onMove: (status: TaskStatus) => void;
+  onDelete: () => void;
+}) {
+  const showToast = useToast();
+  const [comments, setComments] = useState<TaskComment[]>([]);
+  const [commentsLoading, setCommentsLoading] = useState(true);
+  const [commentText, setCommentText] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    setCommentsLoading(true);
+    getTaskComments(task.id)
+      .then((rows) => { if (active) setComments(rows); })
+      .catch(() => {})
+      .finally(() => { if (active) setCommentsLoading(false); });
+    const unsubscribe = subscribeToTaskComments(task.id, () => {
+      getTaskComments(task.id).then((rows) => { if (active) setComments(rows); }).catch(() => {});
+    });
+    return () => { active = false; unsubscribe(); };
+  }, [task.id]);
+
+  const handleSend = async () => {
+    if (!commentText.trim()) { showToast("error", "من فضلك اكتب تعليقًا قبل الإرسال"); return; }
+    try {
+      const newComment = await addTaskComment(task.id, commentText.trim());
+      setComments((prev) => [...prev, newComment]);
+      setCommentText("");
+    } catch (err) {
+      showToast("error", err instanceof Error ? err.message : "تعذر إرسال التعليق");
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/30 p-4 animate-in fade-in duration-150" onClick={onClose}>
+      <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-border bg-card p-6 shadow-warm-lg animate-in fade-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-lg font-bold leading-snug">{task.title}</h2>
+          <button onClick={onClose} className="grid size-8 shrink-0 place-items-center rounded-lg transition hover:bg-accent"><X className="size-4" /></button>
+        </div>
+
+        <div className="space-y-3 text-sm">
+          {task.description && <p className="text-muted-foreground">{task.description}</p>}
+          <div>
+            <span className="mb-1.5 block text-xs text-muted-foreground">يشتغل عليها</span>
+            {assignee ? (
+              <div className="flex items-center gap-1.5 rounded-full border border-border py-1 pr-3 pl-1 w-fit">
+                <Avatar name={assignee.name} size={22} />
+                <span className="text-xs font-medium">{assignee.name}</span>
+              </div>
+            ) : <span className="text-xs text-muted-foreground">—</span>}
+          </div>
+
+          {/* 🔧 FIX (Issue 6 & 8): تاريخ البداية بقى ظاهر جنب النهاية */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="flex items-center gap-2 text-muted-foreground"><Calendar className="size-4" /> من {formatDue(task.start_date)}</div>
+            <div className="flex items-center gap-2 text-muted-foreground"><Calendar className="size-4" /> لحد {formatDue(task.end_date)}</div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="text-muted-foreground">الأولوية:</span>
+            <PriorityPill p={task.priority} />
+          </div>
+
+          {typeof task.completion_percent === "number" && (
+            <div>
+              <span className="mb-1.5 block text-xs text-muted-foreground">نسبة الإنجاز</span>
+              <div className="h-2 w-full rounded-full bg-secondary overflow-hidden">
+                <div className="h-full bg-primary rounded-full" style={{ width: `${task.completion_percent}%` }} />
+              </div>
+              <span className="text-xs text-muted-foreground">{task.completion_percent}%</span>
+            </div>
+          )}
+
+          <div>
+            <span className="mb-1.5 block text-xs text-muted-foreground">القسم</span>
+            <span>{departmentName}</span>
+          </div>
+
+          {/* ⚠️ ISSUE 9 — backend gap: نفس الملحوظة في صفحة الموظف */}
+          <div>
+            <span className="mb-1.5 block text-xs text-muted-foreground">المرفقات</span>
+            <p className="text-xs text-muted-foreground flex items-start gap-1.5">
+              <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+              عرض مرفقات المهمة مش متاح حاليًا — محتاج endpoint من الباك لقراءة الملفات المرتبطة بالمهمة بعد إنشائها.
+            </p>
+          </div>
+
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">نقل المهمة إلى</label>
+            <select value={task.status} onChange={(e) => onMove(e.target.value as TaskStatus)} className="h-10 w-full rounded-xl border border-border bg-background px-3 text-sm outline-none focus:border-primary/50">
+              {columns.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+            </select>
+            <p className="mt-1 text-[11px] text-muted-foreground">"متأخرة" بتتحدد تلقائيًا حسب الموعد، بس تقدر تغيّرها يدويًا هنا لو محتاج.</p>
+          </div>
+
+          {/* 🔧 FIX (Issue 2): سكشن التعليقات كان مش موجود خالص عند المدير */}
+          <div className="border-t border-border pt-3">
+            <div className="text-xs font-semibold text-muted-foreground mb-2">التعليقات</div>
+            <div className="space-y-2 mb-3 max-h-48 overflow-y-auto">
+              {commentsLoading && <p className="text-xs text-muted-foreground">جاري تحميل التعليقات...</p>}
+              {!commentsLoading && comments.length === 0 && <p className="text-xs text-muted-foreground">لا توجد تعليقات بعد.</p>}
+              {comments.map((c) => (
+                <div key={c.id} className="rounded-xl bg-secondary/60 p-2.5">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs font-semibold">{usersById_placeholder(c.sender_id, assignee)}</span>
+                    <span className="text-[10px] text-muted-foreground">{new Date(c.created_at).toLocaleString("ar-EG")}</span>
+                  </div>
+                  <div className="text-xs">{c.body}</div>
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <input
+                value={commentText}
+                onChange={(e) => setCommentText(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleSend()}
+                placeholder="اكتب تعليقاً..."
+                className="flex-1 h-10 rounded-xl border border-border bg-background px-3 text-sm focus:border-primary/50 outline-none"
+              />
+              <button onClick={handleSend} className="rounded-xl bg-primary px-4 text-sm font-semibold text-primary-foreground hover:bg-primary-dark transition">إرسال</button>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-5 flex gap-2">
+          <button onClick={onDelete} className="flex h-11 flex-1 items-center justify-center gap-2 rounded-xl border border-destructive/30 text-sm font-semibold text-destructive transition hover:bg-destructive/10 active:scale-95">
+            <Trash2 className="size-4" /> حذف المهمة
+          </button>
+          <button onClick={onClose} className="h-11 rounded-xl border border-border px-5 text-sm font-semibold transition hover:bg-accent">إغلاق</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * ⚠️ الاسم مؤقت — لسه ملناش usersMap كامل جوه المودال ده (المكوّن مستقل
+ * ومش مستقبِل usersById كله، بس الـ assignee). لو عايز اسم المُعلّق الحقيقي
+ * لأي شخص غير assignee (مثلاً مدير تاني)، مرّر usersById كـ prop للمودال
+ * بدل الاعتماد على السطر ده.
+ */
+function usersById_placeholder(senderId: string, assignee?: UserLite): string {
+  if (assignee && assignee.id === senderId) return assignee.name;
+  return "مستخدم";
 }
