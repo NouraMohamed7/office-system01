@@ -139,7 +139,7 @@ export default function TasksPage() {
         title: data.title,
         description: data.description || undefined,
         start_date: data.startDate || todayInputValue(),
-        end_date: data.endDate || undefined,
+        end_date: data.endDate,
         priority: data.priority,
       });
       showToast("success", res.message || "تم إضافة المهمة");
@@ -352,7 +352,12 @@ function AddTaskModal({
 
   const handleSubmit = () => {
     if (!title.trim()) return setError("اكتب عنوان المهمة");
-    if (endDate && endDate < startDate) return setError("موعد التسليم لازم يكون بعد أو يساوي تاريخ البداية");
+    // 🔧 VALIDATION FIX: قبل كده endDate كان اختياري في الفورم، والـ API
+    // كانت بتسيب الباك يحط end_date = start_date بصمت لو اتسابت فاضية —
+    // ده كان بيدّي "مهمة" بيوم واحد بس من غير ما المستخدم يقصد كده. دلوقتي
+    // بقى إجباري زي فورم المدير بالظبط، عشان يبقى واضح ومقصود.
+    if (!endDate) return setError("حدد تاريخ التسليم");
+    if (endDate < startDate) return setError("موعد التسليم لازم يكون بعد أو يساوي تاريخ البداية");
     onSubmit({ title: title.trim(), description, priority, startDate, endDate });
   };
 
@@ -392,12 +397,19 @@ function AddTaskModal({
               <input
                 type="date"
                 value={startDate}
-                onChange={(e) => { setStartDate(e.target.value); if (error) setError(""); }}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setStartDate(v);
+                  // لو تاريخ النهاية بقى قبل البداية الجديدة، نزوّده تلقائيًا
+                  setEndDate((cur) => (cur && cur < v ? v : cur));
+                  if (error) setError("");
+                }}
                 className="w-full h-11 rounded-xl border border-border bg-background px-3 text-sm focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none"
               />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-muted-foreground mb-2">تاريخ التسليم</label>
+              {/* 🔧 VALIDATION FIX: * بتوضح إن الحقل بقى إجباري */}
+              <label className="block text-xs font-semibold text-muted-foreground mb-2">تاريخ التسليم *</label>
               <input
                 type="date"
                 value={endDate}

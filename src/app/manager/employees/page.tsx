@@ -182,6 +182,11 @@ export default function EmployeesPage() {
   const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
   const menuButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
 
+  // ✅ الفيكس (#7): المنيو كانت دايمًا بتتفتح تحت الزرار (rect.bottom + 4)
+  // من غير ما تتأكد إن فيه مساحة كافية تحته. في آخر صف بالجدول (أو أي صف
+  // قريب من نهاية الشاشة) كانت المنيو بتتقص أو تحتاج سكرول عشان تتشاف.
+  // دلوقتي بنحسب المساحة المتاحة تحت الزرار، ولو مش كفاية بنفتح المنيو
+  // لفوق بدل تحت، وكمان بنمنعها تخرج برّه حواف الشاشة يمين/شمال.
   function toggleMenu(id: string) {
     if (openMenuId === id) {
       setOpenMenuId(null);
@@ -192,10 +197,23 @@ export default function EmployeesPage() {
     if (btn) {
       const rect = btn.getBoundingClientRect();
       const menuWidth = 176; // w-44
-      setMenuPos({
-        top: rect.bottom + 4,
-        left: Math.max(8, rect.right - menuWidth),
-      });
+      const menuHeight = 148; // تقريبي لـ 3 عناصر (~49px للعنصر)
+      const viewportHeight = window.innerHeight;
+      const viewportWidth = window.innerWidth;
+
+      const spaceBelow = viewportHeight - rect.bottom;
+      const openUpward = spaceBelow < menuHeight + 16;
+
+      const top = openUpward
+        ? Math.max(8, rect.top - menuHeight - 4)
+        : rect.bottom + 4;
+
+      const left = Math.min(
+        Math.max(8, rect.right - menuWidth),
+        viewportWidth - menuWidth - 8
+      );
+
+      setMenuPos({ top, left });
     }
     setOpenMenuId(id);
   }
@@ -694,7 +712,7 @@ export default function EmployeesPage() {
 
       {/* القايمة دي بترندر في document.body عن طريق Portal بدل ما تترندر جوه
           الـ Card اللي عندها overflow-hidden — عشان كده كانت بتتقص لآخر موظف
-          في الجدول. */}
+          في الجدول. دلوقتي كمان بتحسب المكان صح فوق/تحت حسب المساحة المتاحة. */}
       {openMenuId && menuPos && typeof document !== "undefined" && createPortal(
         <>
           <div className="fixed inset-0 z-40" onClick={() => { setOpenMenuId(null); setMenuPos(null); }} />

@@ -182,7 +182,17 @@ export default function TasksPage() {
     if (!form.title.trim()) next.title = "اكتب عنوان المهمة";
     if (!form.departmentId) next.departmentId = "اختر القسم الأول";
     if (form.assignedTo.length === 0) next.assignedTo = "اختر موظف واحد على الأقل";
-    if (!form.endDate) next.endDate = "حدد الموعد النهائي للمهمة";
+    if (!form.endDate) {
+      next.endDate = "حدد الموعد النهائي للمهمة";
+    } else if (form.endDate < form.startDate) {
+      // 🔧 VALIDATION FIX: الفحص ده كان ناقص تمامًا — كان معتمد بس على
+      // min={form.startDate} في الـ <input type="date">، وده حماية على
+      // مستوى المتصفح بس (بتتجاهل لو المستخدم كتب التاريخ يدويًا أو
+      // المتصفح مبيدعمهاش)، ومفيش أي رسالة خطأ توضح للمستخدم السبب.
+      // النتيجة كانت طلب بيوصل للباك بتاريخ نهاية قبل البداية، والباك يرفضه
+      // برسالة عامة — وده على الأغلب سبب "error in create task" المُبلّغ عنه.
+      next.endDate = "الموعد النهائي لازم يكون بعد أو يساوي تاريخ البداية";
+    }
     setErrors(next);
     if (Object.keys(next).length > 0) return;
 
@@ -449,7 +459,23 @@ export default function TasksPage() {
                 </div>
                 <div>
                   <label className="mb-1.5 block text-xs font-semibold">تاريخ البداية</label>
-                  <input type="date" value={form.startDate} onChange={(e) => setForm((f) => ({ ...f, startDate: e.target.value }))} className="h-10 w-full rounded-xl border border-border bg-background px-3 text-sm outline-none focus:border-primary/50" />
+                  <input
+                    type="date"
+                    value={form.startDate}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      // 🔧 VALIDATION FIX: لو تاريخ البداية اتغيّر لبعد تاريخ
+                      // النهاية الحالي، نزوّد النهاية تلقائيًا بدل ما نسيب
+                      // حالة متضاربة تتصيد بس وقت الـ submit.
+                      setForm((f) => ({
+                        ...f,
+                        startDate: v,
+                        endDate: f.endDate && f.endDate < v ? v : f.endDate,
+                      }));
+                      setErrors((er) => ({ ...er, endDate: undefined }));
+                    }}
+                    className="h-10 w-full rounded-xl border border-border bg-background px-3 text-sm outline-none focus:border-primary/50"
+                  />
                 </div>
               </div>
 

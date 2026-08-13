@@ -42,6 +42,18 @@ function isLeaveStarted(startDate: string): boolean {
   return startDate <= today;
 }
 
+// 🔧 VALIDATION FIX: تاريخ اليوم كسلسلة نصية — مستخدم في أكتر من مكان
+// (min على input البداية + فاليديشن الإرسال) عشان منسمحش بطلب إجازة
+// تاريخ بدايته في الماضي.
+function todayISO(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+// 🔧 VALIDATION FIX: أقل عدد أحرف مقبول لسبب الإجازة — قبل كده كان أي نص
+// غير فاضي (حتى مسافة واحدة أو حرفين) بيعدي، وده مش سبب مفيد فعليًا
+// للمدير وقت المراجعة.
+const MIN_LEAVE_REASON_LENGTH = 5;
+
 function formatTime(iso: string | null): string {
   if (!iso) return "—";
   return new Date(iso).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -109,8 +121,8 @@ export default function AttendancePage() {
     leave_type: LeaveType | "";
     reason: string;
   }>({
-    start_date: new Date().toISOString().slice(0, 10),
-    end_date: new Date().toISOString().slice(0, 10),
+    start_date: todayISO(),
+    end_date: todayISO(),
     leave_type: "",
     reason: "",
   });
@@ -276,8 +288,8 @@ export default function AttendancePage() {
   function openNewLeaveForm() {
     setEditingLeaveId(null);
     setLeaveForm({
-      start_date: new Date().toISOString().slice(0, 10),
-      end_date: new Date().toISOString().slice(0, 10),
+      start_date: todayISO(),
+      end_date: todayISO(),
       leave_type: "",
       reason: "",
     });
@@ -300,13 +312,28 @@ export default function AttendancePage() {
       showToast("error", "حدد نوع الإجازة");
       return;
     }
-    if (!leaveForm.reason.trim()) {
+    // 🔧 VALIDATION FIX: كان أي نص غير فاضي (حرف واحد كفاية) بيعدي كسبب —
+    // بنطلب حد أدنى معقول من الأحرف عشان السبب يبقى مفيد فعليًا للمدير.
+    const trimmedReason = leaveForm.reason.trim();
+    if (!trimmedReason) {
       showToast("error", "اكتب سبب الإجازة");
+      return;
+    }
+    if (trimmedReason.length < MIN_LEAVE_REASON_LENGTH) {
+      showToast("error", `سبب الإجازة قصير جدًا — اكتب ${MIN_LEAVE_REASON_LENGTH} أحرف على الأقل`);
       return;
     }
     // فاليديشن: من غير ده ممكن تبعت تاريخ نهاية قبل تاريخ البداية
     if (leaveForm.end_date < leaveForm.start_date) {
       showToast("error", "تاريخ النهاية لازم يكون بعد أو يساوي تاريخ البداية");
+      return;
+    }
+    // 🔧 VALIDATION FIX: طلب إجازة جديد بتاريخ بداية في الماضي كان بيعدي
+    // من غير أي تنبيه في الفرونت (الباك ممكن يقبله أو يرفضه بصمت حسب
+    // منطقه الداخلي). بنمنعها من هنا فقط لطلب جديد — التعديل على طلب
+    // قائم بالفعل ليه قاعدته الخاصة (isLeaveStarted) وممنوع أصلاً لو بدأت.
+    if (editingLeaveId === null && leaveForm.start_date < todayISO()) {
+      showToast("error", "تاريخ بداية الإجازة لازم يكون النهاردة أو بعده");
       return;
     }
     try {
@@ -315,7 +342,7 @@ export default function AttendancePage() {
           p_leave_id: editingLeaveId,
           p_start_date: leaveForm.start_date,
           p_end_date: leaveForm.end_date,
-          p_reason: leaveForm.reason,
+          p_reason: trimmedReason,
         });
         showToast("success", "تم تعديل طلب الإجازة");
       } else {
@@ -323,7 +350,7 @@ export default function AttendancePage() {
           p_start_date: leaveForm.start_date,
           p_end_date: leaveForm.end_date,
           p_leave_type: leaveForm.leave_type,
-          p_reason: leaveForm.reason,
+          p_reason: trimmedReason,
         });
         showToast("success", "تم إرسال طلب الإجازة بنجاح");
       }
@@ -713,6 +740,10 @@ export default function AttendancePage() {
                   <input
                     type="date"
                     value={leaveForm.start_date}
+                    /* 🔧 VALIDATION FIX: منع اختيار تاريخ بداية في الماضي من
+                        الـ date picker نفسه (بالإضافة للفحص في submitLeaveForm
+                        كـ حماية مزدوجة). */
+                    min={todayISO()}
                     onChange={(e) =>
                       setLeaveForm((f) => {
                         const start_date = e.target.value;
@@ -752,7 +783,12 @@ export default function AttendancePage() {
               </label>
 
               <label className="text-xs space-y-1 block">
-                <span className="text-muted-foreground">السبب</span>
+                <span className="text-muted-foreground">
+                  السبب
+                  {/* 🔧 VALIDATION FIX: توضيح الحد الأدنى في الليبل نفسه عشان
+                      المستخدم يعرف مقدمًا بدل ما يتفاجئ بالإيرور بعد الإرسال */}
+                  <span className="text-muted-foreground/70"> (لا يقل عن {MIN_LEAVE_REASON_LENGTH} أحرف)</span>
+                </span>
                 <textarea
                   value={leaveForm.reason}
                   onChange={(e) => setLeaveForm((f) => ({ ...f, reason: e.target.value }))}
