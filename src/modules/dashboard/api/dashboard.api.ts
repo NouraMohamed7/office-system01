@@ -141,6 +141,12 @@ export async function getRecentNotifications(userId: string, limit = 6): Promise
   }));
 }
 
+// ⚠️ اسم الـ channel هنا لازم يكون مختلف عن اللي في
+// modules/notifications/api/notifications.api.ts (اللي بيستخدمه NotificationsBell).
+// لو الاسمين اتساووا، Supabase بيرجّع نفس الـ channel object لأي حد يعمل
+// .channel() بنفس الاسم، وأي .on() تاني عليه بعد ما اتعمله subscribe()
+// قبل كده بيرمي uncaught error وبيكسر الصفحة كلها (ده كان سبب "This page
+// couldn't load" في صفحة الموظف). فالحل: namespace مختلف لكل مستهلك.
 export function subscribeToNotifications(userId: string, onChange: () => void) {
   if (!userId) {
     // مفيش user لسه (لسه بيتحمل) — رجّع no-op unsubscribe بدل ما نكسر الاشتراك
@@ -148,7 +154,7 @@ export function subscribeToNotifications(userId: string, onChange: () => void) {
   }
 
   const channel = supabase
-    .channel(`notifications-${userId}`)
+    .channel(`notifications-dashboard-${userId}`)
     .on(
       "postgres_changes",
       { event: "*", schema: "public", table: "notifications", filter: `users_id=eq.${userId}` },
