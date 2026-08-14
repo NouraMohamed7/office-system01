@@ -12,9 +12,6 @@ import type {
 const EGYPT_PHONE_RE = /^01[0125][0-9]{8}$/;
 const SAUDI_PHONE_RE = /^(?:\+?966|00966|0)?5[0-9]{8}$/;
 
-// ⚠️ الأرقام في القاعدة متخزنة بصيغة دولية (+20xxxxxxxxxx / +966xxxxxxxxx)
-// بينما regex مصر بتتوقع صيغة محلية (01xxxxxxxxx) — الفنكشن دي بتحوّل أي صيغة
-// دولية (+20 / 0020 / +966 / 00966) لصيغة محلية تبدأ بـ 0 قبل ما نطابقها.
 function toLocalPhone(raw: string): string {
   let v = raw.replace(/[\s-]/g, "");
   if (v.startsWith("+20")) v = "0" + v.slice(3);
@@ -41,7 +38,6 @@ function classifyPhones(numbers: string[]): {
 
 export type MyProfile = PersonRow;
 
-// بيرجع بيانات المستخدم اللي عامل login حاليًا (auth.getUser + جدول users)
 export async function getMyProfile(): Promise<MyProfile | null> {
   const { data: authData, error: authError } = await supabase.auth.getUser();
   if (authError) throw authError;
@@ -67,18 +63,10 @@ export async function getMyProfile(): Promise<MyProfile | null> {
     { data: phones, error: phoneError },
   ] = await Promise.all([
     u.department_id
-      ? supabase
-          .from("department")
-          .select("*")
-          .eq("id", u.department_id)
-          .maybeSingle()
+      ? supabase.from("department").select("*").eq("id", u.department_id).maybeSingle()
       : Promise.resolve({ data: null, error: null }),
     u.position_id
-      ? supabase
-          .from("position")
-          .select("*")
-          .eq("id", u.position_id)
-          .maybeSingle()
+      ? supabase.from("position").select("*").eq("id", u.position_id).maybeSingle()
       : Promise.resolve({ data: null, error: null }),
     u.branch_id
       ? supabase.from("branch").select("*").eq("id", u.branch_id).maybeSingle()
@@ -96,7 +84,6 @@ export async function getMyProfile(): Promise<MyProfile | null> {
 
   return {
     id: u.id,
-    // ⚠️ جدول users مفيهوش عمود email — بنرجعه من auth.getUser() بس
     full_name: u.name ?? "",
     email: u.email ?? authUser.email ?? "",
     emp_status: u.emp_status ?? "نشط",
@@ -106,17 +93,17 @@ export async function getMyProfile(): Promise<MyProfile | null> {
     personalPhone,
     workPhone,
     saudiPhone,
-    // حتى بعد update-user)، فمينفعش نعتمد عليها كـ cache-buster. بنستخدم وقت التحميل
-    // نفسه بدل كده — كل fetch جديد للبروفايل هيكسر أي كاش قديم للصورة.
+    // ⚠️ cache-busting دايمًا مهم هنا لأن الـ storage_id/الـ path بيفضل ثابت
+    // للمستخدم نفسه (avatar/{user_id}.png) — التاريخ بيضمن إن المتصفح يجيب
+    // النسخة الجديدة بعد كل تحديث، حتى لو الـ URL نفسه متكرر.
     photo_url: u.photo_url ? `${u.photo_url}?v=${Date.now()}` : null,
     created_at: u.created_at,
   };
 }
 
-// ⚠️ update-user موثّق كـ "manager only" وبيتعدل بيه بيانات موظف تاني بالـ user_id.
-// هنا بنستخدمه على user_id الخاص بالمدير نفسه.
-// ⚠️ الـ Edge Function دي بتتطلب multipart/form-data دايمًا (حتى من غير صورة)،
-// فمينفعش نبعت JSON عادي — لازم FormData في كل الحالات.
+// ⚠️ مطابق تمامًا لمثال الـ Postman الناجح "user > update":
+// FormData فيها user_id (نص) + photo (ملف). بيانات تانية زي name أو
+// department_id اختيارية وبتتبعت كنص برضه لو موجودة — مفيش JSON هنا خالص.
 export async function updateMyProfile(patch: {
   name?: string;
   photo?: File | null;
@@ -134,15 +121,16 @@ export async function updateMyProfile(patch: {
   const formData = new FormData();
   formData.append("user_id", authUser.id);
   if (patch.name) formData.append("name", patch.name);
-  if (patch.photo) formData.append("photo", patch.photo);
+  if (patch.photo) formData.append("photo", patch.photo, patch.photo.name);
 
   const { data, error } = await supabase.functions.invoke("update-user", {
     body: formData,
+    // ⚠️ لا تحط Content-Type يدوي هنا — المتصفح لازم يحدد الـ boundary
+    // بنفسه لما بيبعت FormData، لو حطيناه يدوي الرفع هيفشل بصمت.
   });
   if (error) throw error;
   if (data?.error) throw new Error(data.error);
 
-  // نرجع نجيب البروفايل كامل تاني عشان نضمن التزامن (بيانات القسم/الوظيفة/الأرقام)
   const refreshed = await getMyProfile();
   if (!refreshed) throw new Error("تعذر تحميل بياناتك بعد الحفظ");
   return refreshed;
