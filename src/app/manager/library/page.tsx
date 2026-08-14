@@ -8,7 +8,7 @@ export default function LibraryPage() {
   return (
     <div className="space-y-6">
       <PageHeader title="المكتبة" subtitle="محتوى تدريبي وإرشادي لكل قسم." />
-      <LibraryContent CardComponent={Card} />
+      <LibraryContent CardComponent={Card} isManager={true} />
     </div>
   );
 }

@@ -1,8 +1,9 @@
 // src/components/library/library-content.tsx
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useToast } from "@/components/toast";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
 import {
   BookOpen,
   Film,
@@ -14,142 +15,183 @@ import {
   ExternalLink,
   Pencil,
   Trash2,
+  Loader2,
+  AlertCircle,
 } from "lucide-react";
+import type { LibraryDepartment, LibraryContentType, LibraryItem } from "@/types/library";
+import {
+  fetchLibraryItems,
+  fetchUsersNameMap,
+  createLibraryItem,
+  updateLibraryItem,
+  deleteLibraryItem,
+} from "@/modules/library/api/library.api";
 
 /* ------------------------------------------------------------------ */
-/*  Types & constants                                                   */
+/*  Labels (enums الحقيقية من الباك)                                   */
 /* ------------------------------------------------------------------ */
 
-type ContentType = "فيديو" | "رابط" | "ملف" | "نص إرشادي";
-type Dept = "السوشيال ميديا" | "المناديب" | "المبيعات";
+const DEPTS: LibraryDepartment[] = ["social_media", "representative", "sells", "else"];
+const TYPES: LibraryContentType[] = ["video", "link", "file", "text_guide", "else"];
 
-type LibraryItem = {
-  id: string;
-  title: string;
-  dept: Dept;
-  type: ContentType;
-  description: string;
-  url: string;
-  addedBy: string;
-  date: string;
+const DEPT_LABELS: Record<LibraryDepartment, string> = {
+  social_media: "السوشيال ميديا",
+  representative: "المناديب",
+  sells: "المبيعات",
+  else: "أخرى",
 };
 
-type FormValues = Omit<LibraryItem, "id" | "date">;
-
-const DEPTS: Dept[] = ["السوشيال ميديا", "المناديب", "المبيعات"];
-const TYPES: ContentType[] = ["فيديو", "رابط", "ملف", "نص إرشادي"];
-
-const TYPE_ICON: Record<ContentType, typeof Film> = {
-  "فيديو": Film,
-  "رابط": LinkIcon,
-  "ملف": FileText,
-  "نص إرشادي": BookOpen,
+const TYPE_LABELS: Record<LibraryContentType, string> = {
+  video: "فيديو",
+  link: "رابط",
+  file: "ملف",
+  text_guide: "نص إرشادي",
+  else: "أخرى",
 };
 
-const INITIAL_ITEMS: LibraryItem[] = [
-  {
-    id: "lib-1",
-    title: "أساسيات كتابة كابشن يجذب تفاعل",
-    dept: "السوشيال ميديا",
-    type: "نص إرشادي",
-    description: "دليل مختصر لإزاي تكتب كابشن يشد المتابع من أول سطرين.",
-    url: "",
-    addedBy: "منى (مانجر)",
-    date: "2026-07-20",
-  },
-  {
-    id: "lib-2",
-    title: "فيديو تدريبي: تصوير ريلز بالموبايل",
-    dept: "السوشيال ميديا",
-    type: "فيديو",
-    description: "خطوات بسيطة لتصوير ريل احترافي بكاميرا الموبايل بس.",
-    url: "https://youtube.com/watch?v=example1",
-    addedBy: "منى (مانجر)",
-    date: "2026-07-18",
-  },
-  {
-    id: "lib-3",
-    title: "سكريبت مكالمة مع مندوب جديد",
-    dept: "المناديب",
-    type: "ملف",
-    description: "نموذج جاهز للأسئلة اللي المفروض تتسأل لمندوب جديد قبل التعاقد.",
-    url: "https://example.com/files/driver-script.pdf",
-    addedBy: "أحمد (مانجر)",
-    date: "2026-07-15",
-  },
-  {
-    id: "lib-4",
-    title: "إزاي تتعامل مع شكوى عميل غاضب",
-    dept: "المبيعات",
-    type: "نص إرشادي",
-    description: "خطوات عملية للتهدئة والوصول لحل يرضي العميل من غير ما تخسر الصفقة.",
-    url: "",
-    addedBy: "سارة (موظفة)",
-    date: "2026-07-10",
-  },
-];
-
-/* ------------------------------------------------------------------ */
-/*  Shared content — used by both employee & manager portals            */
-/* ------------------------------------------------------------------ */
+const TYPE_ICON: Record<LibraryContentType, typeof Film> = {
+  video: Film,
+  link: LinkIcon,
+  file: FileText,
+  text_guide: BookOpen,
+  else: FileText,
+};
 
 type CardProps = { className?: string; children: React.ReactNode };
 
+/* ------------------------------------------------------------------ */
+/*  Main content — مشترك بين بورتال الموظف والمدير                     */
+/* ------------------------------------------------------------------ */
+
 export function LibraryContent({
   CardComponent,
+  isManager,
 }: {
   CardComponent: React.ComponentType<CardProps>;
+  isManager: boolean;
 }) {
   const Card = CardComponent;
   const showToast = useToast();
+  const { user } = useCurrentUser();
 
-  const [items, setItems] = useState<LibraryItem[]>(INITIAL_ITEMS);
-  const [activeDept, setActiveDept] = useState<"الكل" | Dept>("الكل");
-  const [typeFilter, setTypeFilter] = useState<"الكل" | ContentType>("الكل");
+  const [items, setItems] = useState<LibraryItem[]>([]);
+  const [usersMap, setUsersMap] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const [activeDept, setActiveDept] = useState<"الكل" | LibraryDepartment>("الكل");
+  const [typeFilter, setTypeFilter] = useState<"الكل" | LibraryContentType>("الكل");
   const [query, setQuery] = useState("");
+
   const [showAddForm, setShowAddForm] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+
+  async function loadData() {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const [libraryItems, names] = await Promise.all([
+        fetchLibraryItems(),
+        fetchUsersNameMap().catch(() => ({} as Record<string, string>)),
+      ]);
+      setItems(libraryItems);
+      setUsersMap(names);
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : "حدث خطأ أثناء تحميل المكتبة");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const filtered = useMemo(() => {
     return items.filter((it) => {
-      const matchesDept = activeDept === "الكل" || it.dept === activeDept;
-      const matchesType = typeFilter === "الكل" || it.type === typeFilter;
+      const matchesDept = activeDept === "الكل" || it.department === activeDept;
+      const matchesType = typeFilter === "الكل" || it.content === typeFilter;
       const matchesQuery = it.title.includes(query.trim());
       return matchesDept && matchesType && matchesQuery;
     });
   }, [items, activeDept, typeFilter, query]);
 
-  const handleAdd = (values: FormValues) => {
-    const newItem: LibraryItem = {
-      ...values,
-      id: `lib-${Date.now()}`,
-      date: new Date().toISOString().slice(0, 10),
-    };
-    setItems((prev) => [newItem, ...prev]);
-    setShowAddForm(false);
-    showToast("success", "تم إضافة المحتوى للمكتبة");
+  const handleAdd = async (values: FormValues) => {
+    try {
+      const res = await createLibraryItem(values);
+      setItems((prev) => [res.library, ...prev]);
+      setShowAddForm(false);
+      showToast("success", res.message || "تم إضافة المحتوى للمكتبة");
+    } catch (err) {
+      showToast("error", err instanceof Error ? err.message : "تعذر إضافة المحتوى");
+    }
   };
 
-  const handleUpdate = (id: string, values: FormValues) => {
-    setItems((prev) =>
-      prev.map((it) => (it.id === id ? { ...it, ...values } : it))
+  const handleUpdate = async (id: number, values: FormValues) => {
+    try {
+      const res = await updateLibraryItem({ library_id: id, ...values });
+      setItems((prev) => prev.map((it) => (it.id === id ? res.library : it)));
+      setEditingId(null);
+      showToast("success", res.message || "تم تعديل المحتوى");
+    } catch (err) {
+      showToast("error", err instanceof Error ? err.message : "تعذر تعديل المحتوى");
+    }
+  };
+
+  const handleDelete = async (id: number) => {
+    setDeletingId(id);
+    try {
+      const res = await deleteLibraryItem(id);
+      setItems((prev) => prev.filter((it) => it.id !== id));
+      setConfirmDeleteId(null);
+      showToast("success", res.message || "تم حذف المحتوى");
+    } catch (err) {
+      showToast("error", err instanceof Error ? err.message : "تعذر حذف المحتوى");
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  if (loading) {
+    return (
+      <Card className="p-10 flex flex-col items-center justify-center gap-3 text-muted-foreground">
+        <Loader2 className="h-6 w-6 animate-spin" />
+        <span className="text-sm">جاري تحميل المكتبة...</span>
+      </Card>
     );
-    setEditingId(null);
-    showToast("success", "تم تعديل المحتوى");
-  };
+  }
 
-  const handleDelete = (id: string) => {
-    setItems((prev) => prev.filter((it) => it.id !== id));
-    setConfirmDeleteId(null);
-    showToast("success", "تم حذف المحتوى");
-  };
+  if (loadError) {
+    return (
+      <Card className="p-10 flex flex-col items-center justify-center gap-3 text-center">
+        <AlertCircle className="h-6 w-6 text-destructive" />
+        <p className="text-sm text-destructive">{loadError}</p>
+        <button
+          onClick={loadData}
+          className="text-sm font-semibold text-primary hover:underline"
+        >
+          إعادة المحاولة
+        </button>
+      </Card>
+    );
+  }
 
   return (
     <>
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
         <div className="inline-flex rounded-xl bg-secondary p-1 flex-wrap">
-          {(["الكل", ...DEPTS] as const).map((d) => (
+          <button
+            onClick={() => setActiveDept("الكل")}
+            className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${
+              activeDept === "الكل" ? "bg-card text-primary shadow-warm" : "text-muted-foreground"
+            }`}
+          >
+            الكل
+          </button>
+          {DEPTS.map((d) => (
             <button
               key={d}
               onClick={() => setActiveDept(d)}
@@ -157,26 +199,29 @@ export function LibraryContent({
                 activeDept === d ? "bg-card text-primary shadow-warm" : "text-muted-foreground"
               }`}
             >
-              {d}
+              {DEPT_LABELS[d]}
             </button>
           ))}
         </div>
 
-        <button
-          onClick={() => {
-            setEditingId(null);
-            setShowAddForm((s) => !s);
-          }}
-          className="inline-flex items-center gap-2 bg-primary text-primary-foreground rounded-xl px-4 py-2.5 text-sm font-bold hover:bg-primary-dark transition shadow-warm"
-        >
-          {showAddForm ? <X className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
-          {showAddForm ? "إلغاء" : "إضافة محتوى"}
-        </button>
+        {isManager && (
+          <button
+            onClick={() => {
+              setEditingId(null);
+              setShowAddForm((s) => !s);
+            }}
+            className="inline-flex items-center gap-2 bg-primary text-primary-foreground rounded-xl px-4 py-2.5 text-sm font-bold hover:bg-primary-dark transition shadow-warm"
+          >
+            {showAddForm ? <X className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+            {showAddForm ? "إلغاء" : "إضافة محتوى"}
+          </button>
+        )}
       </div>
 
-      {showAddForm && (
+      {isManager && showAddForm && (
         <ItemForm
           Card={Card}
+          defaultName={user?.name ?? ""}
           submitLabel="حفظ المحتوى"
           onSave={handleAdd}
           onCancel={() => setShowAddForm(false)}
@@ -204,11 +249,14 @@ export function LibraryContent({
           </div>
           <select
             value={typeFilter}
-            onChange={(e) => setTypeFilter(e.target.value as "الكل" | ContentType)}
+            onChange={(e) => setTypeFilter(e.target.value as "الكل" | LibraryContentType)}
             className="h-10 rounded-xl border border-border bg-background px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition"
           >
-            {["الكل", ...TYPES].map((t) => (
-              <option key={t}>{t}</option>
+            <option value="الكل">الكل</option>
+            {TYPES.map((t) => (
+              <option key={t} value={t}>
+                {TYPE_LABELS[t]}
+              </option>
             ))}
           </select>
         </div>
@@ -221,11 +269,12 @@ export function LibraryContent({
           </p>
         )}
         {filtered.map((it) =>
-          editingId === it.id ? (
+          isManager && editingId === it.id ? (
             <div key={it.id} className="md:col-span-2 lg:col-span-3">
               <ItemForm
                 Card={Card}
                 initial={it}
+                defaultName={it.name}
                 submitLabel="حفظ التعديل"
                 onSave={(values) => handleUpdate(it.id, values)}
                 onCancel={() => setEditingId(null)}
@@ -235,8 +284,11 @@ export function LibraryContent({
             <LibraryCard
               key={it.id}
               item={it}
+              creatorName={usersMap[it.created_by]}
               Card={Card}
+              isManager={isManager}
               isConfirmingDelete={confirmDeleteId === it.id}
+              isDeleting={deletingId === it.id}
               onEdit={() => {
                 setShowAddForm(false);
                 setEditingId(it.id);
@@ -258,22 +310,31 @@ export function LibraryContent({
 
 function LibraryCard({
   item,
+  creatorName,
   Card,
+  isManager,
   isConfirmingDelete,
+  isDeleting,
   onEdit,
   onDeleteClick,
   onDeleteConfirm,
   onDeleteCancel,
 }: {
   item: LibraryItem;
+  creatorName?: string;
   Card: React.ComponentType<CardProps>;
+  isManager: boolean;
   isConfirmingDelete: boolean;
+  isDeleting: boolean;
   onEdit: () => void;
   onDeleteClick: () => void;
   onDeleteConfirm: () => void;
   onDeleteCancel: () => void;
 }) {
-  const Icon = TYPE_ICON[item.type];
+  const Icon = TYPE_ICON[item.content];
+  const openUrl = item.link || item.file_path || "";
+  const dateLabel = item.created_at ? item.created_at.slice(0, 10) : "";
+
   return (
     <Card className="p-5 flex flex-col">
       <div className="flex items-start justify-between mb-3">
@@ -282,32 +343,45 @@ function LibraryCard({
         </div>
         <div className="flex items-center gap-1.5">
           <span className="text-[11px] font-semibold text-muted-foreground bg-secondary rounded-full px-2.5 py-1">
-            {item.dept}
+            {DEPT_LABELS[item.department]}
           </span>
-          <button
-            onClick={onEdit}
-            title="تعديل"
-            className="h-7 w-7 grid place-items-center rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10 transition"
-          >
-            <Pencil className="h-3.5 w-3.5" />
-          </button>
-          <button
-            onClick={onDeleteClick}
-            title="حذف"
-            className="h-7 w-7 grid place-items-center rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
+          {isManager && (
+            <>
+              <button
+                onClick={onEdit}
+                title="تعديل"
+                className="h-7 w-7 grid place-items-center rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10 transition"
+              >
+                <Pencil className="h-3.5 w-3.5" />
+              </button>
+              <button
+                onClick={onDeleteClick}
+                title="حذف"
+                disabled={isDeleting}
+                className="h-7 w-7 grid place-items-center rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition disabled:opacity-50"
+              >
+                {isDeleting ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Trash2 className="h-3.5 w-3.5" />
+                )}
+              </button>
+            </>
+          )}
         </div>
       </div>
       <h3 className="font-bold text-foreground mb-1">{item.title}</h3>
-      <p className="text-sm text-muted-foreground flex-1">{item.description}</p>
+      {item.description && (
+        <p className="text-sm text-muted-foreground flex-1">{item.description}</p>
+      )}
       <div className="mt-4 flex items-center justify-between text-xs text-muted-foreground">
-        <span>{item.addedBy} · {item.date}</span>
+        <span>
+          {creatorName || item.name} {dateLabel && `· ${dateLabel}`}
+        </span>
       </div>
-      {item.url && (
-        <a
-          href={item.url}
+      {openUrl && (
+          <a
+          href={openUrl}
           target="_blank"
           rel="noopener noreferrer"
           className="mt-3 inline-flex items-center justify-center gap-1.5 h-9 rounded-lg border border-border text-sm font-semibold text-primary hover:bg-primary/5 hover:border-primary/40 transition"
@@ -316,13 +390,14 @@ function LibraryCard({
         </a>
       )}
 
-      {isConfirmingDelete && (
+      {isManager && isConfirmingDelete && (
         <div className="mt-3 flex items-center justify-between gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2">
           <span className="text-xs font-semibold text-destructive">تأكيد الحذف؟</span>
           <div className="flex items-center gap-2">
             <button
               onClick={onDeleteConfirm}
-              className="text-xs font-bold text-destructive hover:underline"
+              disabled={isDeleting}
+              className="text-xs font-bold text-destructive hover:underline disabled:opacity-50"
             >
               حذف
             </button>
@@ -343,48 +418,69 @@ function LibraryCard({
 /*  Add / Edit form                                                     */
 /* ------------------------------------------------------------------ */
 
+type FormValues = {
+  title: string;
+  name: string;
+  department: LibraryDepartment;
+  content: LibraryContentType;
+  description?: string;
+  link?: string;
+  file?: File | null;
+};
+
 function ItemForm({
   Card,
   initial,
+  defaultName,
   submitLabel,
   onSave,
   onCancel,
 }: {
   Card: React.ComponentType<CardProps>;
   initial?: LibraryItem;
+  defaultName: string;
   submitLabel: string;
-  onSave: (values: FormValues) => void;
+  onSave: (values: FormValues) => Promise<void> | void;
   onCancel: () => void;
 }) {
   const showToast = useToast();
   const [title, setTitle] = useState(initial?.title ?? "");
-  const [dept, setDept] = useState<Dept>(initial?.dept ?? DEPTS[0]);
-  const [type, setType] = useState<ContentType>(initial?.type ?? TYPES[0]);
-  const [url, setUrl] = useState(initial?.url ?? "");
+  const [name, setName] = useState(initial?.name ?? defaultName);
+  const [department, setDepartment] = useState<LibraryDepartment>(initial?.department ?? DEPTS[0]);
+  const [content, setContent] = useState<LibraryContentType>(initial?.content ?? TYPES[0]);
+  const [link, setLink] = useState(initial?.link ?? "");
   const [description, setDescription] = useState(initial?.description ?? "");
-  const [addedBy, setAddedBy] = useState(initial?.addedBy ?? "");
+  const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
-  const handleSubmit = () => {
-    if (!title.trim() || !addedBy.trim()) {
-      setError("العنوان واسمك مطلوبين قبل الحفظ");
+  const isLinkType = content === "link";
+
+  const handleSubmit = async () => {
+    if (!title.trim() || !name.trim()) {
+      setError("العنوان والاسم مطلوبين قبل الحفظ");
       showToast("error", "من فضلك اكمل البيانات المطلوبة");
       return;
     }
+    if (isLinkType && !link.trim() && !initial?.link) {
+      setError("محتوى من نوع رابط لازم تحط رابط");
+      showToast("error", "من فضلك أضف الرابط");
+      return;
+    }
     setError("");
-    onSave({
-      title: title.trim(),
-      dept,
-      type,
-      description: description.trim(),
-      url: url.trim(),
-      addedBy: addedBy.trim(),
-    });
-    if (!initial) {
-      setTitle("");
-      setUrl("");
-      setDescription("");
-      setAddedBy("");
+    setSubmitting(true);
+    try {
+      await onSave({
+        title: title.trim(),
+        name: name.trim(),
+        department,
+        content,
+        description: description.trim(),
+        link: link.trim(),
+        file,
+      });
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -397,7 +493,7 @@ function ItemForm({
         <button
           onClick={onCancel}
           className="text-muted-foreground hover:text-foreground transition"
-        >
+       >
           <X className="h-4 w-4" />
         </button>
       </div>
@@ -414,32 +510,61 @@ function ItemForm({
         <div>
           <label className="text-sm font-semibold text-foreground">القسم</label>
           <select
-            value={dept}
-            onChange={(e) => setDept(e.target.value as Dept)}
+            value={department}
+            onChange={(e) => setDepartment(e.target.value as LibraryDepartment)}
             className="mt-2 w-full h-11 rounded-xl border border-border bg-background px-3 text-sm"
           >
-            {DEPTS.map((d) => <option key={d}>{d}</option>)}
+            {DEPTS.map((d) => (
+              <option key={d} value={d}>{DEPT_LABELS[d]}</option>
+            ))}
           </select>
         </div>
         <div>
           <label className="text-sm font-semibold text-foreground">نوع المحتوى</label>
           <select
-            value={type}
-            onChange={(e) => setType(e.target.value as ContentType)}
+            value={content}
+            onChange={(e) => setContent(e.target.value as LibraryContentType)}
             className="mt-2 w-full h-11 rounded-xl border border-border bg-background px-3 text-sm"
           >
-            {TYPES.map((t) => <option key={t}>{t}</option>)}
+            {TYPES.map((t) => (
+              <option key={t} value={t}>{TYPE_LABELS[t]}</option>
+            ))}
           </select>
         </div>
-        <div className="md:col-span-2">
-          <label className="text-sm font-semibold text-foreground">الرابط (اختياري لو المحتوى نص فقط)</label>
-          <input
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="https://..."
-            className="mt-2 w-full h-11 rounded-xl border border-border bg-background focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none px-3 text-sm transition"
-          />
-        </div>
+
+        {isLinkType ? (
+          <div className="md:col-span-2">
+            <label className="text-sm font-semibold text-foreground">الرابط</label>
+            <input
+              value={link}
+              onChange={(e) => setLink(e.target.value)}
+              placeholder="https://..."
+              className="mt-2 w-full h-11 rounded-xl border border-border bg-background focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none px-3 text-sm transition"
+            />
+          </div>
+        ) : (
+          <div className="md:col-span-2">
+            <label className="text-sm font-semibold text-foreground">
+              الملف {initial?.file_path ? "(اختيار ملف جديد يستبدل الحالي)" : "(اختياري)"}
+            </label>
+            <input
+              type="file"
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              className="mt-2 w-full text-sm text-muted-foreground file:ml-3 file:rounded-lg file:border-0 file:bg-secondary file:px-3 file:py-2 file:text-sm file:font-semibold file:text-foreground"
+            />
+            {initial?.file_path && !file && (
+                <a
+                href={initial.file_path}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-1 inline-block text-xs text-primary hover:underline"
+              >
+                عرض الملف الحالي
+              </a>
+            )}
+          </div>
+        )}
+
         <div className="md:col-span-2">
           <label className="text-sm font-semibold text-foreground">الوصف</label>
           <textarea
@@ -453,8 +578,8 @@ function ItemForm({
         <div>
           <label className="text-sm font-semibold text-foreground">اسمك</label>
           <input
-            value={addedBy}
-            onChange={(e) => { setAddedBy(e.target.value); setError(""); }}
+            value={name}
+            onChange={(e) => { setName(e.target.value); setError(""); }}
             placeholder="اسمك"
             className={`mt-2 w-full h-11 rounded-xl border bg-background focus:ring-2 outline-none px-3 text-sm transition
               ${error ? "border-destructive focus:border-destructive focus:ring-destructive/20" : "border-border focus:border-primary focus:ring-primary/20"}`}
@@ -465,12 +590,15 @@ function ItemForm({
       <div className="mt-6 flex items-center gap-3">
         <button
           onClick={handleSubmit}
-          className="bg-primary text-primary-foreground rounded-xl px-6 py-2.5 text-sm font-semibold hover:bg-primary-dark transition"
+          disabled={submitting}
+          className="inline-flex items-center gap-2 bg-primary text-primary-foreground rounded-xl px-6 py-2.5 text-sm font-semibold hover:bg-primary-dark transition disabled:opacity-60"
         >
+          {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
           {submitLabel}
         </button>
         <button
           onClick={onCancel}
+          disabled={submitting}
           className="text-sm font-semibold text-muted-foreground hover:text-foreground transition"
         >
           إلغاء
