@@ -5,7 +5,7 @@ import { useToast } from "@/components/toast";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import {
   getDashboardStats, getAttendanceToday, getDailyReportToday,
-  checkIn, getRecentNotifications, subscribeToNotifications,
+  getRecentNotifications, subscribeToNotifications,
   type DashboardStats, type ActivityItem,
 } from "@/modules/dashboard/api/dashboard.api";
 import {
@@ -17,8 +17,14 @@ import { useRouter } from "next/navigation";
 
 type ChecklistItem = { id: string; ar: string; done: boolean; source: "db" | "local" };
 
+// ✅ فيكس: "تسجيل حضور" بقى بيودّي على صفحة الحضور (/employee/attendance)
+// بدل ما يعمل check-in مباشرة من الداشبورد. السبب: الـ check-in فيه قيود
+// من الباك (وقت العمل المسموح، حالة البريك، ...إلخ) وصفحة الحضور هي
+// المكان اللي فيه كل السياق ده ظاهر للموظف (الوقت الحالي، رينج الدوام،
+// حالة اليوم) قبل ما يضغط، فمينفعش يتفاجئ بإيرور تقني من غير سياق
+// وهو لسه واقف في الداشبورد. كل الأزرار السريعة بقت من نوع "nav" واحد.
 const QUICK_ACTIONS = [
-  { icon: Clock, ar: "تسجيل حضور", kind: "checkin" as const },
+  { icon: Clock, ar: "تسجيل حضور", kind: "nav" as const, href: "/employee/attendance" },
   { icon: FileText, ar: "إضافة تقرير", kind: "nav" as const, href: "/employee/reports" },
   { icon: Upload, ar: "رفع شيت", kind: "nav" as const, href: "/employee/uploads" },
   { icon: LifeBuoy, ar: "فتح شكوى", kind: "nav" as const, href: "/employee/complaints" },
@@ -48,7 +54,6 @@ export default function Dashboard() {
     { id: "work_sheet", ar: "رفع شيت العمل", done: false, source: "local" },
   ]);
   const [loadingData, setLoadingData] = useState(true);
-  const [checkingIn, setCheckingIn] = useState(false);
 
   const loadDashboard = useCallback(async () => {
     if (!user) return;
@@ -100,21 +105,9 @@ export default function Dashboard() {
     });
   };
 
-  const handleQuickAction = async (action: (typeof QUICK_ACTIONS)[number]) => {
-    if (action.kind === "checkin") {
-      if (checkingIn) return;
-      setCheckingIn(true);
-      try {
-        await checkIn();
-        showToast("success", "تم تسجيل حضورك بنجاح");
-        loadDashboard();
-      } catch (err: any) {
-        showToast("error", err?.message ?? "تعذر تسجيل الحضور");
-      } finally {
-        setCheckingIn(false);
-      }
-      return;
-    }
+  // ✅ فيكس: بسيطة دلوقتي — كل الأزرار السريعة بتعمل navigation بس، مفيش
+  // أي API call مباشر (خصوصًا check-in) من الداشبورد.
+  const handleQuickAction = (action: (typeof QUICK_ACTIONS)[number]) => {
     router.push(action.href);
   };
 
@@ -221,7 +214,6 @@ export default function Dashboard() {
                 <button
                   key={q.ar}
                   onClick={() => handleQuickAction(q)}
-                  disabled={q.kind === "checkin" && checkingIn}
                   className="flex flex-col items-center gap-2 p-4 rounded-xl border-2 border-primary/30 text-primary hover:bg-primary/5 hover:border-primary transition disabled:opacity-50"
                 >
                   <q.icon className="h-5 w-5" />
