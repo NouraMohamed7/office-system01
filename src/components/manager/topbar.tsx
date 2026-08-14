@@ -1,12 +1,9 @@
 // src/components/manager/topbar.tsx
 "use client";
 
-import Link from "next/link";
-import { useEffect, useState } from "react";
-import { Search, CheckCircle2, Menu } from "lucide-react";
+import { useState } from "react";
+import { Menu } from "lucide-react";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { supabase } from "@/lib/supabase/client";
-import { getManagerFilesStats } from "@/modules/dashboard/api/dashboard.api";
 import { NotificationsBell } from "@/components/notifications-bell";
 
 function initialsOf(name: string | null | undefined) {
@@ -16,42 +13,6 @@ function initialsOf(name: string | null | undefined) {
 
 export function ManagerTopbar({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const { user } = useCurrentUser();
-  const [pendingApprovals, setPendingApprovals] = useState<number | null>(null);
-
-  // عدد الاعتمادات المعلّقة — نفس المصدر بالظبط اللي بيستخدمه Manager Dashboard
-  // (getManagerFilesStats().pending)، من غير أي كويري مكررة هنا + realtime
-  useEffect(() => {
-    let active = true;
-
-    getManagerFilesStats()
-      .then((stats) => {
-        if (active) setPendingApprovals(stats.pending);
-      })
-      .catch((err) => {
-        console.error(err);
-        if (active) setPendingApprovals(0);
-      });
-
-    const channel = supabase
-      .channel("topbar-files-approval")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "files_approval" },
-        () => {
-          getManagerFilesStats()
-            .then((stats) => {
-              if (active) setPendingApprovals(stats.pending);
-            })
-            .catch(console.error);
-        }
-      )
-      .subscribe();
-
-    return () => {
-      active = false;
-      supabase.removeChannel(channel);
-    };
-  }, []);
 
   const displayName = user?.name || "...";
   const roleLabel = user?.position_title || "مدير";
@@ -61,26 +22,14 @@ export function ManagerTopbar({ onToggleSidebar }: { onToggleSidebar: () => void
       <button className="grid size-10 place-items-center rounded-xl border border-border bg-card text-foreground lg:hidden" onClick={onToggleSidebar}>
         <Menu className="size-5" />
       </button>
-      <div className="relative flex-1 max-w-xl">
-        <Search className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-        <input
-          type="search"
-          placeholder="ابحث عن موظف، مهمة، تقرير، ملف..."
-          className="h-10 w-full rounded-xl border border-border bg-background/70 pr-10 pl-4 text-sm outline-none placeholder:text-muted-foreground focus:border-primary/50 focus:bg-background"
-        />
-      </div>
-      <div className="flex items-center gap-2">
-        {/* رقم حقيقي من getManagerFilesStats().pending مع realtime */}
-        <Link
-          href="/manager/approvals?status=pending"
-          className="relative hidden items-center gap-2 rounded-xl bg-primary/10 px-3 py-2 text-sm font-semibold text-primary hover:bg-primary/15 sm:flex"
-        >
-          <CheckCircle2 className="size-4" />
-          <span>
-            {pendingApprovals === null ? "..." : pendingApprovals} اعتماد ينتظر
-          </span>
-        </Link>
 
+      {/* عنوان بسيط بدل السيرش شاغل المساحة، بيدّي البار شكل أنظف */}
+      <div className="flex-1">
+        <div className="text-sm font-semibold text-foreground">مرحبًا، {displayName}</div>
+        <div className="text-[11px] text-muted-foreground">{roleLabel}</div>
+      </div>
+
+      <div className="flex items-center gap-2">
         {/* الجرس — كومبوننت موحّد، نفس المصدر ونفس السلوك في البورتالين */}
         <NotificationsBell userId={user?.id} />
 
