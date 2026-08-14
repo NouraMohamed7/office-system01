@@ -549,3 +549,35 @@ export async function checkLeaveStatus(payload: {
   if (error) throw error;
   return data;
 }
+// ============================================================
+// Employee: إعدادات الحضور الفعّالة لفرع الموظف الحالي (للتحقق قبل check-in)
+// ============================================================
+
+export async function getMyActiveAttendanceSettings(): Promise<AttendanceSettings | null> {
+  const userId = await getCurrentUserId();
+
+  // 1) هات branch_id بتاع الموظف من جدول users
+  const { data: userRow, error: userErr } = await supabase
+    .from("users")
+    .select("branch_id")
+    .eq("id", userId)
+    .single();
+
+  if (userErr) throw userErr;
+  if (!userRow?.branch_id) return null;
+
+  // 2) هات إعدادات الفرع الفعّالة النهاردة (effective_from <= اليوم <= effective_to أو effective_to = null)
+  const today = todayISODate();
+  const { data, error } = await supabase
+    .from("attendance_settings")
+    .select("*")
+    .eq("branch_id", userRow.branch_id)
+    .lte("effective_from", today)
+    .or(`effective_to.is.null,effective_to.gte.${today}`)
+    .order("effective_from", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data;
+}
