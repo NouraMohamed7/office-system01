@@ -106,12 +106,9 @@ export async function getMyProfile(): Promise<MyProfile | null> {
     personalPhone,
     workPhone,
     saudiPhone,
-    // ⚠️ الـ photo_url ثابت الشكل (مبني من user_id) وبيتغيّر محتواه بس بدون
-    // تغيّر اللينك نفسه، فلو مضفناش cache-buster المتصفح هيفضل يورّي النسخة
-    // القديمة اللي كاشها من زيارة سابقة، حتى لو الباك فعليًا خزّن الصورة الجديدة.
-    photo_url: u.photo_url
-      ? `${u.photo_url}?v=${encodeURIComponent(u.updated_at ?? Date.now().toString())}`
-      : null,
+    // حتى بعد update-user)، فمينفعش نعتمد عليها كـ cache-buster. بنستخدم وقت التحميل
+    // نفسه بدل كده — كل fetch جديد للبروفايل هيكسر أي كاش قديم للصورة.
+    photo_url: u.photo_url ? `${u.photo_url}?v=${Date.now()}` : null,
     created_at: u.created_at,
   };
 }
