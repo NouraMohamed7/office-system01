@@ -75,7 +75,10 @@ export type AttendanceSettingsInput = {
 };
 
 /** حالة طلب الإجازة اللي المدير بيقدر يحطها عبر check_leave_status (public.leave_status) */
-export type LeaveStatus = Extract<LeaveStatusFull, "accepted" | "rejected" | "cancelled">;
+export type LeaveStatus = Extract<
+  LeaveStatusFull,
+  "accepted" | "rejected" | "cancelled"
+>;
 
 /** فلاتر سجل الحضور (مستخدمة في getAttendanceHistory) */
 export type AttendanceHistoryFilters = {
@@ -115,8 +118,12 @@ function todayISODate(): string {
 
 function currentMonthRange(): { firstDay: string; lastDay: string } {
   const now = new Date();
-  const firstDay = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
-  const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10);
+  const firstDay = new Date(now.getFullYear(), now.getMonth(), 1)
+    .toISOString()
+    .slice(0, 10);
+  const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0)
+    .toISOString()
+    .slice(0, 10);
   return { firstDay, lastDay };
 }
 
@@ -126,14 +133,18 @@ function currentMonthRange(): { firstDay: string; lastDay: string } {
 function breakDurationMinutes(b: BreakRecord): number | null {
   if (b.break_mins !== null) return b.break_mins;
   if (!b.end_time) return null; // بريك لسه مفتوح
-  const mins = Math.round((new Date(b.end_time).getTime() - new Date(b.start_time).getTime()) / 60000);
+  const mins = Math.round(
+    (new Date(b.end_time).getTime() - new Date(b.start_time).getTime()) / 60000,
+  );
   return mins > 0 ? mins : 0;
 }
 
 /** بياخد أحدث سجل من مجموعة سجلات (بالمقارنة بـ check_in_at)، عشان نستخدمها
  *  في أي مكان محتاج "آخر سجل حضور" بدل ما نعتمد على الداتابيز ترجع صف واحد
  *  بالظبط (اللي مش مضمون، زي ما موثق في dedupedByUser بصفحة المدير). */
-function pickLatestByCheckIn<T extends { check_in_at: string | null }>(rows: T[]): T | null {
+function pickLatestByCheckIn<T extends { check_in_at: string | null }>(
+  rows: T[],
+): T | null {
   if (rows.length === 0) return null;
   let latest = rows[0];
   for (const r of rows) {
@@ -146,9 +157,9 @@ function pickLatestByCheckIn<T extends { check_in_at: string | null }>(rows: T[]
 // Manager: كل موظفين اليوم (attendance_today view)
 // ============================================================
 
-export async function getAttendanceToday(
-  filters?: { userIds?: string[] }
-): Promise<AttendanceTodayRow[]> {
+export async function getAttendanceToday(filters?: {
+  userIds?: string[];
+}): Promise<AttendanceTodayRow[]> {
   let query = supabase.from("attendance_today").select("*");
 
   if (filters?.userIds && filters.userIds.length > 0) {
@@ -180,7 +191,7 @@ export async function getTodayAttendanceRecords(): Promise<AttendanceRecord[]> {
 // ============================================================
 
 export async function getAttendanceHistory(
-  filters: AttendanceHistoryFilters = {}
+  filters: AttendanceHistoryFilters = {},
 ): Promise<{ data: AttendanceRecord[]; count: number }> {
   let query = supabase.from("attendance").select("*", { count: "exact" });
 
@@ -219,7 +230,12 @@ export async function getCompanyMonthSummary(): Promise<CompanyMonthSummary> {
   const rows = (data ?? []) as AttendanceRecord[];
 
   if (rows.length === 0) {
-    return { avgPresentDays: 0, avgAbsentDays: 0, compliancePct: 0, totalWorkHours: 0 };
+    return {
+      avgPresentDays: 0,
+      avgAbsentDays: 0,
+      compliancePct: 0,
+      totalWorkHours: 0,
+    };
   }
 
   const byUser = new Map<string, { present: number; absent: number }>();
@@ -240,8 +256,14 @@ export async function getCompanyMonthSummary(): Promise<CompanyMonthSummary> {
   }
 
   const employeeCount = byUser.size || 1;
-  const totalPresent = Array.from(byUser.values()).reduce((s, v) => s + v.present, 0);
-  const totalAbsent = Array.from(byUser.values()).reduce((s, v) => s + v.absent, 0);
+  const totalPresent = Array.from(byUser.values()).reduce(
+    (s, v) => s + v.present,
+    0,
+  );
+  const totalAbsent = Array.from(byUser.values()).reduce(
+    (s, v) => s + v.absent,
+    0,
+  );
 
   return {
     avgPresentDays: Math.round((totalPresent / employeeCount) * 10) / 10,
@@ -250,9 +272,8 @@ export async function getCompanyMonthSummary(): Promise<CompanyMonthSummary> {
     totalWorkHours: Math.round(totalMinutes / 60),
   };
 }
-
 // ============================================================
-// Employee: تسجيل حضور / انصراف (RPC)
+// Employee: تسجيل حضور (RPC)
 // ============================================================
 
 export async function checkIn(): Promise<unknown> {
@@ -260,13 +281,6 @@ export async function checkIn(): Promise<unknown> {
   if (error) throw error;
   return data;
 }
-
-export async function checkOut(): Promise<unknown> {
-  const { data, error } = await supabase.rpc("check_out");
-  if (error) throw error;
-  return data;
-}
-
 // ============================================================
 // Employee: حالة اليوم بتاعي
 // ============================================================
@@ -295,7 +309,9 @@ export async function getMyAttendanceToday(): Promise<AttendanceRecord | null> {
 // Employee: سجل الحضور السابق
 // ============================================================
 
-export async function getMyAttendanceHistory(limit = 7): Promise<AttendanceRecord[]> {
+export async function getMyAttendanceHistory(
+  limit = 7,
+): Promise<AttendanceRecord[]> {
   const userId = await getCurrentUserId();
 
   const { data, error } = await supabase
@@ -336,23 +352,9 @@ export async function getMyMonthSummary(): Promise<MonthSummary> {
   };
 }
 
-// ============================================================
-// البريك (breaks)
-// ============================================================
-
-export async function startBreak(): Promise<unknown> {
-  const { data, error } = await supabase.rpc("start_break");
-  if (error) throw error;
-  return data;
-}
-
-export async function endBreak(): Promise<unknown> {
-  const { data, error } = await supabase.rpc("end_break");
-  if (error) throw error;
-  return data;
-}
-
-export async function getBreaksByAttendanceId(attendanceId: number): Promise<BreakRecord[]> {
+export async function getBreaksByAttendanceId(
+  attendanceId: number,
+): Promise<BreakRecord[]> {
   const { data, error } = await supabase
     .from("breaks")
     .select("*")
@@ -362,7 +364,9 @@ export async function getBreaksByAttendanceId(attendanceId: number): Promise<Bre
   return data ?? [];
 }
 
-export async function getBreaksByAttendanceIds(attendanceIds: number[]): Promise<BreakRecord[]> {
+export async function getBreaksByAttendanceIds(
+  attendanceIds: number[],
+): Promise<BreakRecord[]> {
   if (attendanceIds.length === 0) return [];
   const { data, error } = await supabase
     .from("breaks")
@@ -376,7 +380,7 @@ export async function getBreaksByAttendanceIds(attendanceIds: number[]): Promise
 // دالة موجودة وشغالة — بترجع Map<attendance_id, إجمالي الدقايق> لكل سجلات
 // الـ ids الممررة، بضمّ كل البريكات المرتبطة بكل سجل (مش بريك واحد بس).
 export async function getBreaksSummaryByAttendanceIds(
-  attendanceIds: number[]
+  attendanceIds: number[],
 ): Promise<Map<number, number>> {
   const summary = new Map<number, number>();
   if (attendanceIds.length === 0) return summary;
@@ -397,7 +401,7 @@ export function subscribeToBreaks(onChange: () => void) {
     .on(
       "postgres_changes",
       { event: "*", schema: "public", table: "breaks" },
-      () => onChange()
+      () => onChange(),
     )
     .subscribe();
 
@@ -410,7 +414,9 @@ export function subscribeToBreaks(onChange: () => void) {
 // Manager: إعدادات الحضور (attendance_settings) — CRUD كامل
 // ============================================================
 
-export async function getAttendanceSettings(branchId?: number): Promise<AttendanceSettings[]> {
+export async function getAttendanceSettings(
+  branchId?: number,
+): Promise<AttendanceSettings[]> {
   let query = supabase
     .from("attendance_settings")
     .select("*")
@@ -424,7 +430,7 @@ export async function getAttendanceSettings(branchId?: number): Promise<Attendan
 }
 
 export async function createAttendanceSettings(
-  payload: AttendanceSettingsInput
+  payload: AttendanceSettingsInput,
 ): Promise<AttendanceSettings> {
   const { data, error } = await supabase
     .from("attendance_settings")
@@ -437,7 +443,7 @@ export async function createAttendanceSettings(
 
 export async function updateAttendanceSettings(
   id: number,
-  patch: Partial<AttendanceSettingsInput>
+  patch: Partial<AttendanceSettingsInput>,
 ): Promise<AttendanceSettings> {
   const { data, error } = await supabase
     .from("attendance_settings")
@@ -450,7 +456,10 @@ export async function updateAttendanceSettings(
 }
 
 export async function deleteAttendanceSettings(id: number): Promise<void> {
-  const { error } = await supabase.from("attendance_settings").delete().eq("id", id);
+  const { error } = await supabase
+    .from("attendance_settings")
+    .delete()
+    .eq("id", id);
   if (error) throw error;
 }
 
@@ -496,11 +505,16 @@ export async function endLeaveEarly(p_leave_id: number): Promise<unknown> {
 // قراءة طلبات الإجازة — جدول public.leaves
 // ============================================================
 
-export async function getLeaveRequests(filters: {
-  userId?: string;
-  status?: LeaveStatusFull;
-} = {}): Promise<LeaveRequest[]> {
-  let query = supabase.from("leaves").select("*").order("created_at", { ascending: false });
+export async function getLeaveRequests(
+  filters: {
+    userId?: string;
+    status?: LeaveStatusFull;
+  } = {},
+): Promise<LeaveRequest[]> {
+  let query = supabase
+    .from("leaves")
+    .select("*")
+    .order("created_at", { ascending: false });
 
   if (filters.userId) query = query.eq("users_id", filters.userId);
   if (filters.status) query = query.eq("status", filters.status);
@@ -517,7 +531,9 @@ export async function getMyLeaveRequests(): Promise<LeaveRequest[]> {
 }
 
 /** كل طلبات الإجازة (مدير) — ممكن تتفلتر بالحالة */
-export async function getAllLeaveRequests(status?: LeaveStatusFull): Promise<LeaveRequest[]> {
+export async function getAllLeaveRequests(
+  status?: LeaveStatusFull,
+): Promise<LeaveRequest[]> {
   return getLeaveRequests(status ? { status } : {});
 }
 
@@ -528,7 +544,7 @@ export function subscribeToLeaves(onChange: () => void) {
     .on(
       "postgres_changes",
       { event: "*", schema: "public", table: "leaves" },
-      () => onChange()
+      () => onChange(),
     )
     .subscribe();
 
@@ -580,4 +596,188 @@ export async function getMyActiveAttendanceSettings(): Promise<AttendanceSetting
 
   if (error) throw error;
   return data;
+}
+
+// ============================================================
+// Helpers جديدة للـ workaround
+// ============================================================
+
+async function getMyOpenAttendance(): Promise<{
+  attendanceId: number;
+  checkInAt: string;
+} | null> {
+  const userId = await getCurrentUserId();
+  const { data, error } = await supabase
+    .from("attendance")
+    .select("id, check_in_at")
+    .eq("users_id", userId)
+    .eq("attendance_date", todayISODate());
+  if (error) throw error;
+  const latest = pickLatestByCheckIn(
+    (data ?? []) as { id: number; check_in_at: string | null }[],
+  );
+  return latest
+    ? { attendanceId: latest.id, checkInAt: latest.check_in_at! }
+    : null;
+}
+
+// الباك بيرمي كود 42703 لما يحاول يستخدم عمود مش موجود (v_attendance_id) —
+// ده باگ حقيقي جوه دالة SQL، مش حاجة نقدر نصلحها، بس نقدر نلفّ حولها.
+function isBrokenRpcColumnError(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    (err as { code?: string }).code === "42703"
+  );
+}
+
+// الباك بيرمي الرسالة دي لو فيه بريك مفتوح بالفعل — مش إيرور حقيقي بقدر ما هو
+// desync بين حالة الفرونت والداتابيز (عادة بسبب end_break اللي فشل قبل كده
+// وسابت البريك مفتوح).
+function isAlreadyOnBreakError(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    typeof (err as { message?: string }).message === "string" &&
+    (err as { message: string }).message.includes("استراحة قائمة بالفعل")
+  );
+}
+
+async function getOpenBreak(attendanceId: number): Promise<BreakRecord | null> {
+  const { data, error } = await supabase
+    .from("breaks")
+    .select("*")
+    .eq("attendance_id", attendanceId)
+    .is("end_time", null)
+    .order("start_time", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+// ============================================================
+// startBreak — مع sync + fallback
+// ============================================================
+
+export async function startBreak(): Promise<BreakRecord> {
+  try {
+    const { data, error } = await supabase.rpc("start_break");
+    if (error) throw error;
+    return data;
+  } catch (err) {
+    const info = await getMyOpenAttendance();
+    if (!info) throw new Error("لم تقم بتسجيل الحضور اليوم بعد");
+
+    // الحالة الأشيع: فيه بريك مفتوح فعلاً من قبل — منرميش إيرور، منرجّع نفس البريك
+    if (isAlreadyOnBreakError(err)) {
+      const openBreak = await getOpenBreak(info.attendanceId);
+      if (openBreak) return openBreak;
+    }
+
+    // الـ RPC نفسها مكسورة (باگ SQL) — نعمل insert مباشر بدالها
+    if (isBrokenRpcColumnError(err)) {
+      const openBreak = await getOpenBreak(info.attendanceId);
+      if (openBreak) return openBreak;
+
+      const { data: inserted, error: insertErr } = await supabase
+        .from("breaks")
+        .insert({
+          attendance_id: info.attendanceId,
+          start_time: new Date().toISOString(),
+        })
+        .select()
+        .single();
+      if (insertErr) throw insertErr;
+      return inserted;
+    }
+
+    throw err;
+  }
+}
+
+// ============================================================
+// endBreak — مع fallback مباشر لو الـ RPC مكسورة
+// ============================================================
+
+export async function endBreak(): Promise<BreakRecord> {
+  try {
+    const { data, error } = await supabase.rpc("end_break");
+    if (error) throw error;
+    return data;
+  } catch (err) {
+    if (!isBrokenRpcColumnError(err)) throw err;
+
+    const info = await getMyOpenAttendance();
+    if (!info) throw new Error("لم تقم بتسجيل الحضور اليوم بعد");
+
+    const openBreak = await getOpenBreak(info.attendanceId);
+    if (!openBreak) throw new Error("لا توجد استراحة قائمة لإنهائها");
+
+    const endTime = new Date();
+    const startTime = new Date(openBreak.start_time);
+    const breakMins = Math.max(
+      0,
+      Math.round((endTime.getTime() - startTime.getTime()) / 60000),
+    );
+
+    const { data: updated, error: updateErr } = await supabase
+      .from("breaks")
+      .update({ end_time: endTime.toISOString(), break_mins: breakMins })
+      .eq("id", openBreak.id)
+      .select()
+      .single();
+    if (updateErr) throw updateErr;
+    return updated;
+  }
+}
+
+// ============================================================
+// checkOut — مع fallback لو نفس نوع الباگ ظهر معاها
+// ============================================================
+
+export async function checkOut(): Promise<AttendanceRecord> {
+  try {
+    const { data, error } = await supabase.rpc("check_out");
+    if (error) throw error;
+    return data;
+  } catch (err) {
+    if (!isBrokenRpcColumnError(err)) throw err;
+
+    const info = await getMyOpenAttendance();
+    if (!info) throw new Error("لم تقم بتسجيل الحضور اليوم بعد");
+
+    const openBreak = await getOpenBreak(info.attendanceId);
+    if (openBreak) throw new Error("لازم تنهي البريك الأول قبل تسجيل الانصراف");
+
+    const { data: allBreaks, error: breaksErr } = await supabase
+      .from("breaks")
+      .select("break_mins")
+      .eq("attendance_id", info.attendanceId);
+    if (breaksErr) throw breaksErr;
+    const totalBreakMins = (allBreaks ?? []).reduce(
+      (s, b) => s + (b.break_mins ?? 0),
+      0,
+    );
+
+    const checkOutTime = new Date();
+    const workedMins = Math.max(
+      0,
+      Math.round(
+        (checkOutTime.getTime() - new Date(info.checkInAt).getTime()) / 60000,
+      ) - totalBreakMins,
+    );
+
+    const { data: updated, error: updateErr } = await supabase
+      .from("attendance")
+      .update({
+        check_out_at: checkOutTime.toISOString(),
+        total_work_minutes: workedMins,
+      })
+      .eq("id", info.attendanceId)
+      .select()
+      .single();
+    if (updateErr) throw updateErr;
+    return updated;
+  }
 }
