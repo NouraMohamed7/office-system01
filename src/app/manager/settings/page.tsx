@@ -1,23 +1,20 @@
-// src/app/manager/profile/page.tsx
+// src/app/manager/settings/page.tsx
 "use client";
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import Image from "next/image";
-import { Avatar, Card, PageHeader } from "@/components/manager/primitives";
+import { Card, PageHeader } from "@/components/manager/primitives";
 import { cn } from "@/lib/utils";
 import { Loader2, CheckCircle2, AlertCircle } from "lucide-react";
 import {
-  getMyProfile,
   getMyNotifySettings,
   updateMyNotifySettings,
   changeMyPassword,
   signOutEverywhere,
-  type MyProfile,
   type MyNotifySettings,
-} from "@/modules/profile/api/profile.api";
+} from "@/modules/settings/api/settings.api";
 
-const tabs = ["البيانات", "الأمان", "الإشعارات"];
+const tabs = ["الأمان", "الإشعارات"];
 
 const NOTIFY_LABELS: { key: keyof Omit<MyNotifySettings, "id">; label: string }[] = [
   { key: "task_notify", label: "إشعارات المهام" },
@@ -28,12 +25,7 @@ const NOTIFY_LABELS: { key: keyof Omit<MyNotifySettings, "id">; label: string }[
   { key: "system_notify", label: "إشعارات النظام" },
 ];
 
-function formatJoinDate(iso?: string) {
-  if (!iso) return "—";
-  return new Date(iso).toLocaleDateString("ar-EG", { day: "2-digit", month: "2-digit", year: "numeric" });
-}
-
-export default function ProfilePage() {
+export default function SettingsPage() {
   const router = useRouter();
   const [tab, setTab] = useState(0);
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
@@ -50,7 +42,7 @@ export default function ProfilePage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="الملف الشخصي" />
+      <PageHeader title="الإعدادات" />
       <div className="grid gap-6 lg:grid-cols-4">
         <Card className="!p-2 lg:col-span-1">
           {tabs.map((t, i) => (
@@ -68,9 +60,8 @@ export default function ProfilePage() {
         </Card>
 
         <Card className="lg:col-span-3">
-          {tab === 0 && <DataTab notify={notify} />}
-          {tab === 1 && <SecurityTab notify={notify} onSignedOutEverywhere={() => router.push("/login")} />}
-          {tab === 2 && <NotificationsTab notify={notify} />}
+          {tab === 0 && <SecurityTab notify={notify} onSignedOutEverywhere={() => router.push("/login")} />}
+          {tab === 1 && <NotificationsTab notify={notify} />}
         </Card>
       </div>
 
@@ -87,117 +78,6 @@ export default function ProfilePage() {
           {toast.message}
         </div>
       )}
-    </div>
-  );
-}
-
-// ============================================================
-// تبويب البيانات — read-only، جايب من users + department + position + branch + phone
-// ⚠️ مفيش endpoint موثّق للمدير يعدّل بياناته هو نفسه (الاسم/الصورة)،
-// update-user موثّق كتعديل بيانات موظف تاني. لحد ما نتأكد من الباك،
-// السبت فورم "حفظ التغييرات" وخليتها عرض بس.
-// ============================================================
-function DataTab({ notify }: { notify: (m: string, t?: "success" | "error") => void }) {
-  const [profile, setProfile] = useState<MyProfile | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      try {
-        const data = await getMyProfile();
-        if (!cancelled) setProfile(data);
-      } catch (err) {
-        if (!cancelled) notify(err instanceof Error ? err.message : "حصل خطأ في تحميل بياناتك", "error");
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
-    load();
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center gap-2 py-16 text-muted-foreground">
-        <Loader2 className="size-5 animate-spin" /> جاري تحميل بياناتك...
-      </div>
-    );
-  }
-
-  if (!profile) {
-    return <div className="p-6 text-sm text-muted-foreground">مقدرناش نجيب بياناتك، حاول تسجل الدخول تاني</div>;
-  }
-
-  const phones = [
-    { label: "الرقم الشخصي", value: profile.personalPhone },
-    { label: "هاتف العمل — مصر", value: profile.workPhone },
-    { label: "هاتف العمل — السعودية", value: profile.saudiPhone },
-  ].filter((p) => p.value);
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-4">
-        {profile.photo_url ? (
-          <div className="relative size-[72px] shrink-0">
-            <Image
-              src={profile.photo_url}
-              alt={profile.full_name}
-              fill
-              sizes="72px"
-              className="rounded-full object-cover"
-            />
-          </div>
-        ) : (
-          <Avatar name={profile.full_name} size={72} />
-        )}
-        <button
-          disabled
-          title="تعديل الصورة محتاج تأكيد من الباك إند الأول"
-          className="cursor-not-allowed rounded-xl border border-border bg-background px-3 py-1.5 text-xs text-muted-foreground opacity-60"
-        >
-          تغيير الصورة (قريبًا)
-        </button>
-      </div>
-
-      {[
-        ["الاسم", profile.full_name],
-        ["البريد", profile.email],
-        ["الوظيفة", profile.position?.title ?? "—"],
-        ["القسم", profile.department?.name ?? "—"],
-        ["الفرع", [profile.branch?.city, profile.branch?.address].filter(Boolean).join(" — ") || "—"],
-        ["تاريخ الالتحاق", formatJoinDate(profile.created_at)],
-      ].map(([label, value]) => (
-        <label key={label} className="block">
-          <span className="mb-1 block text-xs text-muted-foreground">{label}</span>
-          <input
-            readOnly
-            value={value}
-            className="h-10 w-full cursor-not-allowed rounded-xl border border-border bg-secondary/40 px-3 text-sm text-foreground outline-none"
-          />
-        </label>
-      ))}
-
-      {phones.length > 0 && (
-        <div>
-          <span className="mb-1 block text-xs text-muted-foreground">أرقام التواصل</span>
-          <div className="grid gap-2 sm:grid-cols-3">
-            {phones.map((p) => (
-              <div key={p.label} className="rounded-xl border border-border bg-secondary/40 px-3 py-2">
-                <div className="text-[11px] text-muted-foreground">{p.label}</div>
-                <div className="text-sm font-semibold tabular-nums" dir="ltr">{p.value}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <p className="pt-2 text-[11px] text-muted-foreground">
-        تعديل البيانات دي محتاج endpoint من الباك إند لسه مش موثق — هيتفعل بعد التأكيد.
-      </p>
     </div>
   );
 }
@@ -342,7 +222,6 @@ function NotificationsTab({ notify }: { notify: (m: string, t?: "success" | "err
     const prevValue = settings[key];
     const nextValue = !prevValue;
 
-    // تحديث متفائل (optimistic) بعدين نرجع لو فشل
     setSettings((s) => (s ? { ...s, [key]: nextValue } : s));
     setSavingKey(key);
     try {
