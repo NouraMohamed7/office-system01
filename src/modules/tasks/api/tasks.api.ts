@@ -200,7 +200,7 @@ export async function createMyOwnTask(
 
   if (error) {
     console.error('createMyOwnTask error:', error)
-    throw new Error(data?.error  error.message  'فشل إنشاء المهمة')
+   throw new Error(data?.error || error.message || 'فشل إنشاء المهمة')
   }
 
   return {
