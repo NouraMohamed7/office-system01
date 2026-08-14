@@ -39,23 +39,66 @@ export function formatCountry(country: string | null): { flag: string; name: str
 }
 
 /* ------------------------------------------------------------------ */
-/*  Validation helpers                                                  */
+/*  Validation + Phone normalization                                  */
 /* ------------------------------------------------------------------ */
 
-// أرقام موبايل مصرية: 01 + (0|1|2|5) + 8 أرقام = 11 رقم بالظبط
-const EG_PHONE_REGEX = /^01[0125][0-9]{8}$/;
+// المستخدم يقدر يدخل الرقم المصري بالشكل العادي:
+// 01098765488
+// أو بالشكل الدولي:
+// +201098765488
+//
+// والباك يستقبل دائمًا الشكل الدولي:
+// +201098765488
+
+const EG_LOCAL_PHONE_REGEX = /^01[0125][0-9]{8}$/;
+const EG_INTERNATIONAL_PHONE_REGEX = /^\+20(1[0125][0-9]{8})$/;
+
+export function normalizeEgyptianPhone(phone: string): string {
+  const trimmed = phone.trim().replace(/\s+/g, "");
+
+  // لو بالفعل بصيغة دولية
+  if (EG_INTERNATIONAL_PHONE_REGEX.test(trimmed)) {
+    return trimmed;
+  }
+
+  // لو بصيغة مصرية محلية
+  if (EG_LOCAL_PHONE_REGEX.test(trimmed)) {
+    return `+20${trimmed.slice(1)}`;
+  }
+
+  // نرجع القيمة كما هي علشان الـ validation هو اللي يطلع الرسالة
+  return trimmed;
+}
 
 export function validatePhone(phone: string): string | null {
-  const trimmed = phone.trim();
-  if (!trimmed) return "رقم الهاتف مطلوب";
-  if (!EG_PHONE_REGEX.test(trimmed)) return "رقم الهاتف لازم يكون رقم مصري صحيح (01xxxxxxxxx)";
+  const trimmed = phone.trim().replace(/\s+/g, "");
+
+  if (!trimmed) {
+    return "رقم الهاتف مطلوب";
+  }
+
+  const normalized = normalizeEgyptianPhone(trimmed);
+
+  if (!EG_INTERNATIONAL_PHONE_REGEX.test(normalized)) {
+    return "رقم الهاتف لازم يكون رقم مصري صحيح مثل 01098765488";
+  }
+
   return null;
 }
 
 export function validateOptionalPhone(phone: string): string | null {
-  const trimmed = phone.trim();
-  if (!trimmed) return null; // اختياري
-  if (!EG_PHONE_REGEX.test(trimmed)) return "رقم الهاتف لازم يكون رقم مصري صحيح (01xxxxxxxxx)";
+  const trimmed = phone.trim().replace(/\s+/g, "");
+
+  if (!trimmed) {
+    return null;
+  }
+
+  const normalized = normalizeEgyptianPhone(trimmed);
+
+  if (!EG_INTERNATIONAL_PHONE_REGEX.test(normalized)) {
+    return "رقم الهاتف لازم يكون رقم مصري صحيح مثل 01098765488";
+  }
+
   return null;
 }
 
@@ -133,17 +176,48 @@ export type RepresentativeInput = {
 
 function buildRepFormData(input: RepresentativeInput): FormData {
   const fd = new FormData();
-  if (input.full_name !== undefined) fd.append("full_name", input.full_name);
-  if (input.supervisor_id !== undefined) fd.append("supervisor_id", input.supervisor_id);
-  if (input.has_motorcycle !== undefined) fd.append("has_motorcycle", String(input.has_motorcycle));
-  // نفس اسم الحقل "phone_numbers" بيتكرر لكل رقم — مطابق للدوك
-  if (input.phone1) fd.append("phone_numbers", input.phone1);
-  if (input.phone2) fd.append("phone_numbers", input.phone2);
-  if (input.profileImg) fd.append("profile_img", input.profileImg);
-  if (input.identityFront) fd.append("identity_front", input.identityFront);
-  if (input.identityBack) fd.append("identity_back", input.identityBack);
-  if (input.licenseFront) fd.append("license_front", input.licenseFront);
-  if (input.licenseBack) fd.append("license_back", input.licenseBack);
+
+  if (input.full_name !== undefined) {
+    fd.append("full_name", input.full_name);
+  }
+
+  if (input.supervisor_id !== undefined) {
+    fd.append("supervisor_id", input.supervisor_id);
+  }
+
+  if (input.has_motorcycle !== undefined) {
+    fd.append("has_motorcycle", String(input.has_motorcycle));
+  }
+
+  // تحويل أرقام الموبايل تلقائيًا للصيغة الدولية قبل إرسالها للباك
+  if (input.phone1?.trim()) {
+    fd.append("phone_numbers", normalizeEgyptianPhone(input.phone1));
+  }
+
+  if (input.phone2?.trim()) {
+    fd.append("phone_numbers", normalizeEgyptianPhone(input.phone2));
+  }
+
+  if (input.profileImg) {
+    fd.append("profile_img", input.profileImg);
+  }
+
+  if (input.identityFront) {
+    fd.append("identity_front", input.identityFront);
+  }
+
+  if (input.identityBack) {
+    fd.append("identity_back", input.identityBack);
+  }
+
+  if (input.licenseFront) {
+    fd.append("license_front", input.licenseFront);
+  }
+
+  if (input.licenseBack) {
+    fd.append("license_back", input.licenseBack);
+  }
+
   return fd;
 }
 
