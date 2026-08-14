@@ -257,7 +257,7 @@ export async function updateRepresentative(input: RepresentativeUpdateInput): Pr
 
 export async function deleteRepresentative(repId: number): Promise<void> {
   const { data, error } = await supabase.functions.invoke<{ message?: string; error?: string }>(
-    "delete-representative",
+    "delete_representative",
     { body: { rep_id: repId } }
   );
   if (error) throw error;
