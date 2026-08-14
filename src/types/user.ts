@@ -63,10 +63,6 @@ export type PhoneRecord = {
   updated_at?: string;
 };
 
-/**
- * Base user/employee record (partial fields).
- * Database source: public.users
- */
 export type UserRecord = {
   id: string;
   name?: string;
@@ -77,6 +73,7 @@ export type UserRecord = {
   branch_id?: number;
   photo_url?: string | null;
   created_at?: string;
+  updated_at?: string;
 };
 
 /**
