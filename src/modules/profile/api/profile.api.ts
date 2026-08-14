@@ -99,12 +99,10 @@ export async function getMyProfile(): Promise<MyProfile | null> {
   }
 }
 
-// ---------------- تعديل البروفايل (الاسم + الصورة) ----------------
-
 // ⚠️ update-user موثّق كـ "manager only" وبيتعدل بيه بيانات موظف تاني بالـ user_id.
-// هنا بنستخدمه على user_id الخاص بالمدير نفسه (المفروض يشتغل لأنه manager فعلاً)،
-// لكن لازم تتأكد مع الباك إن مفيش قيد بيمنع المدير من تعديل بياناته هو (زي قيد
-// "لا يمكنك حذف حسابك الخاص" الموجود في delete-user، ممكن يبقى فيه حاجة شبهها هنا).
+// هنا بنستخدمه على user_id الخاص بالمدير نفسه.
+// ⚠️ الـ Edge Function دي بتتطلب multipart/form-data دايمًا (حتى من غير صورة)،
+// فمينفعش نبعت JSON عادي — لازم FormData في كل الحالات.
 export async function updateMyProfile(patch: {
   name?: string
   photo?: File | null
@@ -119,22 +117,14 @@ export async function updateMyProfile(patch: {
     throw new Error('مفيش تعديلات لحفظها')
   }
 
-  let body: FormData | Record<string, unknown>
+  const formData = new FormData()
+  formData.append('user_id', authUser.id)
+  if (patch.name) formData.append('name', patch.name)
+  if (patch.photo) formData.append('photo', patch.photo)
 
-  if (patch.photo) {
-    const formData = new FormData()
-    formData.append('user_id', authUser.id)
-    if (patch.name) formData.append('name', patch.name)
-    formData.append('photo', patch.photo)
-    body = formData
-  } else {
-    body = {
-      user_id: authUser.id,
-      name: patch.name,
-    }
-  }
-
-  const { data, error } = await supabase.functions.invoke('update-user', { body })
+  const { data, error } = await supabase.functions.invoke('update-user', {
+    body: formData,
+  })
   if (error) throw error
   if (data?.error) throw new Error(data.error)
 
