@@ -1,10 +1,11 @@
 "use client";
 
 import { PortalLayout, Card, StatusPill } from "@/components/portal-layout";
+import { TaskFilesSection } from "@/components/task-files-section";
 import { useToast } from "@/components/toast";
 import {
   Calendar, Circle, PlayCircle, CheckCircle2, AlertTriangle,
-  UserRound, LayoutGrid, List, Loader2, Plus, X, Zap, Info,
+  UserRound, LayoutGrid, List, Loader2, Plus, X, Zap,
 } from "lucide-react";
 import { useEffect, useMemo, useState, useCallback } from "react";
 import {
@@ -483,6 +484,7 @@ function TaskDrawer({
   useEffect(() => {
     let active = true;
     setCommentsLoading(true);
+    
     getTaskComments(task.id).then((rows) => { if (active) setComments(rows); }).catch(() => {}).finally(() => { if (active) setCommentsLoading(false); });
     return () => { active = false; };
   }, [task.id]);
@@ -554,16 +556,8 @@ function TaskDrawer({
                 <div className="text-xs text-muted-foreground mt-1">{task.completion_percent}%</div>
               </div>
             )}
-            <div>
-              <div className="text-xs font-semibold text-muted-foreground mb-2">المرفقات</div>
-              {/* ⚠️ ISSUE 9 — backend gap: مفيش endpoint حاليًا لقراءة ملفات مهمة
-                  موجودة بالفعل، الملفات بترجع وقت الإنشاء بس. راجع getTaskFiles
-                  في tasks.api.ts */}
-              <p className="text-xs text-muted-foreground flex items-start gap-1.5">
-                <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-                عرض مرفقات المهمة مش متاح حاليًا — محتاج endpoint من الباك لقراءة الملفات المرتبطة بالمهمة بعد إنشائها.
-              </p>
-            </div>
+            {/* 🔧 FIX (Issue 9): مرفقات حقيقية بدل رسالة "غير متاح" */}
+            <TaskFilesSection taskId={task.id} />
           </section>
 
           <div className="border-t border-dashed border-border" />
@@ -572,7 +566,7 @@ function TaskDrawer({
             <section className="space-y-3">
               <div className="text-xs font-bold text-foreground">حالتك في المهمة</div>
               <p className="text-xs text-muted-foreground -mt-1">
-                حدّث حالتك كل ما تتقدم في الشغل، المدير بيشوفها لحظة بلحظة. حالة "متأخرة" بتتحدد تلقائيًا لو المهمة فاتت موعدها، مش من الموظف.
+                حدّث حالتك كل ما تتقدم في الشغل، المدير بيشوفها لحظة بلحظة. حالة متأخرة بتتحدد تلقائيًا لو المهمة فاتت موعدها، مش من الموظف.
               </p>
               <StatusToggle status={task.status} onChange={onStatusChange} />
             </section>

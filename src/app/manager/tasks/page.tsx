@@ -2,8 +2,9 @@
 
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { Avatar, Card, PageHeader, Pill, StatCard } from "@/components/manager/primitives";
+import { TaskFilesSection } from "@/components/task-files-section";
 import { useToast } from "@/components/toast";
-import { Plus, X, Trash2, Calendar, Check, Loader2, Upload, Zap, Info } from "lucide-react";
+import { Plus, X, Trash2, Calendar, Check, Loader2, Upload, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   getAllTasks, getUsersList, getDepartments, createTaskForMultipleAssignees, deleteTask,
@@ -630,21 +631,15 @@ function TaskDetailsModal({
             <span>{departmentName}</span>
           </div>
 
-          {/* ⚠️ ISSUE 9 — backend gap: نفس الملحوظة في صفحة الموظف */}
-          <div>
-            <span className="mb-1.5 block text-xs text-muted-foreground">المرفقات</span>
-            <p className="text-xs text-muted-foreground flex items-start gap-1.5">
-              <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-              عرض مرفقات المهمة مش متاح حاليًا — محتاج endpoint من الباك لقراءة الملفات المرتبطة بالمهمة بعد إنشائها.
-            </p>
-          </div>
+          {/* 🔧 FIX (Issue 9): مرفقات حقيقية بدل رسالة "غير متاح" */}
+          <TaskFilesSection taskId={task.id} />
 
           <div>
             <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">نقل المهمة إلى</label>
             <select value={task.status} onChange={(e) => onMove(e.target.value as TaskStatus)} className="h-10 w-full rounded-xl border border-border bg-background px-3 text-sm outline-none focus:border-primary/50">
               {columns.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
             </select>
-            <p className="mt-1 text-[11px] text-muted-foreground">"متأخرة" بتتحدد تلقائيًا حسب الموعد، بس تقدر تغيّرها يدويًا هنا لو محتاج.</p>
+            <p className="mt-1 text-[11px] text-muted-foreground">متأخرة  بتتحدد تلقائيًا حسب الموعد، بس تقدر تغيّرها يدويًا هنا لو محتاج.</p>
           </div>
 
           {/* 🔧 FIX (Issue 2): سكشن التعليقات كان مش موجود خالص عند المدير */}
