@@ -68,7 +68,7 @@ export async function createLibraryItem(
   if (payload.link) formData.append("link", payload.link);
   if (payload.file) formData.append("file", payload.file);
 
-  const { data, error } = await supabase.functions.invoke("create-library", {
+  const { data, error } = await supabase.functions.invoke("create_library", {
     body: formData,
   });
 
