@@ -7,7 +7,7 @@ import { useToast } from "@/components/toast";
 import {
   Users, UserCheck, Clock, UserX, Palmtree, ClipboardX,
   Download, Loader2, Eye,
-  Settings, Save, CheckCircle2, XCircle, Ban,
+  Settings, Save, CheckCircle2, XCircle, Ban, Trash2,
 } from "lucide-react";
 import {
   getAttendanceToday,
@@ -18,6 +18,7 @@ import {
   getAttendanceSettings,
   createAttendanceSettings,
   updateAttendanceSettings,
+  deleteAttendanceSettings,
   type AttendanceTodayRow,
   type AttendanceSettings,
   type BreakRecord,
@@ -249,6 +250,8 @@ export default function AttendancePage() {
   const [settingsForm, setSettingsForm] = useState<SettingsForm>(EMPTY_SETTINGS_FORM);
   const [editingSettingsId, setEditingSettingsId] = useState<number | null>(null);
   const [savingSettings, setSavingSettings] = useState(false);
+  // ✅ جديد: تتبّع أي إعداد بيتحذف دلوقتي عشان نعطّل زراره بس وقت الحذف
+  const [deletingSettingsId, setDeletingSettingsId] = useState<number | null>(null);
 
   // ---- الفروع ----
   const [branches, setBranches] = useState<Branch[]>([]);
@@ -469,6 +472,35 @@ export default function AttendancePage() {
       showToast("error", err instanceof Error ? err.message : "تعذر حفظ إعدادات الحضور");
     } finally {
       setSavingSettings(false);
+    }
+  }
+
+  // ✅ جديد: حذف إعداد حضور — كان الـ API function موجودة (deleteAttendanceSettings)
+  // بس مش متستخدمة في الـ UI خالص، مفيش أي زرار حذف لإعداد قديم/غلط.
+  // بيسأل تأكيد الأول (نفس نمط handleDeleteEmployee في صفحة الموظفين)،
+  // وبيمنع الحذف لو الإعداد ده هو نفسه اللي بيتعدّل دلوقتي في الفورم.
+  async function handleDeleteSettings(s: AttendanceSettings) {
+    const b = branchMap.get(s.branch_id);
+    const label = b ? branchLabel(b) : `فرع #${s.branch_id}`;
+
+    const confirmed = window.confirm(
+      `متأكد إنك عايز تحذف إعداد الحضور ده؟\n\n${label} — من ${s.effective_from}${s.effective_to ? ` إلى ${s.effective_to}` : " (مفتوح)"}\n\nالإجراء ده لا يمكن التراجع عنه.`
+    );
+    if (!confirmed) return;
+
+    setDeletingSettingsId(s.id);
+    try {
+      await deleteAttendanceSettings(s.id);
+      setSettingsList((list) => list.filter((x) => x.id !== s.id));
+      // لو كان الإعداد ده هو نفسه المفتوح للتعديل دلوقتي، نرجّع الفورم فاضي
+      if (editingSettingsId === s.id) {
+        startNewSettings();
+      }
+      showToast("success", "تم حذف إعداد الحضور");
+    } catch (err) {
+      showToast("error", err instanceof Error ? err.message : "تعذر حذف إعداد الحضور");
+    } finally {
+      setDeletingSettingsId(null);
     }
   }
 
@@ -741,9 +773,10 @@ export default function AttendancePage() {
                     <p className="text-xs font-semibold text-muted-foreground">الإعدادات الحالية</p>
                     {settingsList.map((s) => {
                       const b = branchMap.get(s.branch_id);
+                      const isDeleting = deletingSettingsId === s.id;
                       return (
-                        <div key={s.id} className="flex items-center justify-between rounded-xl border border-border p-3 text-sm">
-                          <div>
+                        <div key={s.id} className="flex items-center justify-between gap-2 rounded-xl border border-border p-3 text-sm">
+                          <div className="min-w-0 flex-1">
                             <div className="font-semibold">
                               {b ? branchLabel(b) : `فرع #${s.branch_id}`} — من {s.effective_from} {s.effective_to ? `إلى ${s.effective_to}` : "(مفتوح)"}
                             </div>
@@ -751,12 +784,25 @@ export default function AttendancePage() {
                               {s.start_time.slice(0, 5)} - {s.end_time.slice(0, 5)} | مهلة تأخير {s.late_tolerance_minutes} د | cutoff {s.cutoff_time.slice(0, 5)}
                             </div>
                           </div>
-                          <button
-                            onClick={() => startEditSettings(s)}
-                            className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold hover:bg-accent"
-                          >
-                            تعديل
-                          </button>
+                          {/* ✅ جديد: زرار الحذف — كانت الدالة موجودة في الـ API
+                              بس مالهاش أي استخدام في الواجهة خالص */}
+                          <div className="flex shrink-0 items-center gap-2">
+                            <button
+                              onClick={() => startEditSettings(s)}
+                              disabled={isDeleting}
+                              className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold hover:bg-accent disabled:opacity-50"
+                            >
+                              تعديل
+                            </button>
+                            <button
+                              onClick={() => handleDeleteSettings(s)}
+                              disabled={isDeleting}
+                              className="grid size-8 place-items-center rounded-lg border border-border text-destructive hover:bg-destructive/10 disabled:opacity-50"
+                              title="حذف"
+                            >
+                              {isDeleting ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
+                            </button>
+                          </div>
                         </div>
                       );
                     })}

@@ -6,13 +6,19 @@ import { supabase } from "@/lib/supabase/client";
 // ==========================================================
 
 /**
- * قبل ما يتم مراجعة التقرير من المدير. افترضت "pending" هنا.
+ * ✅ الفيكس: "unsent" كانت ناقصة من النوع ده تمامًا رغم إنها قيمة enum
+ * حقيقية ومؤكدة من الباك (public.report_type: pending, accepted, rejected,
+ * edit_requested, unsent). ده كان يعني إن أي تقرير برجع بالحالة دي من
+ * daily_reports (خصوصًا الصفوف اللي بيحطها الكرون اليومي لما موظف ميبعتش
+ * تقرير) كان بيدوّر على STATUS_LABELS["unsent"]/STATUS_TONE["unsent"]
+ * ويلاقيهم undefined — يعني الحالة كانت بتختفي من الجدول بصمت (Issue 2).
  */
 export type ReportBackendStatus =
   | "pending"
   | "accepted"
   | "rejected"
-  | "edit_requested";
+  | "edit_requested"
+  | "unsent";
 
 export interface DailyReportToday {
   users_id: string;
@@ -55,6 +61,17 @@ export interface ReviewDailyReportPayload {
   comment?: string;
 }
 
+/** تعليق/ملاحظة على تقرير يومي — من جدول comments بـ type = 'daily_reports' */
+export interface ReportComment {
+  id: number;
+  created_at: string;
+  updated_at: string;
+  attachable_id: number;
+  sender_id: string;
+  body: string;
+  type: string;
+}
+
 // ==========================================================
 // Status mapping (مصدر وحيد للحقيقة يستخدمه بورتال المدير والموظف)
 // ==========================================================
@@ -64,21 +81,45 @@ export const STATUS_LABELS: Record<ReportBackendStatus, string> = {
   accepted: "معتمد",
   rejected: "مرفوض",
   edit_requested: "تحتاج مراجعة",
+  unsent: "لم يُرسل",
 };
 
-export const STATUS_TONE: Record<
-  ReportBackendStatus,
+export const STATUS_TONE: Record < ReportBackendStatus,
   "success" | "warning" | "danger" | "muted"
 > = {
   pending: "muted",
   accepted: "success",
   rejected: "danger",
   edit_requested: "warning",
+  unsent: "danger",
 };
 
 // ==========================================================
 // Employee side
 // ==========================================================
+
+/**
+ * ✅ الفيكس (Issue 1): الصفحة كانت بتلف أي خطأ من الـ RPC برسالة عامة ثابتة
+ * "حاول تاني" حتى لو الموظف بعت تقرير اليوم ده بالفعل (duplicate submission —
+ * على الأغلب unique constraint على users_id + report_date في الباك).
+ * الدالة دي بتفحص شكل الخطأ القادم من Postgres/الـ RPC وتترجمه لرسالة
+ * مفهومة ("قد تم التسليم") لو كانت المشكلة تكرار الإرسال تحديدًا،
+ * وترجع رسالة الباك الحقيقية (أو fallback عام) في أي حالة تانية.
+ */
+export function getSubmitDailyReportErrorMessage(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err ?? "");
+  const code = (err as { code?: string })?.code;
+
+  const isDuplicate =
+    code === "23505" ||
+    /duplicate key|unique constraint|already (exists|submitted)|مسبق|تم تسليم/i.test(message);
+
+  if (isDuplicate) {
+    return "قد تم التسليم — تقرير اليوم ده اتبعت بالفعل";
+  }
+
+  return message || "حصل خطأ أثناء إرسال التقرير، حاول تاني";
+}
 
 /** الموظف بيبعت تقرير اليوم */
 export async function submitDailyReport(payload: SubmitDailyReportPayload) {
@@ -167,7 +208,7 @@ export async function reviewDailyReport(payload: ReviewDailyReportPayload) {
 // Realtime
 // ==========================================================
 
-/** اشتراك لايف على أي تغيير في جدول daily_reports (يفيد بورتال المدير) */
+/** اشتراك لايف على أي تغيير في جدول daily_reports (يفيد بورتال المدير والموظف) */
 export function subscribeToDailyReports(onChange: () => void) {
   const channel = supabase
     .channel("daily-reports-changes")
@@ -186,20 +227,43 @@ export function subscribeToDailyReports(onChange: () => void) {
 // ==========================================================
 // Comments (ملاحظة المدير على التقرير)
 // ==========================================================
-// TODO: الدوكيومنتيشن معرفتش نوع (comment_type) اللي بيتحفظ بيه تعليق
-// المراجعة على daily_reports. لما تتأكدي من القيمة (مثلاً "daily_report")
-// فعّلي سطر eq("type", ...) تحت.
 
-export async function getReportComments(reportId: number) {
+/** نوع التعليق في جدول comments الخاص بتقارير اليوم — مؤكد من enum comment_type */
+const COMMENT_TYPE_FOR_REPORT = "daily_reports";
+
+/**
+ * ✅ الفيكس (Issue 6): كان فيه TODO بيقول إن نوع التعليق (comment_type)
+ * غير مؤكد فقفلنا الفلترة. اتأكدت القيمة فعليًا من enum comment_type في
+ * الباك (tasks, files_approval, daily_reports, rep_works) — فبنفلتر بيها
+ * دلوقتي عشان منجيبش تعليقات مهام أو ملفات تانية بالغلط لو attachable_id
+ * اتصادف نفس الرقم في جدول تاني.
+ */
+export async function getReportComments(reportId: number): Promise<ReportComment[]> {
   const { data, error } = await supabase
     .from("comments")
     .select("*")
     .eq("attachable_id", reportId)
-    // .eq("type", "daily_report")
-    .order("created_at", { ascending: false });
+    .eq("type", COMMENT_TYPE_FOR_REPORT)
+    .order("created_at", { ascending: true });
   if (error) throw error;
   return data ?? [];
 }
+
+/** اشتراك لايف على تعليقات تقرير معيّن */
+export function subscribeToReportComments(reportId: number, onChange: () => void) {
+  const channel = supabase
+    .channel(`report-comments-${reportId}`)
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "comments", filter: `attachable_id=eq.${reportId}` },
+      onChange
+    )
+    .subscribe();
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}
+
 // ==========================================================
 // Helpers: ربط اسم الموظف بالتقارير التاريخية
 // daily_reports (التاريخي) معندهوش عمود name زي daily_reports_today،
@@ -215,6 +279,7 @@ type UserNameRow = {
   name: string | null;
 };
 
+/** خريطة id -> اسم — مستخدمة لعرض أسماء الموظفين (المدير) وأسماء المعلّقين (الموظف) */
 export async function getUsersNameMap(): Promise<Record<string, string>> {
   const { data, error } = await supabase.from("users_with_email").select("id,name");
   if (error) throw error;

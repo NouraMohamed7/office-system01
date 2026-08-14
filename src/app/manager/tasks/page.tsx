@@ -516,6 +516,7 @@ export default function TasksPage() {
         <TaskDetailsModal
           task={activeTask}
           assignee={usersById[activeTask.assigned_to]}
+          usersById={usersById}
           departmentName={departmentsById[activeTask.department_id] ?? "—"}
           onClose={() => setActiveTask(null)}
           onMove={(status) => moveTask(activeTask.id, status)}
@@ -530,12 +531,19 @@ export default function TasksPage() {
  * 🔧 FIX (Issue 2 & 8): مودال تفاصيل المهمة عند المدير كان من غير أي تعليقات
  * ولا start_date ولا نسبة إنجاز. اتفصل هنا كـ component مستقل عشان يقدر
  * يدير state التعليقات بتاعته (تحميل + إرسال + realtime) لوحده.
+ *
+ * 🔧 FIX (usersById_placeholder): كان بيعرض اسم أي حد معلّق غير الـ assignee
+ * كـ "مستخدم" ثابت، لإن المودال مكانش مستقبِل خريطة المستخدمين كاملة.
+ * دلوقتي بياخد usersById كامل ويعرض الاسم الحقيقي لأي معلّق (المدير نفسه،
+ * موظف تاني، أيًا كان)، ولو حد اتمسح من النظام أو مش موجود في الخريطة
+ * لأي سبب، بيرجع "مستخدم غير معروف" بدل ما يوهم إنه فاهم مين هو.
  */
 function TaskDetailsModal({
-  task, assignee, departmentName, onClose, onMove, onDelete,
+  task, assignee, usersById, departmentName, onClose, onMove, onDelete,
 }: {
   task: TaskRow;
   assignee?: UserLite;
+  usersById: Record<string, UserLite>;
   departmentName: string;
   onClose: () => void;
   onMove: (status: TaskStatus) => void;
@@ -569,6 +577,12 @@ function TaskDetailsModal({
       showToast("error", err instanceof Error ? err.message : "تعذر إرسال التعليق");
     }
   };
+
+  // 🔧 FIX: الاسم الحقيقي من usersById بدل الـ placeholder الثابت اللي كان
+  // بيرجّع "مستخدم" لأي حد غير الـ assignee — دلوقتي أي معلّق (مدير تاني،
+  // موظف، أيًا كان) بيظهر باسمه الحقيقي من الخريطة الكاملة.
+  const senderName = (id: string) => usersById[id]?.name ?? "مستخدم غير معروف";
+  const senderInitial = (id: string) => (usersById[id]?.name ?? "؟").trim().charAt(0) || "؟";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/30 p-4 animate-in fade-in duration-150" onClick={onClose}>
@@ -640,12 +654,17 @@ function TaskDetailsModal({
               {commentsLoading && <p className="text-xs text-muted-foreground">جاري تحميل التعليقات...</p>}
               {!commentsLoading && comments.length === 0 && <p className="text-xs text-muted-foreground">لا توجد تعليقات بعد.</p>}
               {comments.map((c) => (
-                <div key={c.id} className="rounded-xl bg-secondary/60 p-2.5">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs font-semibold">{usersById_placeholder(c.sender_id, assignee)}</span>
-                    <span className="text-[10px] text-muted-foreground">{new Date(c.created_at).toLocaleString("ar-EG")}</span>
+                <div key={c.id} className="flex gap-2.5 rounded-xl bg-secondary/60 p-2.5">
+                  <div className="h-7 w-7 shrink-0 rounded-full bg-teal text-teal-foreground grid place-items-center text-[11px] font-bold">
+                    {senderInitial(c.sender_id)}
                   </div>
-                  <div className="text-xs">{c.body}</div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs font-semibold">{senderName(c.sender_id)}</span>
+                      <span className="text-[10px] text-muted-foreground">{new Date(c.created_at).toLocaleString("ar-EG")}</span>
+                    </div>
+                    <div className="text-xs">{c.body}</div>
+                  </div>
                 </div>
               ))}
             </div>
@@ -671,15 +690,4 @@ function TaskDetailsModal({
       </div>
     </div>
   );
-}
-
-/**
- * ⚠️ الاسم مؤقت — لسه ملناش usersMap كامل جوه المودال ده (المكوّن مستقل
- * ومش مستقبِل usersById كله، بس الـ assignee). لو عايز اسم المُعلّق الحقيقي
- * لأي شخص غير assignee (مثلاً مدير تاني)، مرّر usersById كـ prop للمودال
- * بدل الاعتماد على السطر ده.
- */
-function usersById_placeholder(senderId: string, assignee?: UserLite): string {
-  if (assignee && assignee.id === senderId) return assignee.name;
-  return "مستخدم";
 }
