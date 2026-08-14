@@ -191,45 +191,21 @@ export async function createTask(
 export async function createMyOwnTask(
   payload: Omit<CreateTaskPayload, "assigned_to" | "department_id">
 ): Promise<{ message: string; task: TaskRow; files: TaskFile[] }> {
-  const userId = await getCurrentUserId();
+  const { data, error } = await supabase.rpc("create_my_own_task", {
+    p_title: payload.title,
+    p_description: payload.description ?? null,
+    p_start_date: payload.start_date,
+    p_end_date: payload.end_date || payload.start_date,
+    p_priority: payload.priority ?? "medium",
+  });
 
-  const { data: me, error: meError } = await supabase
-    .from("users_with_email")
-    .select("department_id")
-    .eq("id", userId)
-    .maybeSingle();
-  if (meError) throw meError;
+  if (error) throw error;
 
-  const departmentId = (me as any)?.department_id;
-  if (!departmentId) {
-    throw new Error("تعذر تحديد قسمك — تواصل مع المدير لضبط بيانات حسابك أولًا");
-  }
-
-  const { data, error } = await supabase
-    .from("tasks")
-    .insert({
-      title: payload.title,
-      description: payload.description ?? null,
-      assigned_to: userId,
-      department_id: departmentId,
-      start_date: payload.start_date,
-      end_date: payload.end_date || payload.start_date, // NOT NULL في الداتابيز
-      priority: payload.priority ?? "medium",
-      status: "pending",
-    })
-    .select()
-    .single();
-
-  if (error) {
-    // 🔧 FIX (Issue 7): رسالة مفهومة بدل خطأ Postgres الخام لو المشكلة صلاحيات RLS
-    if (error.code === "42501" || /row-level security|permission denied/i.test(error.message)) {
-      throw new Error(
-        "مش مسموح لك تضيف مهمة لنفسك دلوقتي — الصلاحية دي لازم تتفعّل من الباك (RLS policy)، مينفعش تتحل من الفرونت."
-      );
-    }
-    throw error;
-  }
-  return { message: "تم إضافة المهمة بنجاح", task: data as TaskRow, files: [] };
+  return {
+    message: "تم إضافة المهمة بنجاح",
+    task: data as TaskRow,
+    files: [],
+  };
 }
 
 /**
