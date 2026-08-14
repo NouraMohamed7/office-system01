@@ -31,18 +31,12 @@ type UsersWithEmailRow = {
   email: string | null;
 };
 
-// شكل الصف اللي بيرجع من users مع الـ embeds
-// ⚠️ الصيغة الصح للـ embed في PostgREST: alias:الجدول_المرتبط(الأعمدة)
-// مش alias:اسم_عمود_الـ_FK(الأعمدة) — كانت غلط قبل كده وده اللي كان بيخلي
-// department_name / position_title / branch_city دايمًا null
-type ExtraProfileRow = {
+// شكل الصف الأساسي من users (من غير أي embed، بس الـ FK ids)
+type BasicProfileRow = {
   department_id: number | null;
   position_id: number | null;
   branch_id: number | null;
   role_id: number | null;
-  department: { name: string } | null;
-  position: { title: string } | null;
-  branch: { city: string; country: string } | null;
 };
 
 export function useCurrentUser() {
@@ -79,30 +73,40 @@ export function useCurrentUser() {
 
     const profileRow = profile as UsersWithEmailRow | null;
 
-    // القسم/الوظيفة/الفرع — عبر جدول users مع embed للجداول المرتبطة فعليًا
-    // (department / position / branch)، مش عبر أعمدة الـ FK نفسها
-    const { data: extra, error: extraError } = await supabase
+    // الـ FK ids الأساسية بس (من غير embed) — أبسط query وأقل عرضة للفشل
+    const { data: basic, error: basicError } = await supabase
       .from("users")
-      .select(
-        `
-        department_id,
-        position_id,
-        branch_id,
-        role_id,
-        department:department ( name ),
-        position:position ( title ),
-        branch:branch ( city, country )
-      `
-      )
+      .select("department_id, position_id, branch_id, role_id")
       .eq("id", uid)
       .maybeSingle();
 
-    if (extraError) {
-      console.error("useCurrentUser: extra profile fetch failed", extraError);
+    if (basicError) {
+      console.error("useCurrentUser: basic profile fetch failed", basicError);
     }
 
-    const extraRow = extra as ExtraProfileRow | null;
-    const roleId = profileRow?.role_id ?? extraRow?.role_id ?? null;
+    const basicRow = basic as BasicProfileRow | null;
+
+    // ⚠️ بدل الـ embed، هنجيب department / position / branch بـ query مباشر
+    // منفصل لكل واحد على حسب الـ id بتاعه. ده أبسط وأضمن من الـ nested
+    // select، وبيتجنب أي مشاكل ممكنة في تفسير العلاقات (relationship
+    // ambiguity) أو صيغة الـ embed جوه PostgREST.
+    const [deptRes, posRes, branchRes] = await Promise.all([
+      basicRow?.department_id
+        ? supabase.from("department").select("name").eq("id", basicRow.department_id).maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
+      basicRow?.position_id
+        ? supabase.from("position").select("title").eq("id", basicRow.position_id).maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
+      basicRow?.branch_id
+        ? supabase.from("branch").select("city, country").eq("id", basicRow.branch_id).maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
+    ]);
+
+    if (deptRes.error) console.error("useCurrentUser: department fetch failed", deptRes.error);
+    if (posRes.error) console.error("useCurrentUser: position fetch failed", posRes.error);
+    if (branchRes.error) console.error("useCurrentUser: branch fetch failed", branchRes.error);
+
+    const roleId = profileRow?.role_id ?? basicRow?.role_id ?? null;
 
     setUser({
       id: uid,
@@ -111,20 +115,21 @@ export function useCurrentUser() {
       photo_url: profileRow?.photo_url ?? null,
       role_id: roleId,
       emp_status: profileRow?.emp_status ?? null,
-      department_id: extraRow?.department_id ?? null,
-      department_name: extraRow?.department?.name ?? null,
-      position_id: extraRow?.position_id ?? null,
-      position_title: extraRow?.position?.title ?? null,
-      branch_id: extraRow?.branch_id ?? null,
-      branch_city: extraRow?.branch?.city ?? null,
-      branch_country: extraRow?.branch?.country ?? null,
+      department_id: basicRow?.department_id ?? null,
+      department_name: (deptRes.data as { name: string } | null)?.name ?? null,
+      position_id: basicRow?.position_id ?? null,
+      position_title: (posRes.data as { title: string } | null)?.title ?? null,
+      branch_id: basicRow?.branch_id ?? null,
+      branch_city: (branchRes.data as { city: string; country: string } | null)?.city ?? null,
+      branch_country: (branchRes.data as { city: string; country: string } | null)?.country ?? null,
       is_manager: roleId === ROLE_ID.MANAGER,
     });
 
     setLoading(false);
   }, []);
 
-  useEffect(() => {
+ useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount قياسي، آمن هنا
     load();
   }, [load]);
 

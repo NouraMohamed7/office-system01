@@ -2,15 +2,16 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useState, type ReactNode } from "react";
 import {
   LayoutDashboard, Clock, ListTodo, FileText, Briefcase, Users,
   Upload, LifeBuoy, BookOpen, Trophy, User, Search, ChevronRight,
-  ChevronsRight, Menu, X, Gift,
+  ChevronsRight, Menu, X, Gift, LogOut, Loader2,
 } from "lucide-react";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { NotificationsBell } from "@/components/notifications-bell";
+import { supabase } from "@/lib/supabase/client";
 
 type NavItem = { to: string; ar: string; en: string; icon: React.ComponentType<{ className?: string }> };
 
@@ -38,13 +39,27 @@ function getInitials(name: string | null | undefined) {
 
 export function PortalLayout({ children, title, subtitle }: { children: ReactNode; title: string; subtitle?: string }) {
   const pathname = usePathname();
+  const router = useRouter();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
   const { user } = useCurrentUser();
 
   const displayName = user?.name || "...";
   const initials = getInitials(user?.name);
   const roleLine = [user?.department_name, user?.position_title].filter(Boolean).join(" · ") || "—";
+
+  async function handleLogout() {
+    if (loggingOut) return;
+    setLoggingOut(true);
+    try {
+      await supabase.auth.signOut();
+    } catch (err) {
+      console.error(err);
+    } finally {
+      router.replace("/login");
+    }
+  }
 
   return (
     <div className="min-h-screen bg-background">
@@ -114,13 +129,34 @@ export function PortalLayout({ children, title, subtitle }: { children: ReactNod
             })}
           </nav>
 
-          <button
-            onClick={() => setCollapsed((c) => !c)}
-            className="hidden lg:flex items-center justify-center gap-2 mx-3 mb-3 rounded-xl border border-border py-2 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground transition"
-          >
-            <ChevronsRight className={`h-4 w-4 transition-transform ${collapsed ? "rotate-180" : ""}`} />
-            {!collapsed && <span>طي القائمة</span>}
-          </button>
+          <div className="p-3 border-t border-border space-y-1">
+            <button
+              onClick={handleLogout}
+              disabled={loggingOut}
+              className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-destructive hover:bg-destructive/10 transition disabled:opacity-60
+                ${collapsed ? "justify-center" : ""}`}
+            >
+              {loggingOut ? (
+                <Loader2 className="h-5 w-5 shrink-0 animate-spin" />
+              ) : (
+                <LogOut className="h-5 w-5 shrink-0" />
+              )}
+              {!collapsed && (
+                <div className="min-w-0 flex-1 text-right">
+                  <div className="text-sm font-semibold">{loggingOut ? "جاري تسجيل الخروج..." : "تسجيل الخروج"}</div>
+                  <div className="text-[11px] text-destructive/70">Logout</div>
+                </div>
+              )}
+            </button>
+
+            <button
+              onClick={() => setCollapsed((c) => !c)}
+              className="hidden lg:flex items-center justify-center gap-2 w-full rounded-xl border border-border py-2 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground transition"
+            >
+              <ChevronsRight className={`h-4 w-4 transition-transform ${collapsed ? "rotate-180" : ""}`} />
+              {!collapsed && <span>طي القائمة</span>}
+            </button>
+          </div>
         </div>
       </aside>
 
