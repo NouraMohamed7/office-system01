@@ -154,9 +154,11 @@ export async function uploadApprovalFile(file: File): Promise<void> {
 
 // تعديل اسم ملف عادي — بدل الاعتماد على RPC (update_file_name) اللي مش
 // موجودة في الداتابيز (PGRST202)، بنعدّل الاسم مباشرة في الجدول عن طريق
-// الـ supabase client. محتاج RLS يسمح بالـ update على عمود name
-// لصاحب الملف أو المدير — لو الصلاحية مش موجودة هيرجع إيرور واضح
-// ("permission denied" أو صف فاضي) بدل الإيرور الغامض اللي كان بيطلع.
+// الـ supabase client.
+// ⚠️ ملحوظة مهمة: لو سياسة RLS مانعة التعديل، Supabase بيرجع نجاح (من غير
+// error) لكن من غير ما يعدّل أي صف فعليًا (data بترجع null). عشان كده
+// بنتحقق من data صراحة ونرمي إيرور واضح لو الصف ماتغيّرش، بدل ما نسيب
+// الفرونت يفتكر إن التعديل حصل وهو ماحصلش.
 export async function renamePlainFile(fileId: number, newName: string) {
   const { data, error } = await supabase
     .from("files")
@@ -166,6 +168,11 @@ export async function renamePlainFile(fileId: number, newName: string) {
     .maybeSingle();
 
   if (error) throw error;
+  if (!data) {
+    throw new Error(
+      "تعذر تعديل اسم الملف — إما الملف مش موجود، أو ماعندكش صلاحية تعديله (سياسة RLS مانعة)"
+    );
+  }
   return data;
 }
 
@@ -180,19 +187,21 @@ function extractStoragePath(url: string, bucket: string): string | null {
 
 // حذف ملف/ملفات عادية — بدل الاعتماد على delete-file Edge Function
 // (المحجوبة حاليًا بمشكلة CORS)، بنحذف ملف الـ storage الفعلي أولاً ثم
-// صف الجدول مباشرة عن طريق الـ supabase client. محتاج RLS/Storage
-// policies تسمح بالحذف لصاحب الملف أو المدير.
-// ⚠️ ملحوظة: الـ Edge Function الأصلية كانت بترفض حذف ملف "مرتبط بعنصر
-// تاني" (زي مرفق تاسك). الحذف المباشر ده مش بيعمل الفحص ده، فلو الملف
-// مرتبط بحاجة تانية ممكن يطلع إيرور قيد foreign key بدل رسالة عربي واضحة.
+// صف الجدول مباشرة عن طريق الـ supabase client.
+// ⚠️ نفس ملحوظة RLS اللي فوق: .delete() من غير .select() بيرجع نجاح حتى
+// لو مفيش صف اتمسح فعليًا. بنضيف .select() على الحذف ونتحقق من عدد
+// الصفوف اللي رجعت عشان نعرف هل الحذف حصل فعلاً ولا لأ.
 export async function deletePlainFiles(fileIds: number[]) {
   const { data: rows, error: fetchErr } = await supabase
     .from("files")
     .select("id, file_path")
     .in("id", fileIds);
   if (fetchErr) throw fetchErr;
+  if (!rows || rows.length === 0) {
+    throw new Error("الملف غير موجود أو ماعندكش صلاحية الوصول له");
+  }
 
-  const paths = (rows ?? [])
+  const paths = rows
     .map((r) => extractStoragePath(r.file_path, "files"))
     .filter((p): p is string => !!p);
 
@@ -203,8 +212,15 @@ export async function deletePlainFiles(fileIds: number[]) {
     if (storageErr) console.warn("تعذر حذف بعض ملفات الـ storage:", storageErr);
   }
 
-  const { error: deleteErr } = await supabase.from("files").delete().in("id", fileIds);
+  const { data: deletedRows, error: deleteErr } = await supabase
+    .from("files")
+    .delete()
+    .in("id", fileIds)
+    .select();
   if (deleteErr) throw deleteErr;
+  if (!deletedRows || deletedRows.length === 0) {
+    throw new Error("تعذر حذف الملف — ماعندكش صلاحية الحذف (سياسة RLS مانعة)");
+  }
 }
 
 // حذف ملف موافقة — نفس الفكرة، بدل الاعتماد على delete-file-approval
