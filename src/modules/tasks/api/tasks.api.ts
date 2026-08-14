@@ -165,12 +165,12 @@ export async function createTask(
   if (payload.existing_file_ids?.length) {
     formData.append("existing_file_ids", JSON.stringify(payload.existing_file_ids));
   }
-  const { data, error } = await supabase.functions.invoke("create_task", { body: formData });
+  const { data, error } = await supabase.functions.invoke("create-task", { body: formData });
   if (error) throw error;
 
   // 🔧 ISSUE 9: نسجل الملفات اللي رجعت في الـ response في marker قابل للاسترجاع بعدين
   if (data?.files?.length && data?.task?.id) {
-   await recordTaskFilesMarker(data.task.id, data.files);
+    recordTaskFilesMarker(data.task.id, data.files);
   }
   return data;
 }
@@ -193,65 +193,43 @@ export async function createMyOwnTask(
 ): Promise<{ message: string; task: TaskRow; files: TaskFile[] }> {
   const userId = await getCurrentUserId();
 
-  const formData = new FormData();
+  const { data: me, error: meError } = await supabase
+    .from("users_with_email")
+    .select("department_id")
+    .eq("id", userId)
+    .maybeSingle();
+  if (meError) throw meError;
 
-  formData.append("title", payload.title);
-
-  if (payload.description) {
-    formData.append("description", payload.description);
+  const departmentId = (me as any)?.department_id;
+  if (!departmentId) {
+    throw new Error("تعذر تحديد قسمك — تواصل مع المدير لضبط بيانات حسابك أولًا");
   }
 
-  // الموظف ينشئ المهمة لنفسه
-  formData.append("assigned_to", userId);
-
-  if (payload.start_date) {
-    formData.append("start_date", payload.start_date);
-  }
-
-  formData.append(
-    "end_date",
-    payload.end_date || payload.start_date
-  );
-
-  if (payload.priority) {
-    formData.append("priority", payload.priority);
-  }
-
-  // لو الـ function بتدعم الملفات
-  (payload.files ?? []).forEach((file) => {
-    formData.append("file", file);
-  });
-
-  if (payload.existing_file_ids?.length) {
-    formData.append(
-      "existing_file_ids",
-      JSON.stringify(payload.existing_file_ids)
-    );
-  }
-
-  const { data, error } =
-    await supabase.functions.invoke("create_task", {
-      body: formData,
-    });
+  const { data, error } = await supabase
+    .from("tasks")
+    .insert({
+      title: payload.title,
+      description: payload.description ?? null,
+      assigned_to: userId,
+      department_id: departmentId,
+      start_date: payload.start_date,
+      end_date: payload.end_date || payload.start_date, // NOT NULL في الداتابيز
+      priority: payload.priority ?? "medium",
+      status: "pending",
+    })
+    .select()
+    .single();
 
   if (error) {
+    // 🔧 FIX (Issue 7): رسالة مفهومة بدل خطأ Postgres الخام لو المشكلة صلاحيات RLS
+    if (error.code === "42501" || /row-level security|permission denied/i.test(error.message)) {
+      throw new Error(
+        "مش مسموح لك تضيف مهمة لنفسك دلوقتي — الصلاحية دي لازم تتفعّل من الباك (RLS policy)، مينفعش تتحل من الفرونت."
+      );
+    }
     throw error;
   }
-
-  if (data?.error) {
-    throw new Error(data.error);
-  }
-
-  if (!data?.task) {
-    throw new Error("لم يتم استلام بيانات المهمة من الباك");
-  }
-
-  // حفظ الملفات بالطريقة الموجودة عندك
-  if (data?.files?.length && data?.task?.id) {
-    await recordTaskFilesMarker(data.task.id, data.files);
-  }
-
-  return data;
+  return { message: "تم إضافة المهمة بنجاح", task: data as TaskRow, files: [] };
 }
 
 /**
@@ -300,12 +278,12 @@ export async function updateTask(
   if (payload.remove_attachment_ids?.length) {
     formData.append("remove_attachment_ids", JSON.stringify(payload.remove_attachment_ids));
   }
-  const { data, error } = await supabase.functions.invoke("update_task", { body: formData });
+  const { data, error } = await supabase.functions.invoke("update-task", { body: formData });
   if (error) throw error;
 
   // 🔧 ISSUE 9: نحدّث marker الملفات بأحدث نسخة رجعت من التعديل
   if (data?.files && payload.task_id) {
-   await recordTaskFilesMarker(Number(payload.task_id), data.files);
+    recordTaskFilesMarker(Number(payload.task_id), data.files);
   }
   return data;
 }
