@@ -12,10 +12,9 @@ import type {
 const EGYPT_PHONE_RE = /^01[0125][0-9]{8}$/
 const SAUDI_PHONE_RE = /^(?:\+?966|00966|0)?5[0-9]{8}$/
 
-// ⚠️ الأرقام في قاعدة البيانات متخزنة بصيغة دولية (+20xxxxxxxxxx / +966xxxxxxxxx)
-// بينما الـ regex بتاعة مصر بتتوقع صيغة محلية (01xxxxxxxxx).
-// الفنكشن دي بتحوّل أي صيغة دولية (+20 / 0020 / +966 / 00966) لصيغة محلية تبدأ بـ 0
-// قبل ما نطابقها، عشان التصنيف يشتغل صح مهما كانت الصيغة المخزنة.
+// ⚠️ الأرقام في القاعدة متخزنة بصيغة دولية (+20xxxxxxxxxx / +966xxxxxxxxx)
+// بينما regex مصر بتتوقع صيغة محلية (01xxxxxxxxx) — الفنكشن دي بتحوّل أي صيغة
+// دولية (+20 / 0020 / +966 / 00966) لصيغة محلية تبدأ بـ 0 قبل ما نطابقها.
 function toLocalPhone(raw: string): string {
   let v = raw.replace(/[\s-]/g, '')
   if (v.startsWith('+20')) v = '0' + v.slice(3)
@@ -85,7 +84,7 @@ export async function getMyProfile(): Promise<MyProfile | null> {
 
   return {
     id: u.id,
-    // ⚠️ جدول users مفيهوش عمود email — بنرجع إيميل المستخدم الحالي بس من auth.getUser()
+    // ⚠️ جدول users مفيهوش عمود email — بنرجعه من auth.getUser() بس
     full_name: u.name ?? '',
     email: u.email ?? authUser.email ?? '',
     emp_status: u.emp_status ?? 'نشط',
@@ -100,101 +99,47 @@ export async function getMyProfile(): Promise<MyProfile | null> {
   }
 }
 
-// ⚠️ ملحوظة: عمود "المدير المباشر" (manager) مش موجود في جدول users حسب الدوك،
-// فمقدرش أجيبه من الباك دلوقتي — الحقل ده مشال من صفحة البروفايل لحد ما الباك يضيفه.
+// ---------------- تعديل البروفايل (الاسم + الصورة) ----------------
 
-// ============================================================
-// أضيفي الكود ده في آخر src/modules/profile/api/profile.api.ts
-// (تحت getMyProfile اللي موجودة عندك بالفعل)
-// ============================================================
-
-// ---------------- إعدادات الإشعارات (notify_settings) ----------------
-
-export interface MyNotifySettings {
-  id: number
-  system_notify: boolean
-  attendance_notify: boolean
-  task_notify: boolean
-  cash_notify: boolean
-  comment_settings: boolean
-  report_notify: boolean
-}
-
-// ⚠️ جدول notify_settings فيه عمود manager_id بس — يعني ده مخصص لإعدادات المدير.
-// لو ده هيتستخدم في صفحة بروفايل الموظف كمان، لازم تتأكد مع الباك إند
-// هل فيه عمود مشابه للموظفين ولا الجدول ده للمديرين بس.
-export async function getMyNotifySettings(): Promise<MyNotifySettings | null> {
-  const { data: authData, error: authError } = await supabase.auth.getUser()
-  if (authError) throw authError
-
-  const authUser = authData?.user
-  if (!authUser) return null
-
-  const { data, error } = await supabase
-    .from('notify_settings')
-    .select('*')
-    .eq('manager_id', authUser.id)
-    .maybeSingle()
-
-  if (error) throw error
-  return data as MyNotifySettings | null
-}
-
-export async function updateMyNotifySettings(
-  patch: Partial<Omit<MyNotifySettings, 'id'>>
-): Promise<MyNotifySettings> {
+// ⚠️ update-user موثّق كـ "manager only" وبيتعدل بيه بيانات موظف تاني بالـ user_id.
+// هنا بنستخدمه على user_id الخاص بالمدير نفسه (المفروض يشتغل لأنه manager فعلاً)،
+// لكن لازم تتأكد مع الباك إن مفيش قيد بيمنع المدير من تعديل بياناته هو (زي قيد
+// "لا يمكنك حذف حسابك الخاص" الموجود في delete-user، ممكن يبقى فيه حاجة شبهها هنا).
+export async function updateMyProfile(patch: {
+  name?: string
+  photo?: File | null
+}): Promise<MyProfile> {
   const { data: authData, error: authError } = await supabase.auth.getUser()
   if (authError) throw authError
 
   const authUser = authData?.user
   if (!authUser) throw new Error('لازم تسجل الدخول الأول')
 
-  const { data, error } = await supabase
-    .from('notify_settings')
-    .update(patch)
-    .eq('manager_id', authUser.id)
-    .select()
-    .maybeSingle()
-
-  if (error) throw error
-
-  // ⚠️ الدوك موثّق فيها بس "Update rows" لـ notify_settings، مفيش Insert موثّق.
-  // لو مفيش صف أصلاً (data === null) يبقى الحساب ده لسه معملوش له صف افتراضي،
-  // ولازم تتأكد مع الباك: هل بينشئ الصف ده تلقائي عند إنشاء حساب مدير جديد،
-  // ولا محتاجين نعمل upsert من الفرونت بدل update؟ سيبتها كده لحد ما تتأكد.
-  if (!data) {
-    throw new Error('مفيش إعدادات إشعارات لحسابك بعد — لازم تتأكد مع الباك إند')
+  if (!patch.name && !patch.photo) {
+    throw new Error('مفيش تعديلات لحفظها')
   }
 
-  return data as MyNotifySettings
-}
+  let body: FormData | Record<string, unknown>
 
-// ---------------- الأمان (تغيير الباسورد + تسجيل الخروج) ----------------
+  if (patch.photo) {
+    const formData = new FormData()
+    formData.append('user_id', authUser.id)
+    if (patch.name) formData.append('name', patch.name)
+    formData.append('photo', patch.photo)
+    body = formData
+  } else {
+    body = {
+      user_id: authUser.id,
+      name: patch.name,
+    }
+  }
 
-// بنتحقق من الباسورد الحالي بمحاولة signInWithPassword بيه (زي ما موثق في الدوك)،
-// لو نجحت يبقى صح، وبعدين نستخدم auth.updateUser لتغييره.
-export async function changeMyPassword(
-  currentPassword: string,
-  newPassword: string
-): Promise<void> {
-  const { data: authData, error: authError } = await supabase.auth.getUser()
-  if (authError) throw authError
-
-  const email = authData?.user?.email
-  if (!email) throw new Error('تعذر التحقق من بريدك الإلكتروني')
-
-  const { error: reauthError } = await supabase.auth.signInWithPassword({
-    email,
-    password: currentPassword,
-  })
-  if (reauthError) throw new Error('كلمة المرور الحالية غير صحيحة')
-
-  const { error: updateError } = await supabase.auth.updateUser({ password: newPassword })
-  if (updateError) throw updateError
-}
-
-// scope: 'global' بيسجل خروج من كل الأجهزة مش بس الجهاز الحالي
-export async function signOutEverywhere(): Promise<void> {
-  const { error } = await supabase.auth.signOut({ scope: 'global' })
+  const { data, error } = await supabase.functions.invoke('update-user', { body })
   if (error) throw error
+  if (data?.error) throw new Error(data.error)
+
+  // نرجع نجيب البروفايل كامل تاني عشان نضمن التزامن (بيانات القسم/الوظيفة/الأرقام)
+  const refreshed = await getMyProfile()
+  if (!refreshed) throw new Error('تعذر تحميل بياناتك بعد الحفظ')
+  return refreshed
 }
