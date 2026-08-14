@@ -13,6 +13,7 @@ import {
   Search,
   X,
   ExternalLink,
+  Download,
   Pencil,
   Trash2,
   Loader2,
@@ -26,6 +27,7 @@ import {
   updateLibraryItem,
   deleteLibraryItem,
 } from "@/modules/library/api/library.api";
+import { openOrDownloadFile } from "@/lib/file-download";
 
 /* ------------------------------------------------------------------ */
 /*  Labels (enums الحقيقية من الباك)                                   */
@@ -57,18 +59,25 @@ const TYPE_ICON: Record<LibraryContentType, typeof Film> = {
   else: FileText,
 };
 
+// الأنواع اللي بتتطلب ملف أو رابط فعليًا (النص الإرشادي ممكن يعتمد على الوصف بس)
+const REQUIRES_ATTACHMENT: Record<LibraryContentType, boolean> = {
+  video: true,
+  file: true,
+  link: true,
+  text_guide: false,
+  else: false,
+};
+
 type CardProps = { className?: string; children: React.ReactNode };
 
 /* ------------------------------------------------------------------ */
-/*  Main content — مشترك بين بورتال الموظف والمدير                     */
+/*  Main content — مشترك بين بورتال الموظف والمدير، بنفس الصلاحيات      */
 /* ------------------------------------------------------------------ */
 
 export function LibraryContent({
   CardComponent,
-  isManager,
 }: {
   CardComponent: React.ComponentType<CardProps>;
-  isManager: boolean;
 }) {
   const Card = CardComponent;
   const showToast = useToast();
@@ -87,6 +96,7 @@ export function LibraryContent({
   const [editingId, setEditingId] = useState<number | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [openingId, setOpeningId] = useState<number | null>(null);
 
   async function loadData() {
     setLoading(true);
@@ -155,6 +165,16 @@ export function LibraryContent({
     }
   };
 
+  const handleOpenFile = async (item: LibraryItem) => {
+    if (!item.file_path) return;
+    setOpeningId(item.id);
+    try {
+      await openOrDownloadFile(item.file_path, item.title);
+    } finally {
+      setOpeningId(null);
+    }
+  };
+
   if (loading) {
     return (
       <Card className="p-10 flex flex-col items-center justify-center gap-3 text-muted-foreground">
@@ -204,21 +224,19 @@ export function LibraryContent({
           ))}
         </div>
 
-        {isManager && (
-          <button
-            onClick={() => {
-              setEditingId(null);
-              setShowAddForm((s) => !s);
-            }}
-            className="inline-flex items-center gap-2 bg-primary text-primary-foreground rounded-xl px-4 py-2.5 text-sm font-bold hover:bg-primary-dark transition shadow-warm"
-          >
-            {showAddForm ? <X className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
-            {showAddForm ? "إلغاء" : "إضافة محتوى"}
-          </button>
-        )}
+        <button
+          onClick={() => {
+            setEditingId(null);
+            setShowAddForm((s) => !s);
+          }}
+          className="inline-flex items-center gap-2 bg-primary text-primary-foreground rounded-xl px-4 py-2.5 text-sm font-bold hover:bg-primary-dark transition shadow-warm"
+        >
+          {showAddForm ? <X className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+          {showAddForm ? "إلغاء" : "إضافة محتوى"}
+        </button>
       </div>
 
-      {isManager && showAddForm && (
+      {showAddForm && (
         <ItemForm
           Card={Card}
           defaultName={user?.name ?? ""}
@@ -269,7 +287,7 @@ export function LibraryContent({
           </p>
         )}
         {filtered.map((it) =>
-          isManager && editingId === it.id ? (
+          editingId === it.id ? (
             <div key={it.id} className="md:col-span-2 lg:col-span-3">
               <ItemForm
                 Card={Card}
@@ -286,9 +304,9 @@ export function LibraryContent({
               item={it}
               creatorName={usersMap[it.created_by]}
               Card={Card}
-              isManager={isManager}
               isConfirmingDelete={confirmDeleteId === it.id}
               isDeleting={deletingId === it.id}
+              isOpening={openingId === it.id}
               onEdit={() => {
                 setShowAddForm(false);
                 setEditingId(it.id);
@@ -296,6 +314,7 @@ export function LibraryContent({
               onDeleteClick={() => setConfirmDeleteId(it.id)}
               onDeleteConfirm={() => handleDelete(it.id)}
               onDeleteCancel={() => setConfirmDeleteId(null)}
+              onOpenFile={() => handleOpenFile(it)}
             />
           )
         )}
@@ -312,28 +331,31 @@ function LibraryCard({
   item,
   creatorName,
   Card,
-  isManager,
   isConfirmingDelete,
   isDeleting,
+  isOpening,
   onEdit,
   onDeleteClick,
   onDeleteConfirm,
   onDeleteCancel,
+  onOpenFile,
 }: {
   item: LibraryItem;
   creatorName?: string;
   Card: React.ComponentType<CardProps>;
-  isManager: boolean;
   isConfirmingDelete: boolean;
   isDeleting: boolean;
+  isOpening: boolean;
   onEdit: () => void;
   onDeleteClick: () => void;
   onDeleteConfirm: () => void;
   onDeleteCancel: () => void;
+  onOpenFile: () => void;
 }) {
   const Icon = TYPE_ICON[item.content];
-  const openUrl = item.link || item.file_path || "";
   const dateLabel = item.created_at ? item.created_at.slice(0, 10) : "";
+  const isLink = !!item.link;
+  const isFile = !!item.file_path;
 
   return (
     <Card className="p-5 flex flex-col">
@@ -345,29 +367,25 @@ function LibraryCard({
           <span className="text-[11px] font-semibold text-muted-foreground bg-secondary rounded-full px-2.5 py-1">
             {DEPT_LABELS[item.department]}
           </span>
-          {isManager && (
-            <>
-              <button
-                onClick={onEdit}
-                title="تعديل"
-                className="h-7 w-7 grid place-items-center rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10 transition"
-              >
-                <Pencil className="h-3.5 w-3.5" />
-              </button>
-              <button
-                onClick={onDeleteClick}
-                title="حذف"
-                disabled={isDeleting}
-                className="h-7 w-7 grid place-items-center rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition disabled:opacity-50"
-              >
-                {isDeleting ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Trash2 className="h-3.5 w-3.5" />
-                )}
-              </button>
-            </>
-          )}
+          <button
+            onClick={onEdit}
+            title="تعديل"
+            className="h-7 w-7 grid place-items-center rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10 transition"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </button>
+          <button
+            onClick={onDeleteClick}
+            title="حذف"
+            disabled={isDeleting}
+            className="h-7 w-7 grid place-items-center rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition disabled:opacity-50"
+          >
+            {isDeleting ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Trash2 className="h-3.5 w-3.5" />
+            )}
+          </button>
         </div>
       </div>
       <h3 className="font-bold text-foreground mb-1">{item.title}</h3>
@@ -379,18 +397,34 @@ function LibraryCard({
           {creatorName || item.name} {dateLabel && `· ${dateLabel}`}
         </span>
       </div>
-      {openUrl && (
-          <a
-          href={openUrl}
+
+      {isLink && (
+        <a
+          href={item.link!}
           target="_blank"
           rel="noopener noreferrer"
           className="mt-3 inline-flex items-center justify-center gap-1.5 h-9 rounded-lg border border-border text-sm font-semibold text-primary hover:bg-primary/5 hover:border-primary/40 transition"
         >
-          <ExternalLink className="h-3.5 w-3.5" /> فتح
+          <ExternalLink className="h-3.5 w-3.5" /> فتح الرابط
         </a>
       )}
 
-      {isManager && isConfirmingDelete && (
+      {isFile && (
+        <button
+          onClick={onOpenFile}
+          disabled={isOpening}
+          className="mt-3 inline-flex items-center justify-center gap-1.5 h-9 rounded-lg border border-border text-sm font-semibold text-primary hover:bg-primary/5 hover:border-primary/40 transition disabled:opacity-60"
+        >
+          {isOpening ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Download className="h-3.5 w-3.5" />
+          )}
+          {isOpening ? "جاري الفتح..." : "فتح / تنزيل الملف"}
+        </button>
+      )}
+
+      {isConfirmingDelete && (
         <div className="mt-3 flex items-center justify-between gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2">
           <span className="text-xs font-semibold text-destructive">تأكيد الحذف؟</span>
           <div className="flex items-center gap-2">
@@ -455,6 +489,7 @@ function ItemForm({
   const [submitting, setSubmitting] = useState(false);
 
   const isLinkType = content === "link";
+  const needsAttachment = REQUIRES_ATTACHMENT[content];
 
   const handleSubmit = async () => {
     if (!title.trim() || !name.trim()) {
@@ -465,6 +500,11 @@ function ItemForm({
     if (isLinkType && !link.trim() && !initial?.link) {
       setError("محتوى من نوع رابط لازم تحط رابط");
       showToast("error", "من فضلك أضف الرابط");
+      return;
+    }
+    if (needsAttachment && !isLinkType && !file && !initial?.file_path) {
+      setError("المحتوى ده محتاج ترفع ملف");
+      showToast("error", "من فضلك ارفع ملف");
       return;
     }
     setError("");
@@ -523,7 +563,7 @@ function ItemForm({
           <label className="text-sm font-semibold text-foreground">نوع المحتوى</label>
           <select
             value={content}
-            onChange={(e) => setContent(e.target.value as LibraryContentType)}
+            onChange={(e) => { setContent(e.target.value as LibraryContentType); setError(""); }}
             className="mt-2 w-full h-11 rounded-xl border border-border bg-background px-3 text-sm"
           >
             {TYPES.map((t) => (
@@ -545,15 +585,15 @@ function ItemForm({
         ) : (
           <div className="md:col-span-2">
             <label className="text-sm font-semibold text-foreground">
-              الملف {initial?.file_path ? "(اختيار ملف جديد يستبدل الحالي)" : "(اختياري)"}
+              الملف {initial?.file_path ? "(اختيار ملف جديد يستبدل الحالي)" : needsAttachment ? "" : "(اختياري)"}
             </label>
             <input
               type="file"
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              onChange={(e) => { setFile(e.target.files?.[0] ?? null); setError(""); }}
               className="mt-2 w-full text-sm text-muted-foreground file:ml-3 file:rounded-lg file:border-0 file:bg-secondary file:px-3 file:py-2 file:text-sm file:font-semibold file:text-foreground"
             />
             {initial?.file_path && !file && (
-                <a
+               <a 
                 href={initial.file_path}
                 target="_blank"
                 rel="noopener noreferrer"
