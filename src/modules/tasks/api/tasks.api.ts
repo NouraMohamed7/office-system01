@@ -165,7 +165,7 @@ export async function createTask(
   if (payload.existing_file_ids?.length) {
     formData.append("existing_file_ids", JSON.stringify(payload.existing_file_ids));
   }
-  const { data, error } = await supabase.functions.invoke("create-task", { body: formData });
+  const { data, error } = await supabase.functions.invoke("create_task", { body: formData });
   if (error) throw error;
 
   // 🔧 ISSUE 9: نسجل الملفات اللي رجعت في الـ response في marker قابل للاسترجاع بعدين
@@ -278,7 +278,7 @@ export async function updateTask(
   if (payload.remove_attachment_ids?.length) {
     formData.append("remove_attachment_ids", JSON.stringify(payload.remove_attachment_ids));
   }
-  const { data, error } = await supabase.functions.invoke("update-task", { body: formData });
+  const { data, error } = await supabase.functions.invoke("update_task", { body: formData });
   if (error) throw error;
 
   // 🔧 ISSUE 9: نحدّث marker الملفات بأحدث نسخة رجعت من التعديل

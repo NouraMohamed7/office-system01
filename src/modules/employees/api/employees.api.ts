@@ -232,7 +232,7 @@ export async function createEmployee(payload: {
     formData.append('photo', payload.photo)
   }
 
-  const { data, error } = await supabase.functions.invoke('create-user', {
+  const { data, error } = await supabase.functions.invoke('create_user', {
     body: formData,
   })
 

@@ -152,7 +152,7 @@ type EdgeFunctionResult = { representative?: Representative; error?: string; mes
 export async function createRepresentative(input: RepresentativeInput): Promise<Representative> {
   const formData = buildRepFormData(input);
   const { data, error } = await supabase.functions.invoke<EdgeFunctionResult>(
-    "create-representative",
+    "create_representative",
     { body: formData }
   );
   if (error) throw error;
