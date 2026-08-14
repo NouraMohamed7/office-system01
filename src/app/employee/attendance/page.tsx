@@ -3,7 +3,7 @@
 
 import { PortalLayout, Card, StatusPill } from "@/components/portal-layout";
 import { useToast } from "@/components/toast";
-import { Clock, Check, LogIn, LogOut, Coffee, PlayCircle, Loader2, Palmtree, X, Pencil, Trash2, StopCircle, Eye } from "lucide-react";
+import { Clock, Check, LogIn, LogOut, Coffee, PlayCircle, Loader2, Palmtree, X, Pencil, Trash2, Eye } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
   checkIn as apiCheckIn,
@@ -73,7 +73,7 @@ function formatMinutesAsHhMm(mins: number): string {
 
 // أنواع الأكشن اللي ممكن تتنفذ على صف إجازة واحد — مستخدمة عشان نعرف
 // أي زرار بالظبط نعطّله/نحط عليه اللودينج، بدل ما نعطّل الصف كله بأكشن غلط.
-type LeaveRowAction = "cancel" | "end_early";
+type LeaveRowAction = "cancel";
 
 export default function AttendancePage() {
   const showToast = useToast();
@@ -376,24 +376,6 @@ export default function AttendancePage() {
     }
   }
 
-  async function endLeaveNow(leaveId: number) {
-    // نفس الحماية — دي كانت أكتر عملية معرّضة للمشكلة لإنها بتتاح لأطول فترة
-    // (طول مدة الإجازة كلها)، فاحتمال ضغط مزدوج عليها أعلى من باقي الأكشنز.
-    if (busyLeave) return;
-    setBusyLeave({ id: leaveId, action: "end_early" });
-    try {
-      await leaveActions.endEarly(leaveId);
-      await refreshLeaves();
-      showToast("success", "تم إنهاء الإجازة بدري");
-    } catch (err) {
-      // رسالة الباك بترجع نصًا واضح (Only accepted leaves can be ended
-      // early) — بنعرضها زي ما هي بدل ما نلفّها برسالة عامة غامضة.
-      showToast("error", err instanceof Error ? err.message : "تعذر إنهاء الإجازة");
-    } finally {
-      setBusyLeave(null);
-    }
-  }
-
   return (
     <PortalLayout title="الحضور" subtitle="سجل حضورك وانصرافك اليومي وراجع تاريخك">
       <Card className="p-8 mb-6 text-center relative overflow-hidden">
@@ -523,11 +505,8 @@ export default function AttendancePage() {
               const started = isLeaveStarted(l.start_date);
               // تعديل/إلغاء: متاحين بس لو الإجازة لسه ما بدأتش (مطابق لرسالة الباك)
               const canEditOrCancel = !started;
-              // إنهاء بدري: متاح بس لو الحالة accepted (مطابق لرسالة الباك بالظبط)
-              const canEndEarly = l.status === "accepted";
-              const hasAnyAction = canEditOrCancel || canEndEarly;
+              const hasAnyAction = canEditOrCancel;
               const isCancelling = busyLeave?.id === l.id && busyLeave.action === "cancel";
-              const isEndingEarly = busyLeave?.id === l.id && busyLeave.action === "end_early";
               const rowBusy = busyLeave?.id === l.id;
 
               // السبب بيتقصّ بصريًا هنا (line-clamp-2) بس دايمًا فيه طريقة
@@ -569,16 +548,6 @@ export default function AttendancePage() {
                           title="تعديل"
                         >
                           <Pencil className="h-4 w-4" />
-                        </button>
-                      )}
-                      {canEndEarly && (
-                        <button
-                          onClick={() => endLeaveNow(l.id)}
-                          disabled={rowBusy}
-                          className="rounded-lg border border-border p-2 hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed"
-                          title="إنهاء بدري"
-                        >
-                          {isEndingEarly ? <Loader2 className="h-4 w-4 animate-spin text-warning" /> : <StopCircle className="h-4 w-4 text-warning" />}
                         </button>
                       )}
                       {canEditOrCancel && (
