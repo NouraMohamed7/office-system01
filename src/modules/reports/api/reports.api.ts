@@ -98,23 +98,24 @@ export const STATUS_TONE: Record < ReportBackendStatus,
 // Employee side
 // ==========================================================
 
+// في src/modules/reports/api/reports.api.ts — استبدل الدالة دي بس
+
 /**
- * ✅ الفيكس (Issue 1): الصفحة كانت بتلف أي خطأ من الـ RPC برسالة عامة ثابتة
- * "حاول تاني" حتى لو الموظف بعت تقرير اليوم ده بالفعل (duplicate submission —
- * على الأغلب unique constraint على users_id + report_date في الباك).
- * الدالة دي بتفحص شكل الخطأ القادم من Postgres/الـ RPC وتترجمه لرسالة
- * مفهومة ("قد تم التسليم") لو كانت المشكلة تكرار الإرسال تحديدًا،
- * وترجع رسالة الباك الحقيقية (أو fallback عام) في أي حالة تانية.
+ * ✅ الفيكس الصحيح (Issue 1): اتأكد فعليًا من رسالة الباك الحقيقية —
+ * submit_daily_report بيرفض إعادة الإرسال برسالة عربية محددة يرفعها
+ * الباك نفسه (P0001): "لا يمكن تعديل التقرير في حالته الحالية"،
+ * مش unique constraint violation زي ما كان مفترض قبل كده. بنفحص
+ * النص ده تحديدًا (أو أي رسالة مشابهة بتدل على نفس السبب) ونترجمها
+ * لرسالة واضحة للموظف ("قد تم التسليم") بدل ما نسيبها كـ "حاول تاني" عامة.
  */
 export function getSubmitDailyReportErrorMessage(err: unknown): string {
   const message = err instanceof Error ? err.message : String(err ?? "");
-  const code = (err as { code?: string })?.code;
 
-  const isDuplicate =
-    code === "23505" ||
-    /duplicate key|unique constraint|already (exists|submitted)|مسبق|تم تسليم/i.test(message);
+  const isAlreadySubmitted =
+    /لا يمكن تعديل التقرير في حالته الحالية/.test(message) ||
+    /duplicate key|unique constraint/i.test(message); // احتياطي لو الباك اتغيّر لاحقًا لـ constraint
 
-  if (isDuplicate) {
+  if (isAlreadySubmitted) {
     return "قد تم التسليم — تقرير اليوم ده اتبعت بالفعل";
   }
 

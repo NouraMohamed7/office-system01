@@ -265,6 +265,37 @@ export interface FileReportRow {
   ownerName: string;
   created_at: string;
 }
+// أضيفها في src/modules/reports/api/reports-hub.api.ts فوق getFilesReport
+
+// ✅ تلطيف مؤقت لباج في الباك: بعض ملفات المهام بترجع mime_type عام
+// ("application/octet-stream") حتى لو الملف فعليًا PDF/صورة/إلخ، بينما
+// نفس الملف لو اترفع عن طريق upload-file العادي بيرجع النوع الصحيح.
+// بنستنتج النوع من امتداد اسم الملف كـ fallback لو الـ mime_type عام.
+const GENERIC_MIME_TYPES = new Set(["application/octet-stream", "", "binary/octet-stream"]);
+
+const EXTENSION_TO_MIME: Record<string, string> = {
+  pdf: "application/pdf",
+  doc: "application/msword",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xls: "application/vnd.ms-excel",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  txt: "text/plain",
+  csv: "text/csv",
+  zip: "application/zip",
+  mp4: "video/mp4",
+  mp3: "audio/mpeg",
+};
+
+function resolveDisplayMimeType(name: string, mimeType: string): string {
+  if (!GENERIC_MIME_TYPES.has(mimeType)) return mimeType;
+  const ext = name.split(".").pop()?.toLowerCase();
+  if (ext && EXTENSION_TO_MIME[ext]) return EXTENSION_TO_MIME[ext];
+  return mimeType; // مفيش امتداد معروف — نسيبها زي ما هي
+}
 
 export async function getFilesReport(filters: HubFilters) {
   let query = supabase
@@ -281,10 +312,11 @@ export async function getFilesReport(filters: HubFilters) {
   const records = data ?? [];
   const nameMap = await getUsersNameMap();
 
-  const rows: FileReportRow[] = records.map((f) => ({
-    ...f,
-    ownerName: nameMap[f.users_id] ?? "غير معروف",
-  }));
+ const rows: FileReportRow[] = records.map((f) => ({
+  ...f,
+  mime_type: resolveDisplayMimeType(f.name, f.mime_type),
+  ownerName: nameMap[f.users_id] ?? "غير معروف",
+}));
 
   return {
     rows,
