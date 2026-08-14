@@ -66,6 +66,13 @@ function historyToRow(r: DailyReportHistoryWithName): DailyReport {
   };
 }
 
+// Fix 3: تقرير "unsent" (الموظف ما بعتش تقرير خالص، والصف اتحط بمعرفة
+// الكرون) مفيهوش محتوى حقيقي يتراجع، فمفيش داعي/معنى لاعتماده أو رفضه أو
+// طلب تعديل عليه. هنا مركز القرار الوحيد لتحديد هل التقرير قابل للمراجعة
+function isReviewable(r: DailyReport) {
+  return !!r.reportId && r.status !== "unsent";
+}
+
 function Toast({ toast, onDone }: { toast: ToastState; onDone: () => void }) {
   const [visible, setVisible] = useState(false);
   useEffect(() => {
@@ -353,12 +360,17 @@ useEffect(() => {
   };
 
   async function updateStatus(r: DailyReport, status: "accepted" | "rejected" | "edit_requested", note?: string) {
-    if (!r.reportId) {
-      showToast("الموظف ده لسه ما بعتش تقرير اليوم ده", "muted");
+    // Fix 3: خط دفاع تاني بجانب تعطيل الأزرار — حتى لو الفانكشن دي اتنادت
+    // من مكان تاني، منمنعش مراجعة تقرير مفيش له محتوى حقيقي
+    if (!isReviewable(r)) {
+      showToast(
+        r.status === "unsent" ? "الموظف ده ما بعتش تقرير اليوم ده" : "الموظف ده لسه ما بعتش تقرير اليوم ده",
+        "muted"
+      );
       return;
     }
     try {
-      await reviewDailyReport({ reportId: r.reportId, status, comment: note });
+      await reviewDailyReport({ reportId: r.reportId as number, status, comment: note });
       setReports((prev) =>
         (prev ?? []).map((x) => (x.key === r.key ? { ...x, status, managerNote: note ?? x.managerNote } : x))
       );
@@ -370,10 +382,12 @@ useEffect(() => {
   }
 
   const handleApprove = (r: DailyReport) => {
+    if (!isReviewable(r)) return;
     updateStatus(r, "accepted");
     showToast(`تم اعتماد تقرير ${r.name}`, "success");
   };
   const handleReject = (r: DailyReport) => {
+    if (!isReviewable(r)) return;
     updateStatus(r, "rejected");
     showToast(`تم رفض تقرير ${r.name}`, "danger");
   };
@@ -393,6 +407,10 @@ useEffect(() => {
     await updateStatus(editTarget, "edit_requested", note);
     showToast(`تم إرسال طلب التعديل إلى ${editTarget.name}`, "warning");
     setEditTarget(null);
+  };
+  const openEditTarget = (r: DailyReport) => {
+    if (!isReviewable(r)) return;
+    setEditTarget(r);
   };
 
   const currentReports = reports ?? [];
@@ -471,11 +489,14 @@ useEffect(() => {
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          {/* Fix 2: كانت تقارير "unsent" (لم تُرسل) مش متعدودة في أي كارت،
+              فبتختفي من ملخص الحالات رغم إنها ظاهرة في الجدول */}
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
             <StatCard dense label="قيد الانتظار" value={String(count("pending"))} tone="muted" />
             <StatCard dense label="المعتمدة" value={String(count("accepted"))} tone="success" />
             <StatCard dense label="المرفوضة" value={String(count("rejected"))} tone="danger" />
             <StatCard dense label="تحتاج تعديل" value={String(count("edit_requested"))} tone="warning" />
+            <StatCard dense label="لم تُرسل" value={String(count("unsent"))} tone="danger" />
           </div>
 
           <Card className="p-0! overflow-hidden">
@@ -498,58 +519,91 @@ useEffect(() => {
                       </td>
                     </tr>
                   ) : (
-                    currentReports.map((r) => (
-                      <tr
-                        key={r.key}
-                        className={`row-hover hover:row-hover-active transition-colors duration-500 ${
-                          flashId === r.key
-                            ? STATUS_TONE[r.status] === "danger"
-                              ? "bg-red-500/10"
-                              : STATUS_TONE[r.status] === "warning"
-                              ? "bg-amber-500/10"
-                              : "bg-emerald-500/10"
-                            : ""
-                        }`}
-                      >
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-3">
-                            <Avatar name={r.name} />
-                            <span className="font-semibold">{r.name}</span>
-                          </div>
-                        </td>
-                        {viewMode === "history" && (
-                          <td className="px-4 py-3 text-xs text-muted-foreground">{r.date}</td>
-                        )}
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-2 w-40">
-                            <ProgressBar value={r.completion_percent} />
-                            <span className="w-8 text-xs tabular text-muted-foreground">{r.completion_percent}%</span>
-                          </div>
-                        </td>
-                        <td className="px-4 py-3">
-                          <Pill tone={STATUS_TONE[r.status]}>{STATUS_LABELS[r.status]}</Pill>
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-1">
-                            <button onClick={() => handleView(r)} title="عرض التقرير" className="rounded-lg p-1.5 text-muted-foreground transition-all hover:scale-110 hover:bg-accent hover:text-foreground active:scale-95">
-                              <Eye className="h-4 w-4" />
-                            </button>
-                            <button onClick={() => handleDownload(r)} title="تنزيل إكسل" className="rounded-lg p-1.5 text-muted-foreground transition-all hover:scale-110 hover:bg-accent hover:text-foreground active:scale-95">
-                              <Download className="h-4 w-4" />
-                            </button>
-                            <button onClick={() => handleApprove(r)} title="اعتماد" className="rounded-lg p-1.5 text-emerald-600 transition-all hover:scale-110 hover:bg-emerald-500/10 active:scale-95">
-                              <Check className="h-4 w-4" />
-                            </button>
-                            <button onClick={() => handleReject(r)} title="رفض" className="rounded-lg p-1.5 text-red-600 transition-all hover:scale-110 hover:bg-red-500/10 active:scale-95">
-                              <X className="h-4 w-4" />
-                            </button>
-                            <button onClick={() => setEditTarget(r)} title="طلب تعديل" className="rounded-lg p-1.5 text-amber-600 transition-all hover:scale-110 hover:bg-amber-500/10 active:scale-95">
-                              <PencilLine className="h-4 w-4" />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))
+                    currentReports.map((r) => {
+                      const reviewable = isReviewable(r);
+                      const actionBtnClass = (color: string) =>
+                        `rounded-lg p-1.5 transition-all active:scale-95 ${
+                          reviewable
+                            ? `${color} hover:scale-110`
+                            : "text-muted-foreground/30 cursor-not-allowed"
+                        }`;
+
+                      return (
+                        <tr
+                          key={r.key}
+                          className={`row-hover hover:row-hover-active transition-colors duration-500 ${
+                            flashId === r.key
+                              ? STATUS_TONE[r.status] === "danger"
+                                ? "bg-red-500/10"
+                                : STATUS_TONE[r.status] === "warning"
+                                ? "bg-amber-500/10"
+                                : "bg-emerald-500/10"
+                              : ""
+                          }`}
+                        >
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-3">
+                              <Avatar name={r.name} />
+                              <span className="font-semibold">{r.name}</span>
+                            </div>
+                          </td>
+                          {viewMode === "history" && (
+                            <td className="px-4 py-3 text-xs text-muted-foreground">{r.date}</td>
+                          )}
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-2 w-40">
+                              <ProgressBar value={r.completion_percent} />
+                              <span className="w-8 text-xs tabular text-muted-foreground">{r.completion_percent}%</span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3">
+                            <Pill tone={STATUS_TONE[r.status]}>{STATUS_LABELS[r.status]}</Pill>
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-1">
+                              <button
+                                onClick={() => handleView(r)}
+                                title="عرض التقرير"
+                                className="rounded-lg p-1.5 text-muted-foreground transition-all hover:scale-110 hover:bg-accent hover:text-foreground active:scale-95"
+                              >
+                                <Eye className="h-4 w-4" />
+                              </button>
+                              <button
+                                onClick={() => handleDownload(r)}
+                                title="تنزيل إكسل"
+                                className="rounded-lg p-1.5 text-muted-foreground transition-all hover:scale-110 hover:bg-accent hover:text-foreground active:scale-95"
+                              >
+                                <Download className="h-4 w-4" />
+                              </button>
+                              <button
+                                onClick={() => handleApprove(r)}
+                                disabled={!reviewable}
+                                title={reviewable ? "اعتماد" : "لا يوجد تقرير لاعتماده"}
+                                className={`${actionBtnClass("text-emerald-600 hover:bg-emerald-500/10")}`}
+                              >
+                                <Check className="h-4 w-4" />
+                              </button>
+                              <button
+                                onClick={() => handleReject(r)}
+                                disabled={!reviewable}
+                                title={reviewable ? "رفض" : "لا يوجد تقرير لرفضه"}
+                                className={`${actionBtnClass("text-red-600 hover:bg-red-500/10")}`}
+                              >
+                                <X className="h-4 w-4" />
+                              </button>
+                              <button
+                                onClick={() => openEditTarget(r)}
+                                disabled={!reviewable}
+                                title={reviewable ? "طلب تعديل" : "لا يوجد تقرير لطلب تعديله"}
+                                className={`${actionBtnClass("text-amber-600 hover:bg-amber-500/10")}`}
+                              >
+                                <PencilLine className="h-4 w-4" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
                   )}
                 </tbody>
               </table>

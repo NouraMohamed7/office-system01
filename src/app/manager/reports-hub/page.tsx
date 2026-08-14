@@ -66,7 +66,67 @@ const STATUS_OPTIONS_BY_CAT: Partial<Record<CategoryId, { value: string; label: 
   cmp: COMPLAINT_STATUS_OPTIONS,
 };
 
-const COLUMNS: Record<CategoryId, { key: string; label: string }[]> = {
+// ==========================================================
+// Formatters — بيتطبّقوا في الجدول وفي تصدير الإكسل مع بعض عشان
+// القيمة تظهر بنفس الشكل المقروء في المكانين
+// ==========================================================
+
+function fmtDateOnly(value: unknown): string {
+  if (!value || typeof value !== "string") return "—";
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("ar-EG", { day: "numeric", month: "long", year: "numeric" });
+}
+
+function fmtDateTime(value: unknown): string {
+  if (!value || typeof value !== "string") return "—";
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return "—";
+  const datePart = d.toLocaleDateString("ar-EG", { day: "numeric", month: "long", year: "numeric" });
+  const timePart = d.toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" });
+  return `${datePart} - ${timePart}`;
+}
+
+function fmtFileSize(value: unknown): string {
+  const bytes = typeof value === "number" ? value : Number(value);
+  if (!bytes || isNaN(bytes) || bytes < 0) return "—";
+  if (bytes < 1024) return `${bytes} بايت`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${kb.toFixed(kb < 10 ? 1 : 0)} كيلوبايت`;
+  const mb = kb / 1024;
+  if (mb < 1024) return `${mb.toFixed(mb < 10 ? 1 : 0)} ميجابايت`;
+  const gb = mb / 1024;
+  return `${gb.toFixed(2)} جيجابايت`;
+}
+
+/**
+ * Fix (Reports Hub / تقارير الملفات): العمود كان بيعرض mime_type الخام
+ * زي "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+ * بدل نوع مفهوم للمستخدم. الدالة دي بتترجم أشهر الـ mime types لتصنيف
+ * عربي مقروء، ولو النوع مش معروف بترجع الامتداد من اسم الملف كـ fallback
+ * بدل ما تسيب الـ mime الخام في الواجهة.
+ */
+function readableFileType(row: Record<string, any>): string {
+  const mime = typeof row.mime_type === "string" ? row.mime_type.toLowerCase() : "";
+  const fileName = typeof row.name === "string" ? row.name : "";
+
+  if (!mime) return "غير معروف";
+  if (mime.startsWith("image/")) return "صورة";
+  if (mime.startsWith("video/")) return "فيديو";
+  if (mime.startsWith("audio/")) return "ملف صوتي";
+  if (mime === "application/pdf") return "PDF";
+  if (mime.includes("wordprocessingml") || mime === "application/msword") return "مستند Word";
+  if (mime.includes("spreadsheetml") || mime === "application/vnd.ms-excel" || mime === "text/csv") return "جدول Excel";
+  if (mime.includes("presentationml") || mime === "application/vnd.ms-powerpoint") return "عرض تقديمي";
+  if (mime === "text/plain") return "ملف نصي";
+  if (mime.includes("zip") || mime.includes("rar") || mime.includes("compressed")) return "أرشيف مضغوط";
+  if (mime === "application/json") return "ملف JSON";
+
+  const ext = fileName.includes(".") ? fileName.split(".").pop()?.toUpperCase() : null;
+  return ext ? `ملف ${ext}` : mime;
+}
+
+const COLUMNS: Record<CategoryId, { key: string; label: string; format?: (row: any) => string }[]> = {
   emp: [
     { key: "name", label: "الاسم" },
     { key: "departmentName", label: "القسم" },
@@ -85,22 +145,22 @@ const COLUMNS: Record<CategoryId, { key: string; label: string }[]> = {
     { key: "assignedName", label: "الموظف" },
     { key: "status", label: "الحالة" },
     { key: "priority", label: "الأولوية" },
-    { key: "start_date", label: "من" },
-    { key: "end_date", label: "إلى" },
+    { key: "start_date", label: "من", format: (r) => fmtDateOnly(r.start_date) },
+    { key: "end_date", label: "إلى", format: (r) => fmtDateOnly(r.end_date) },
   ],
   files: [
     { key: "name", label: "اسم الملف" },
     { key: "ownerName", label: "الموظف" },
-    { key: "mime_type", label: "النوع" },
-    { key: "size_bytes", label: "الحجم (بايت)" },
-    { key: "created_at", label: "تاريخ الرفع" },
+    { key: "mime_type", label: "النوع", format: readableFileType },
+    { key: "size_bytes", label: "الحجم", format: (r) => fmtFileSize(r.size_bytes) },
+    { key: "created_at", label: "تاريخ الرفع", format: (r) => fmtDateTime(r.created_at) },
   ],
   cmp: [
     { key: "employeeName", label: "الموظف" },
     { key: "title", label: "العنوان" },
     { key: "type", label: "النوع" },
     { key: "status", label: "الحالة" },
-    { key: "created_at", label: "التاريخ" },
+    { key: "created_at", label: "التاريخ", format: (r) => fmtDateTime(r.created_at) },
   ],
 };
 
@@ -126,11 +186,16 @@ async function loadCategoryData(cat: CategoryId, filters: HubFilters): Promise<R
   }
 }
 
+function cellValue(cat: CategoryId, col: { key: string; label: string; format?: (row: any) => string }, row: any) {
+  if (col.format) return col.format(row);
+  return row[col.key] ?? "—";
+}
+
 function rowsToSheetData(cat: CategoryId, rows: any[]) {
   const cols = COLUMNS[cat];
   return rows.map((r) => {
     const o: Record<string, any> = {};
-    cols.forEach((c) => (o[c.label] = r[c.key] ?? "—"));
+    cols.forEach((c) => (o[c.label] = cellValue(cat, c, r)));
     return o;
   });
 }
@@ -431,7 +496,7 @@ export default function ReportsHubPage() {
                           <tr key={r.id ?? r.users_id ?? i} className="row-hover">
                             {cols.map((c) => (
                               <td key={c.key} className="px-4 py-2.5 tabular">
-                                {r[c.key] ?? "—"}
+                                {cellValue(sel, c, r)}
                               </td>
                             ))}
                           </tr>

@@ -3,14 +3,18 @@
 import { PortalLayout, Card } from "@/components/portal-layout";
 import { useToast } from "@/components/toast";
 import { useEffect, useState } from "react";
-import { ChevronDown, ChevronUp, Send, Loader2 } from "lucide-react";
+import { ChevronDown, ChevronUp, Send, Loader2, MessageSquare } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 import {
   submitDailyReport,
   getMyDailyReports,
+  getSubmitDailyReportErrorMessage,
+  getReportComments,
+  subscribeToDailyReports,
+  subscribeToReportComments,
   DailyReportHistory,
+  ReportComment,
   STATUS_LABELS,
-  STATUS_TONE,
 } from "@/modules/reports/api/reports.api";
 
 export default function ReportsPage() {
@@ -27,6 +31,11 @@ export default function ReportsPage() {
   const [pct, setPct] = useState(70);
   const [errors, setErrors] = useState<{ achievements?: string }>({});
   const [open, setOpen] = useState<number | null>(0);
+
+  // ملاحظات/تعليقات المدير على كل تقرير — بتتحمّل بس لما تفتحي التقرير
+  // (Fix 6: كانت مش بتتعرض خالص، عندنا TODO بيقول إن الداتا دي مش متجابة)
+  const [comments, setComments] = useState<Record<number, ReportComment[]>>({});
+  const [commentsLoading, setCommentsLoading] = useState<Record<number, boolean>>({});
 
   const color =
     pct < 50 ? "var(--warning)" : pct < 80 ? "oklch(0.68 0.13 55)" : "var(--primary)";
@@ -58,6 +67,48 @@ export default function ReportsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Fix 5 (ريل تايم): أي تحديث على تقارير الموظف ده — خصوصًا لما المدير
+  // يعتمد/يرفض/يطلب تعديل — يحدّث القائمة أوتوماتيك من غير ريفريش يدوي
+  useEffect(() => {
+    if (!userId) return;
+    const unsubscribe = subscribeToDailyReports(() => loadReports(userId));
+    return unsubscribe;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
+  const fetchComments = async (reportId: number) => {
+    try {
+      const data = await getReportComments(reportId);
+      setComments((prev) => ({ ...prev, [reportId]: data }));
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const toggleOpen = (index: number, reportId: number) => {
+    const next = open === index ? null : index;
+    setOpen(next);
+
+    // أول ما تتفتح، لو لسه ما اتجابتش تعليقاتها، هاتها مرة واحدة بس
+    if (next !== null && !comments[reportId]) {
+      setCommentsLoading((prev) => ({ ...prev, [reportId]: true }));
+      fetchComments(reportId).finally(() =>
+        setCommentsLoading((prev) => ({ ...prev, [reportId]: false }))
+      );
+    }
+  };
+
+  // ريل تايم لتعليقات التقرير المفتوح حاليًا بس (مفيش داعي نفتح اشتراك
+  // لكل تقرير في القائمة مرة واحدة)
+  useEffect(() => {
+    if (open === null) return;
+    const report = past[open];
+    if (!report) return;
+    const unsubscribe = subscribeToReportComments(report.id, () => fetchComments(report.id));
+    return unsubscribe;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, past]);
+
   const handleSubmit = async () => {
     if (!achievements.trim()) {
       setErrors({ achievements: "من فضلك اكتبي ماذا أنجزتِ اليوم قبل الإرسال" });
@@ -88,7 +139,10 @@ export default function ReportsPage() {
       await loadReports(userId);
     } catch (err) {
       console.error(err);
-      showToast("error", "حصل خطأ أثناء إرسال التقرير، حاول تاني");
+      // Fix 1: كانت الرسالة ثابتة "حاول تاني" مهما كان سبب الخطأ. دلوقتي
+      // لو السبب إن الموظف بعت تقرير اليوم ده بالفعل، بتظهر رسالة واضحة
+      // "قد تم التسليم" بدل الرسالة العامة.
+      showToast("error", getSubmitDailyReportErrorMessage(err));
     } finally {
       setSubmitting(false);
     }
@@ -175,10 +229,13 @@ export default function ReportsPage() {
           <div className="space-y-2">
             {past.map((r, i) => {
               const status = r.status ?? "pending";
+              const reportComments = comments[r.id] ?? [];
+              const isCommentsLoading = !!commentsLoading[r.id];
+
               return (
                 <Card key={r.id} className="overflow-hidden">
                   <button
-                    onClick={() => setOpen(open === i ? null : i)}
+                    onClick={() => toggleOpen(i, r.id)}
                     className="w-full flex items-center gap-4 p-4 hover:bg-primary/5 transition text-right"
                   >
                     <div className="flex-1">
@@ -226,7 +283,43 @@ export default function ReportsPage() {
                           {r.need}
                         </p>
                       )}
-                      {/* TODO: ملاحظة المدير مش بترجع من الباك حاليًا — راجع getReportComments في reports.api.ts */}
+
+                      <div className="pt-3 mt-1 border-t border-border/40">
+                        <div className="flex items-center gap-1.5 mb-2 font-semibold text-foreground">
+                          <MessageSquare className="h-3.5 w-3.5" />
+                          ملاحظات المدير
+                        </div>
+
+                        {isCommentsLoading ? (
+                          <div className="flex items-center gap-2 text-xs text-muted-foreground py-1">
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            جارِ تحميل الملاحظات...
+                          </div>
+                        ) : reportComments.length === 0 ? (
+                          <p className="text-xs text-muted-foreground">
+                            مفيش ملاحظات على التقرير ده لحد دلوقتي.
+                          </p>
+                        ) : (
+                          <div className="space-y-2">
+                            {reportComments.map((c) => (
+                              <div
+                                key={c.id}
+                                className="rounded-lg bg-amber-500/10 p-2.5 text-xs text-amber-800 leading-relaxed"
+                              >
+                                <p>{c.body}</p>
+                                <div className="mt-1 text-[10px] text-amber-700/70">
+                                  {new Date(c.created_at).toLocaleString("ar-EG", {
+                                    day: "numeric",
+                                    month: "short",
+                                    hour: "2-digit",
+                                    minute: "2-digit",
+                                  })}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   )}
                 </Card>
