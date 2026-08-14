@@ -106,7 +106,7 @@ export async function updateLibraryItem(
   if (payload.link) formData.append("link", payload.link);
   if (payload.file) formData.append("file", payload.file);
 
-  const { data, error } = await supabase.functions.invoke("update-library", {
+  const { data, error } = await supabase.functions.invoke("update_library", {
     body: formData,
   });
 
@@ -121,7 +121,7 @@ export async function updateLibraryItem(
 /* -------------------------------------------------------------------- */
 
 export async function deleteLibraryItem(library_id: number): Promise<{ message: string }> {
-  const { data, error } = await supabase.functions.invoke("delete-library", {
+  const { data, error } = await supabase.functions.invoke("delete_library", {
     body: { library_id },
   });
 
