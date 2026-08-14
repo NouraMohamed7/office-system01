@@ -176,30 +176,88 @@ export async function createTask(
 }
 
 /**
- * الموظف بينشئ مهمة لنفسه فقط.
+ * الموظف ينشئ مهمة شخصية لنفسه فقط.
  *
- * ⚠️ ISSUE 7 — endpoint "create-task" موثق رسميًا كـ "Auth: Manager only".
- * الموظف مش هيقدر ينده عليه، فالبديل هنا insert مباشر في جدول tasks،
- * وده معتمد بالكامل على وجود RLS policy على الباك تسمح بـ:
- *   assigned_to = auth.uid()  AND  status = 'pending'
- * لو الـ policy دي مش موجودة، الـ insert هيترفض بخطأ RLS. ده مفيش له
- * حل فرونت حقيقي — لازم الباك يفعّل الـ policy دي (راجع المحادثة).
+ * لا نستخدم create-task لأنها Manager only.
+ * ولا نستخدم create_my_own_task لأنه غير موجود في الباك.
  *
- * كمان: مفيش رفع ملفات في المسار ده (insert مباشر مش بيمر على منطق رفع
- * الملفات اللي في الـ Edge Function) — مرتبط بـ ISSUE 9.
+ * يتم إنشاء المهمة مباشرة في جدول tasks.
  */
 export async function createMyOwnTask(
   payload: Omit<CreateTaskPayload, "assigned_to" | "department_id">
 ): Promise<{ message: string; task: TaskRow; files: TaskFile[] }> {
-  const { data, error } = await supabase.rpc("create_my_own_task", {
-    p_title: payload.title,
-    p_description: payload.description ?? null,
-    p_start_date: payload.start_date,
-    p_end_date: payload.end_date || payload.start_date,
-    p_priority: payload.priority ?? "medium",
-  });
+  const userId = await getCurrentUserId();
 
-  if (error) throw error;
+  // 1) نجيب قسم الموظف الحالي
+  const { data: me, error: meError } = await supabase
+    .from("users_with_email")
+    .select("department_id")
+    .eq("id", userId)
+    .maybeSingle();
+
+  if (meError) {
+    throw meError;
+  }
+
+  const departmentId = me?.department_id;
+
+  if (departmentId == null) {
+    throw new Error(
+      "تعذر تحديد قسمك — تواصل مع المدير لضبط بيانات حسابك أولًا"
+    );
+  }
+
+  // 2) التواريخ
+  const startDate =
+    payload.start_date || new Date().toISOString().slice(0, 10);
+
+  const endDate = payload.end_date || startDate;
+
+  // 3) إنشاء المهمة
+  const { data, error } = await supabase
+    .from("tasks")
+    .insert({
+      title: payload.title.trim(),
+
+      description:
+        payload.description?.trim() || null,
+
+      // المهمة لنفس الموظف
+      assigned_to: userId,
+
+      // قسم الموظف
+      department_id: departmentId,
+
+      start_date: startDate,
+      end_date: endDate,
+
+      // المهمة الجديدة تبدأ Pending
+      status: "pending",
+
+      // لو لم يحدد أولوية
+      priority: payload.priority ?? "medium",
+
+      // الجدول عندك يحتوي العمود ده
+      completion_percent: 0,
+    })
+    .select("*")
+    .single();
+
+  if (error) {
+    console.error("createMyOwnTask error:", error);
+
+    // RLS
+    if (
+      error.code === "42501" ||
+      /row-level security|permission denied/i.test(error.message)
+    ) {
+      throw new Error(
+        "مش مسموح لك تضيف مهمة لنفسك حاليًا — لازم تتفعّل صلاحية إنشاء المهام للموظف من RLS في Supabase."
+      );
+    }
+
+    throw error;
+  }
 
   return {
     message: "تم إضافة المهمة بنجاح",
