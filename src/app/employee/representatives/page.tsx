@@ -31,6 +31,11 @@ import {
   getCurrentUserId,
   canManageRepresentative,
   formatCountry,
+  validateName,
+  validatePhone,
+  validateOptionalPhone,
+  validateImageFile,
+  MAX_IMAGE_SIZE_MB,
 } from "@/modules/representatives/api/representatives.api";
 
 type FormState = {
@@ -91,6 +96,7 @@ export default function RepresentativesPage() {
   const [formErrors, setFormErrors] = useState<{
     name?: string;
     phone1?: string;
+    phone2?: string;
     supervisorId?: string;
   }>({});
 
@@ -190,12 +196,17 @@ export default function RepresentativesPage() {
 
   const handleSaveRep = async () => {
     const errors: typeof formErrors = {};
-    if (!form.name.trim()) errors.name = "الاسم مطلوب";
-    if (!form.phone1.trim()) errors.phone1 = "رقم الهاتف الأول مطلوب";
+    const nameErr = validateName(form.name);
+    if (nameErr) errors.name = nameErr;
+    const phone1Err = validatePhone(form.phone1);
+    if (phone1Err) errors.phone1 = phone1Err;
+    const phone2Err = validateOptionalPhone(form.phone2);
+    if (phone2Err) errors.phone2 = phone2Err;
     if (!form.supervisorId) errors.supervisorId = "اختيار المشرف مطلوب";
+
     if (Object.keys(errors).length) {
       setFormErrors(errors);
-      showToast("error", "فيه حقول ناقصة في الفورم");
+      showToast("error", "فيه حقول ناقصة أو غير صحيحة في الفورم");
       return;
     }
     setFormErrors({});
@@ -364,6 +375,8 @@ export default function RepresentativesPage() {
                   setFormErrors((p) => ({ ...p, phone1: undefined }));
                 }}
                 placeholder="01xxxxxxxxx"
+                inputMode="numeric"
+                maxLength={11}
                 className={`mt-2 w-full h-11 rounded-xl border bg-card focus:ring-2 outline-none px-3 text-sm
                   ${formErrors.phone1 ? "border-destructive focus:border-destructive focus:ring-destructive/20" : "border-border focus:border-primary focus:ring-primary/20"}`}
               />
@@ -374,10 +387,17 @@ export default function RepresentativesPage() {
               <label className="text-sm font-semibold text-foreground">رقم الهاتف الثاني (اختياري)</label>
               <input
                 value={form.phone2}
-                onChange={(e) => setForm((f) => ({ ...f, phone2: e.target.value }))}
+                onChange={(e) => {
+                  setForm((f) => ({ ...f, phone2: e.target.value }));
+                  setFormErrors((p) => ({ ...p, phone2: undefined }));
+                }}
                 placeholder="01xxxxxxxxx"
-                className="mt-2 w-full h-11 rounded-xl border border-border bg-card focus:ring-2 focus:border-primary focus:ring-primary/20 outline-none px-3 text-sm"
+                inputMode="numeric"
+                maxLength={11}
+                className={`mt-2 w-full h-11 rounded-xl border bg-card focus:ring-2 outline-none px-3 text-sm
+                  ${formErrors.phone2 ? "border-destructive focus:border-destructive focus:ring-destructive/20" : "border-border focus:border-primary focus:ring-primary/20"}`}
               />
+              {formErrors.phone2 && <p className="text-xs text-destructive mt-1.5">{formErrors.phone2}</p>}
             </div>
 
             <div>
@@ -431,7 +451,10 @@ export default function RepresentativesPage() {
           </div>
 
           <div className="mt-6">
-            <h4 className="text-sm font-bold text-foreground mb-3">الصور والمستندات</h4>
+            <div className="flex items-baseline justify-between mb-3">
+              <h4 className="text-sm font-bold text-foreground">الصور والمستندات</h4>
+              <span className="text-xs text-muted-foreground">JPG, PNG أو WEBP — حد أقصى {MAX_IMAGE_SIZE_MB} ميجابايت</span>
+            </div>
             <div className="grid md:grid-cols-3 gap-4">
               <FileInputPreview
                 label="الصورة الشخصية"
@@ -717,6 +740,7 @@ function FileInputPreview({
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!file) {
@@ -730,7 +754,20 @@ function FileInputPreview({
 
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
-    onChange(f || null);
+    if (!f) {
+      setError(null);
+      onChange(null);
+      return;
+    }
+    const validationError = validateImageFile(f);
+    if (validationError) {
+      setError(validationError);
+      onChange(null);
+      e.target.value = "";
+      return;
+    }
+    setError(null);
+    onChange(f);
   };
 
   const displayUrl = previewUrl || existingUrl || undefined;
@@ -742,13 +779,15 @@ function FileInputPreview({
         <button
           type="button"
           onClick={() => inputRef.current?.click()}
-          className="h-11 px-4 rounded-xl border border-dashed border-border bg-secondary text-xs font-semibold text-muted-foreground hover:border-primary hover:text-primary transition flex items-center gap-2"
+          className={`h-11 px-4 rounded-xl border border-dashed bg-secondary text-xs font-semibold transition flex items-center gap-2
+            ${error ? "border-destructive text-destructive" : "border-border text-muted-foreground hover:border-primary hover:text-primary"}`}
         >
           <ImagePlus className="h-4 w-4" /> {displayUrl ? "تغيير الصورة" : "رفع صورة"}
         </button>
         {displayUrl && <img src={displayUrl} alt={label} className="h-11 w-11 rounded-lg object-cover border border-border" />}
       </div>
-      <input ref={inputRef} type="file" accept="image/*" onChange={handleFile} className="hidden" />
+      {error && <p className="text-xs text-destructive mt-1.5">{error}</p>}
+      <input ref={inputRef} type="file" accept="image/jpeg,image/png,image/webp" onChange={handleFile} className="hidden" />
     </div>
   );
 }

@@ -39,6 +39,48 @@ export function formatCountry(country: string | null): { flag: string; name: str
 }
 
 /* ------------------------------------------------------------------ */
+/*  Validation helpers                                                  */
+/* ------------------------------------------------------------------ */
+
+// أرقام موبايل مصرية: 01 + (0|1|2|5) + 8 أرقام = 11 رقم بالظبط
+const EG_PHONE_REGEX = /^01[0125][0-9]{8}$/;
+
+export function validatePhone(phone: string): string | null {
+  const trimmed = phone.trim();
+  if (!trimmed) return "رقم الهاتف مطلوب";
+  if (!EG_PHONE_REGEX.test(trimmed)) return "رقم الهاتف لازم يكون رقم مصري صحيح (01xxxxxxxxx)";
+  return null;
+}
+
+export function validateOptionalPhone(phone: string): string | null {
+  const trimmed = phone.trim();
+  if (!trimmed) return null; // اختياري
+  if (!EG_PHONE_REGEX.test(trimmed)) return "رقم الهاتف لازم يكون رقم مصري صحيح (01xxxxxxxxx)";
+  return null;
+}
+
+export function validateName(name: string): string | null {
+  const trimmed = name.trim();
+  if (!trimmed) return "الاسم مطلوب";
+  if (trimmed.length < 3) return "الاسم لازم يكون 3 حروف على الأقل";
+  if (trimmed.length > 100) return "الاسم طويل أوي (100 حرف كحد أقصى)";
+  return null;
+}
+
+export const MAX_IMAGE_SIZE_MB = 5;
+const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
+
+export function validateImageFile(file: File): string | null {
+  if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
+    return "نوع الملف لازم يكون صورة (JPG, PNG أو WEBP)";
+  }
+  if (file.size > MAX_IMAGE_SIZE_MB * 1024 * 1024) {
+    return `حجم الصورة أكبر من ${MAX_IMAGE_SIZE_MB} ميجابايت`;
+  }
+  return null;
+}
+
+/* ------------------------------------------------------------------ */
 /*  Read                                                                */
 /* ------------------------------------------------------------------ */
 
