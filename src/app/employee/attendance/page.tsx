@@ -357,33 +357,33 @@ export default function AttendancePage() {
   //
   // ✅ نفس فيكس المزامنة الإجبارية: لو end_break فشل (مثلاً "مفيش بريك
   // مفتوح أصلاً" لأي سبب)، برضه نعمل refresh عشان الواجهة تعكس الحقيقة.
-  async function handleEndBreak() {
-    if (breakSubmitting) return;
+async function handleEndBreak() {
+  if (breakSubmitting) return;
 
-    if (!isOnBreak) {
-      showToast("error", "مفيش بريك شغال دلوقتي عشان تنهيه");
-      return;
-    }
-
-    setBreakSubmitting(true);
-    try {
-      await apiEndBreak();
-      if (record) await refreshBreaks(record.id);
-      setBreakElapsedSec(0);
-      showToast("success", `انتهت البريك الساعة ${time}`);
-    } catch (err) {
-      if (record) {
-        try {
-          await refreshBreaks(record.id);
-        } catch {
-          // تجاهل فشل الـ refresh نفسه
-        }
-      }
-      showToast("error", err instanceof Error ? err.message : "تعذر إنهاء البريك");
-    } finally {
-      setBreakSubmitting(false);
-    }
+  if (!isOnBreak) {
+    showToast("error", "مفيش بريك شغال دلوقتي عشان تنهيه");
+    return;
   }
+
+  setBreakSubmitting(true);
+  try {
+    await apiEndBreak();
+    if (record) await refreshBreaks([record.id]);
+    setBreakElapsedSec(0);
+    showToast("success", `انتهت البريك الساعة ${time}`);
+  } catch (err) {
+    if (record) {
+      try {
+        await refreshBreaks([record.id]);
+      } catch {
+        // تجاهل فشل الـ refresh نفسه
+      }
+    }
+    showToast("error", err instanceof Error ? err.message : "تعذر إنهاء البريك");
+  } finally {
+    setBreakSubmitting(false);
+  }
+}
 
   const todayStatus = record?.status ?? null;
 
