@@ -1,5 +1,5 @@
 "use client";
-
+import { ConfirmProvider } from "@/components/confirm-dialog";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ManagerSidebar } from "@/components/manager/sidebar";
@@ -56,7 +56,9 @@ export default function ManagerLayout({ children }: { children: React.ReactNode 
       <div className="flex min-w-0 flex-1 flex-col">
         <ManagerTopbar onToggleSidebar={() => setMobileOpen((v) => !v)} />
         <main className="flex-1 px-6 py-6 lg:px-8 lg:py-8">
-          {children}
+           <ConfirmProvider>
+    {children}
+  </ConfirmProvider>
         </main>
       </div>
     </div>
