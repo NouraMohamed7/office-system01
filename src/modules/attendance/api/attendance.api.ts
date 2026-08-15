@@ -291,6 +291,36 @@ export async function getAttendanceToday(): Promise<AttendanceTodayRow[]> {
 }
 
 /**
+ * ✅ مؤكد فعليًا من الباك (مش افتراض): عمود status في الـ view دي بيرجّع
+ * "on_work" أو "break" وقت ما المستخدم شغال/في استراحة — ده هو مصدر
+ * الحقيقة الرسمي لحالة البريك، مش استنتاج من جدول breaks. الاعتماد على
+ * breaks لوحده كان بيفشل في حالة بريك قديم فاضل مفتوح من يوم/صف سابق
+ * (مش هيظهر في breaks بتاعة اليوم بس)، فالواجهة كانت شايفة isOnBreak=false
+ * بينما الباك فعليًا رافض start_break برسالة "لديك استراحة قائمة بالفعل".
+ * الحل: نعتمد على الصف ده كمصدر الحقيقة الوحيد للحالة، وجدول breaks
+ * نستخدمه بس لعرض التفاصيل/الإجمالي.
+ */
+export interface MyTodayStatusRow {
+  users_id: string;
+  name: string;
+  check_in_at: string | null;
+  check_out_at: string | null;
+  late_minutes: number | null;
+  status: string | null;
+}
+
+export async function getMyTodayStatusRow(): Promise<MyTodayStatusRow | null> {
+  const userId = await getAuthUserId();
+  const { data, error } = await supabase
+    .from("attendance_today")
+    .select("*")
+    .eq("users_id", userId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return (data as MyTodayStatusRow) ?? null;
+}
+
+/**
  * كل صفوف جدول attendance الفعلية النهاردة (مش الـ view) — لازمة لربط
  * attendance_id بالـ users_id عشان نجمع بريكات كل موظف بالاسم الصح.
  */

@@ -21,6 +21,7 @@ import {
   submitLeave as apiSubmitLeave,
   editLeave as apiEditLeave,
   removeLeave as apiRemoveLeave,
+  getMyTodayStatusRow,
   type AttendanceRecord,
   type MonthSummary,
   type BreakRecord,
@@ -50,11 +51,13 @@ function isLeaveStarted(startDate: string): boolean {
   return startDate <= new Date().toISOString().slice(0, 10);
 }
 
-// بندور على أحدث بريك مفتوح (end_time === null). لو فيه orphan قديم
-// (بريك فاضل مفتوح من باگ سابق في end_break)، بنتجاهله ونستخدم الأحدث.
-// ده المصدر الوحيد لمعرفة هل الموظف في بريك دلوقتي — مفيش أي مصدر تاني
-// (زي attendance_today.status، اللي ثبت إنه بيرجّع حالة الحضور مش حالة
-// البريك، فاتشال خالص من هنا).
+// بندور على أحدث بريك مفتوح (end_time === null) — مستخدمة بس لعرض توقيت
+// بداية البريك الحالي (عشان نحسب breakElapsedSec)، مش لتحديد isOnBreak.
+// مصدر isOnBreak الرسمي هو attendance_today.status (شوف تحت) — مؤكد من
+// الباك إنه بيرجّع "on_work"/"break". الاعتماد على جدول breaks بس كان
+// بيفشل في حالة بريك قديم فاضل مفتوح من صف/يوم سابق (مش هيظهر في
+// breaks بتاعة اليوم)، فالواجهة كانت شايفة isOnBreak=false بينما الباك
+// فعليًا رافض start_break برسالة "لديك استراحة قائمة بالفعل".
 function getCurrentOpenBreak(breaks: BreakRecord[]): BreakRecord | null {
   const open = breaks.filter((b) => b.end_time === null);
   if (open.length === 0) return null;
@@ -125,6 +128,9 @@ export default function AttendancePage() {
   const [breaks, setBreaks] = useState<BreakRecord[]>([]);
   const [breakSubmitting, setBreakSubmitting] = useState(false);
   const [breakElapsedSec, setBreakElapsedSec] = useState(0);
+  // ✅ مصدر الحقيقة الرسمي لحالة البريك (on_work / break)، مؤكد من الباك
+  // إنه بيرجّع من attendance_today.status. null لحد أول قراءة.
+  const [todayBreakStatus, setTodayBreakStatus] = useState<string | null>(null);
   // كل الـ attendance_id بتاعت صفوف اليوم كلها (مش بس آخر صف) — لازمة عشان
   // refreshBreaks تقدر تجيب بريكات أي صف قديم النهاردة برضه.
   const [todayAttendanceIds, setTodayAttendanceIds] = useState<number[]>([]);
@@ -159,6 +165,17 @@ export default function AttendancePage() {
   // (خصوصًا السبب لو فقرة طويلة) بدون أي قطع/truncate.
   const [detailsLeave, setDetailsLeave] = useState<LeaveRequest | null>(null);
 
+  // ✅ قراءة حالة البريك من attendance_today.status — مؤكد من الباك إنه
+  // بيرجّع "on_work"/"break" (مش حالة الحضور زي ما كان مفترض غلط قبل كده).
+  const refreshTodayBreakStatus = useCallback(async () => {
+    try {
+      const row = await getMyTodayStatusRow();
+      setTodayBreakStatus(row?.status ?? null);
+    } catch {
+      // تجاهل — هنرجع نعتمد على breaks كـ fallback أخير لو فشل الـ fetch
+    }
+  }, []);
+
   const [leaveOpen, setLeaveOpen] = useState(false);
   const [editingLeaveId, setEditingLeaveId] = useState<number | null>(null);
   const [leaveForm, setLeaveForm] = useState<{
@@ -182,11 +199,14 @@ export default function AttendancePage() {
     };
   }, []);
 
-  // مصدر الحقيقة الوحيد لحالة البريك: جدول breaks (فيه صف end_time===null
-  // ولا لأ). مفيش أي fallback على attendance_today.status — اتأكد فعليًا
-  // إنه بيرجّع حالة الحضور مش حالة البريك، فاتشال بالكامل.
   const currentBreak = getCurrentOpenBreak(breaks);
-  const isOnBreak = !!currentBreak;
+  const inferredOnBreak = !!currentBreak;
+  // ✅ مصدر الحقيقة الرسمي: attendance_today.status، مؤكد من الباك.
+  // fallback آمن على استنتاج breaks بس لو الـ status لسه ما اتقراش
+  // (null) أو رجع قيمة غير متوقعة — عشان الواجهة متفضلش عالقة لو فشل
+  // الـ fetch للحالة لأي سبب.
+  const isOnBreak =
+    todayBreakStatus === "break" ? true : todayBreakStatus === "on_work" ? false : inferredOnBreak;
 
   useEffect(() => {
     if (!isOnBreak || !currentBreak) return;
@@ -255,6 +275,8 @@ export default function AttendancePage() {
           const summaryMap = await getBreaksSummaryByAttendanceIds(hist.map((h) => h.id));
           setHistoryBreakMinutes(summaryMap);
         }
+
+        await refreshTodayBreakStatus();
       } catch (err) {
         showToast("error", err instanceof Error ? err.message : "حصل خطأ في تحميل بيانات الحضور");
       } finally {
@@ -267,14 +289,16 @@ export default function AttendancePage() {
 
   // ✅ realtime على جدول breaks — دي فانكشن موثّقة وجاهزة من الباك
   // (نفس اللي مستخدمة في صفحة المدير) وكانت موجودة بالفعل في attendance.api
-  // بس مش موصولة هنا. بتحدّث الحالة فورًا لحظة ما أي صف break يتغيّر، بدل
-  // ما نعتمد بالكامل على refetch يدوي بعد كل أكشن (اللي ممكن يحصل فيه
-  // race condition لو حصل تغيير من مصدر تاني في نفس الوقت).
+  // بس مش موصولة هنا. بتحدّث تفاصيل/إجمالي البريك فورًا لحظة ما أي صف
+  // breaks يتغيّر، وبرضه بتعيد قراءة attendance_today.status عشان الحالة
+  // (on_work/break) تفضل متزامنة مع الباك دايمًا، حتى لو التغيير حصل من
+  // مصدر تاني (مثلاً تبويب/جلسة تانية لنفس المستخدم).
   useEffect(() => {
     const unsubscribe = subscribeToBreaks(async () => {
       try {
         const ids = await refreshTodayAttendanceIds();
         await refreshBreaks(ids);
+        await refreshTodayBreakStatus();
       } catch {
         // تجاهل فشل الـ refresh التلقائي — الأكشنات نفسها (start/end break)
         // بترجّع refresh يدوي بعدها أصلاً فمش هتفضل الواجهة واقفة غلط.
@@ -342,16 +366,19 @@ export default function AttendancePage() {
     setBreakSubmitting(true);
     try {
       await apiStartBreak();
-      // ✅ مصدر الحقيقة الوحيد: refetch كامل لجدول breaks. شكل الـ data
-      // الراجعة من الـ RPC نفسها مش موثّق، فمنعتمدش عليها.
+      // ✅ refetch كامل: breaks للتفاصيل/الإجمالي + attendance_today.status
+      // كمصدر الحقيقة للحالة (on_work/break). شكل الـ data الراجعة من
+      // start_break نفسها مش موثّق، فمنعتمدش عليها.
       const ids = await refreshTodayAttendanceIds();
       await refreshBreaks(ids);
+      await refreshTodayBreakStatus();
       setBreakElapsedSec(0);
       showToast("success", `بدأت البريك الساعة ${time}`);
     } catch (err) {
       try {
         const ids = await refreshTodayAttendanceIds();
         await refreshBreaks(ids);
+        await refreshTodayBreakStatus();
       } catch {
         // تجاهل فشل الـ refresh نفسه — التوست تحت هيوضح المشكلة الأصلية
       }
@@ -372,16 +399,19 @@ export default function AttendancePage() {
     setBreakSubmitting(true);
     try {
       await apiEndBreak();
-      // ✅ نفس المبدأ: refetch كامل. بنستخدم todayAttendanceIds (كل صفوف
-      // اليوم) مش صف واحد بس — عشان نغطي حالة أكتر من check-in في نفس اليوم.
+      // ✅ نفس المبدأ: refetch كامل لـ breaks + attendance_today.status.
+      // بنستخدم todayAttendanceIds (كل صفوف اليوم) مش صف واحد بس — عشان
+      // نغطي حالة أكتر من check-in في نفس اليوم.
       const ids = todayAttendanceIds.length > 0 ? todayAttendanceIds : await refreshTodayAttendanceIds();
       await refreshBreaks(ids);
+      await refreshTodayBreakStatus();
       setBreakElapsedSec(0);
       showToast("success", `انتهت البريك الساعة ${time}`);
     } catch (err) {
       try {
         const ids = todayAttendanceIds.length > 0 ? todayAttendanceIds : await refreshTodayAttendanceIds();
         await refreshBreaks(ids);
+        await refreshTodayBreakStatus();
       } catch {
         // تجاهل فشل الـ refresh نفسه
       }
