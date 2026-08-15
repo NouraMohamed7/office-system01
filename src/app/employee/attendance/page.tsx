@@ -26,7 +26,7 @@ import {
   getMyMonthSummary,
   startBreak as apiStartBreak,
   endBreak as apiEndBreak,
-  getBreaksByAttendanceId,
+  getMyBreaksToday,
   getBreaksSummaryByAttendanceIds,
   type AttendanceRecord,
   type MonthSummary,
@@ -183,8 +183,17 @@ export default function AttendancePage() {
         setHistory(hist);
         setMonthSummary(summary);
 
+        // 🔧 فيكس جوهري: كانت هنا getBreaksByAttendanceId(todayRec.id) —
+        // يعني بريكات سجل attendance واحد بس (اللي getMyAttendanceToday
+        // رجّعه). لو فيه أكتر من صف attendance لنفس اليوزر/اليوم (سيناريو
+        // حقيقي حصل فعليًا)، والبريك المفتوح متسجل على صف *تاني*، الصفحة
+        // كانت "مش شايفة" إن فيه بريك مفتوح خالص — حتى لو المستخدم بالفعل
+        // في بريك وبيرفض start_break برسالة "لديك استراحة قائمة بالفعل".
+        // getMyBreaksToday بتجيب كل سجلات attendance بتاريخ اليوم لليوزر
+        // الحالي، وتجيب كل البريكات المرتبطة بيهم كلهم مع بعض — بغض النظر
+        // عن attendance_id بتاع أي بريك.
         if (todayRec) {
-          const todayBreaks = await getBreaksByAttendanceId(todayRec.id);
+          const todayBreaks = await getMyBreaksToday();
           setBreaks(todayBreaks);
         }
 
@@ -247,8 +256,12 @@ export default function AttendancePage() {
   const hasCheckedIn = !!record?.check_in_at;
   const hasCheckedOut = !!record?.check_out_at;
 
-  async function refreshBreaks(attendanceId: number) {
-    const fresh = await getBreaksByAttendanceId(attendanceId);
+  // 🔧 فيكس: refreshBreaks كانت بتاخد attendanceId وتجيب بريكات سجل واحد
+  // بس (getBreaksByAttendanceId). بقت دلوقتي بتستخدم getMyBreaksToday
+  // عشان تفضل متسقة مع التحميل الأول للصفحة — مفيش داعي لباراميتر أصلاً
+  // لأن الدالة الجديدة بتجيب بيانات اليوزر الحالي مباشرة.
+  async function refreshBreaks() {
+    const fresh = await getMyBreaksToday();
     setBreaks(fresh);
   }
 
@@ -308,7 +321,7 @@ export default function AttendancePage() {
     setBreakSubmitting(true);
     try {
       await apiStartBreak();
-      if (record) await refreshBreaks(record.id);
+      await refreshBreaks();
       setBreakElapsedSec(0);
       showToast("success", `بدأت البريك الساعة ${time}`);
     } catch (err) {
@@ -316,6 +329,11 @@ export default function AttendancePage() {
         "error",
         err instanceof Error ? err.message : "تعذر بدء البريك",
       );
+      // 🔧 فيكس: حتى لو apiStartBreak رمى إيرور (نادر بعد الفيكس الاستباقي
+      // في startBreak، لكن ممكن يحصل في حالات edge)، نعمل refresh للبريكات
+      // على أي حال — ممكن يكون فيه بريك مفتوح فعلاً محتاجين نعرضه في الـ UI
+      // حتى لو الـ toast عرض رسالة خطأ.
+      await refreshBreaks().catch(() => {});
     } finally {
       setBreakSubmitting(false);
     }
@@ -326,7 +344,7 @@ export default function AttendancePage() {
     setBreakSubmitting(true);
     try {
       await apiEndBreak();
-      if (record) await refreshBreaks(record.id);
+      await refreshBreaks();
       setBreakElapsedSec(0);
       showToast("success", `انتهت البريك الساعة ${time}`);
     } catch (err) {

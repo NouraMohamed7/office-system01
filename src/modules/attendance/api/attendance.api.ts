@@ -409,6 +409,33 @@ export async function getBreaksByAttendanceIds(
   return data ?? [];
 }
 
+// 🔧 فيكس جوهري: قبل كده كانت صفحة الموظف بتجيب البريكات بـ
+// getBreaksByAttendanceId(record.id) — يعني بريكات سجل attendance واحد
+// بس (اللي getMyAttendanceToday رجّعه). المشكلة: لو فيه أكتر من صف
+// attendance لنفس اليوزر/اليوم (السيناريو اللي شرحناه قبل كده)، والبريك
+// المفتوح فعليًا متسجل على صف *تاني* غير اللي بيتعرض دلوقتي، الصفحة
+// هتفضل "مش شايفة" إن فيه بريك مفتوح — حتى لو كل فيكسات startBreak/
+// endBreak شغالة صح جوه الـ API، لأن مصدر الداتا اللي الـ UI بيتفرّع
+// منه (state breaks في الصفحة) أصلاً مبني على attendance_id غلط من البداية.
+//
+// الحل: getMyBreaksToday بتجيب كل سجلات attendance بتاريخ اليوم لليوزر
+// الحالي (مش سجل واحد بس)، وتجيب كل البريكات المرتبطة بيهم كلهم مع بعض.
+// كده الـ UI بيشوف أي بريك مفتوح لليوزر ده النهاردة بغض النظر عن
+// attendance_id بتاعه.
+export async function getMyBreaksToday(): Promise<BreakRecord[]> {
+  const userId = await getCurrentUserId();
+
+  const { data: todaysAttendance, error: attErr } = await supabase
+    .from("attendance")
+    .select("id")
+    .eq("users_id", userId)
+    .eq("attendance_date", todayISODate());
+  if (attErr) throw attErr;
+
+  const ids = (todaysAttendance ?? []).map((r) => r.id as number);
+  return getBreaksByAttendanceIds(ids);
+}
+
 // دالة موجودة وشغالة — بترجع Map<attendance_id, إجمالي الدقايق> لكل سجلات
 // الـ ids الممررة، بضمّ كل البريكات المرتبطة بكل سجل (مش بريك واحد بس).
 export async function getBreaksSummaryByAttendanceIds(
@@ -707,26 +734,17 @@ async function getOpenBreak(attendanceId: number): Promise<BreakRecord | null> {
 async function getOpenBreakForUserToday(
   userId: string,
 ): Promise<BreakRecord | null> {
-  const { data: todaysAttendance, error: attErr } = await supabase
-    .from("attendance")
-    .select("id")
-    .eq("users_id", userId)
-    .eq("attendance_date", todayISODate());
-  if (attErr) throw attErr;
-
-  const ids = (todaysAttendance ?? []).map((r) => r.id as number);
-  if (ids.length === 0) return null;
-
-  const { data, error } = await supabase
-    .from("breaks")
-    .select("*")
-    .in("attendance_id", ids)
-    .is("end_time", null)
-    .order("start_time", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (error) throw error;
-  return data;
+  // ملحوظة: userId هنا مش مستخدم مباشرة لأن getMyBreaksToday بتاخده من
+  // getCurrentUserId() داخليًا بنفسها — سايبين الـ param عشان مانغيّرش
+  // توقيع الدالة في كل الأماكن اللي بتستدعيها.
+  void userId;
+  const allBreaksToday = await getMyBreaksToday();
+  const openBreaks = allBreaksToday.filter((b) => b.end_time === null);
+  if (openBreaks.length === 0) return null;
+  // الأحدث بدأ لو فيه أكتر من واحد مفتوح (حالة نادرة)
+  return openBreaks.reduce((latest, b) =>
+    b.start_time > latest.start_time ? b : latest,
+  );
 }
 
 // ============================================================
@@ -734,6 +752,16 @@ async function getOpenBreakForUserToday(
 // ============================================================
 
 export async function startBreak(): Promise<BreakRecord> {
+  // 🔧 فيكس اختياري (تحسين تجربة/كونسول فقط، مش تعديل منطقي): تشيك استباقي
+  // قبل ما ننادي الـ RPC خالص. لو فيه بريك مفتوح بالفعل لليوزر النهاردة،
+  // نرجعه على طول من غير ما نعمل request بيفشل بـ 400 (اللي بيظهر كـ error
+  // أحمر في كونسول المتصفح حتى لو اتمسك بالـ catch). النتيجة النهائية
+  // (البريك المرجّع) هي نفسها بالظبط، بس من غير ما نضطر نعدي على مسار
+  // الـ error handling لو مش لازم.
+  const preUserId = await getCurrentUserId();
+  const preExistingOpenBreak = await getOpenBreakForUserToday(preUserId);
+  if (preExistingOpenBreak) return preExistingOpenBreak;
+
   try {
     const { data, error } = await supabase.rpc("start_break");
     if (error) throw error;
