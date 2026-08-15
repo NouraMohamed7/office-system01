@@ -1,97 +1,54 @@
 // src/modules/attendance/api/attendance.api.ts
+/**
+ * كل نداءات الباك (Supabase) الخاصة بالحضور والانصراف والبريك والإجازات.
+ *
+ * ⚠️ القاعدة الأساسية لكل حاجة في الملف ده: مفيش أي دالة هنا بتعمل حاجة
+ * الباك مش بيدعمها فعليًا. الجداول والـ RPCs المستخدمة هنا هي بالظبط اللي
+ * موثقة في Supabase API docs بتاعت المشروع:
+ *   - جداول: attendance, attendance_today (view), attendance_settings, breaks, leaves
+ *   - RPCs: check_in, check_out, start_break, end_break, request_leave,
+ *           update_leave, delete_leave, end_leave_early, check_leave_status
+ *
+ * ⚠️ عدّل مسار عميل supabase تحت لو مختلف عندك في المشروع.
+ */
 import { supabase } from "@/lib/supabase/client";
-import type {
-  AttendanceStatus,
-  LeaveType,
-  LeaveStatus as LeaveStatusFull,
-} from "@/lib/constants";
-import type { LeaveRequest } from "@/types/attendance";
+import type { AttendanceStatus, LeaveStatus, LeaveType, LeaveRequest } from "@/types/attendance";
 
 // ============================================================
 // Types
 // ============================================================
 
-/** صف من الـ view attendance_today (للمدير — كل موظفين اليوم) */
-export type AttendanceTodayRow = {
-  users_id: string;
-  name: string;
-  check_in_at: string | null;
-  check_out_at: string | null;
-  late_minutes: number | null;
-  status: string | null;
-};
-
-/** صف من جدول attendance (سجل يوم واحد لموظف واحد) */
-export type AttendanceRecord = {
+/** صف كامل من جدول public.attendance */
+export interface AttendanceRecord {
   id: number;
   created_at: string;
   updated_at: string;
   users_id: string;
   late_minutes: number;
   total_work_minutes: number | null;
-  status: AttendanceStatus; // public.attendance_type
+  status: AttendanceStatus;
   check_in_at: string;
   check_out_at: string | null;
-  attendance_date: string; // YYYY-MM-DD
-};
+  attendance_date: string;
+}
 
-export type MonthSummary = {
-  presentDays: number;
-  absentDays: number;
-  lateDays: number;
-  totalDays: number;
-};
+/**
+ * صف من الـ view public.attendance_today — بيانات اليوم لكل الموظفين
+ * دفعة واحدة. كل الحقول Optional/nullable في التوثيق، يعني على الأرجح
+ * الـ view دي LEFT JOIN من الموظفين على attendance بتاع النهاردة —
+ * فالموظف اللي لسه ماسجلش حضور بيظهر برضه بس بقيم null.
+ */
+export interface AttendanceTodayRow {
+  users_id: string;
+  name: string;
+  check_in_at: string | null;
+  check_out_at: string | null;
+  late_minutes: number | null;
+  status: AttendanceStatus | null;
+}
 
-/** ملخص الشركة كلها للشهر الحالي (لصفحة المدير) */
-export type CompanyMonthSummary = {
-  avgPresentDays: number;
-  avgAbsentDays: number;
-  compliancePct: number;
-  totalWorkHours: number;
-};
-
-/** صف من جدول attendance_settings (إعدادات الحضور لكل فرع) */
-export type AttendanceSettings = {
-  id: number;
-  created_at: string;
-  updated_at: string;
-  late_tolerance_minutes: number;
-  branch_id: number;
-  effective_from: string; // YYYY-MM-DD
-  effective_to: string | null; // YYYY-MM-DD
-  start_time: string; // HH:MM:SS
-  end_time: string; // HH:MM:SS
-  cutoff_time: string; // HH:MM:SS
-};
-
-export type AttendanceSettingsInput = {
-  branch_id: number;
-  late_tolerance_minutes: number;
-  effective_from: string;
-  effective_to?: string | null;
-  start_time: string;
-  end_time: string;
-  cutoff_time: string;
-};
-
-/** حالة طلب الإجازة اللي المدير بيقدر يحطها عبر check_leave_status (public.leave_status) */
-export type LeaveStatus = Extract<
-  LeaveStatusFull,
-  "accepted" | "rejected" | "cancelled"
->;
-
-/** فلاتر سجل الحضور (مستخدمة في getAttendanceHistory) */
-export type AttendanceHistoryFilters = {
-  userId?: string;
-  from?: string; // YYYY-MM-DD
-  to?: string; // YYYY-MM-DD
-  status?: string;
-  page?: number;
-  pageSize?: number;
-};
-
-/** صف من جدول breaks (استراحة واحدة مرتبطة بسجل حضور معين) */
-export type BreakRecord = {
+/** صف من جدول public.breaks */
+export interface BreakRecord {
   id: number;
   created_at: string;
   updated_at: string;
@@ -99,555 +56,370 @@ export type BreakRecord = {
   start_time: string;
   end_time: string | null;
   break_mins: number | null;
-};
+}
+
+/** صف من جدول public.attendance_settings */
+export interface AttendanceSettings {
+  id: number;
+  created_at: string;
+  updated_at: string;
+  late_tolerance_minutes: number;
+  branch_id: number;
+  effective_from: string;
+  effective_to: string | null;
+  start_time: string;
+  end_time: string;
+  cutoff_time: string;
+}
+
+export type AttendanceSettingsInput = Omit<AttendanceSettings, "id" | "created_at" | "updated_at">;
+
+/** ملخص شهري محسوب من صفوف attendance بتاعة الموظف الحالي في الشهر ده.
+ * مفيش RPC أو view جاهزة لده في الباك، فبنجيب صفوف الشهر ونحسب العد هنا. */
+export interface MonthSummary {
+  totalDays: number;
+  presentDays: number;
+  absentDays: number;
+  lateDays: number;
+  onLeaveDays: number;
+}
 
 // ============================================================
 // Helpers
 // ============================================================
 
-async function getCurrentUserId(): Promise<string> {
-  const { data, error } = await supabase.auth.getUser();
-  if (error) throw error;
-
-  if (!data.user) throw new Error("مفيش مستخدم مسجل دخول حاليًا");
-  return data.user.id;
-}
-
-function todayISODate(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function currentMonthRange(): { firstDay: string; lastDay: string } {
-  const now = new Date();
-  const firstDay = new Date(now.getFullYear(), now.getMonth(), 1)
-    .toISOString()
-    .slice(0, 10);
-  const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0)
-    .toISOString()
-    .slice(0, 10);
-  return { firstDay, lastDay };
-}
-
-/** دقايق البريك الفعلية لسجل واحد — بيفضّل break_mins الجاهز من الباك،
- *  ولو مش موجود (سجل قديم/edge case) بيحسبه من الفرق بين start/end. لو
- *  البريك لسه مفتوح (end_time = null) بيرجع null عشان نميّزه عن "صفر". */
-function breakDurationMinutes(b: BreakRecord): number | null {
-  if (b.break_mins !== null) return b.break_mins;
-  if (!b.end_time) return null; // بريك لسه مفتوح
-  const mins = Math.round(
-    (new Date(b.end_time).getTime() - new Date(b.start_time).getTime()) / 60000,
-  );
-  return mins > 0 ? mins : 0;
-}
-
-/** بياخد أحدث سجل من مجموعة سجلات (بالمقارنة بـ check_in_at)، عشان نستخدمها
- *  في أي مكان محتاج "آخر سجل حضور" بدل ما نعتمد على الداتابيز ترجع صف واحد
- *  بالظبط (اللي مش مضمون، زي ما موثق في dedupedByUser بصفحة المدير). */
-function pickLatestByCheckIn<T extends { check_in_at: string | null }>(
-  rows: T[],
-): T | null {
-  if (rows.length === 0) return null;
-  let latest = rows[0];
-  for (const r of rows) {
-    if ((r.check_in_at ?? "") >= (latest.check_in_at ?? "")) latest = r;
-  }
-  return latest;
-}
-
-// ============================================================
-// Manager: كل موظفين اليوم (attendance_today view)
-// ============================================================
-
-export async function getAttendanceToday(filters?: {
-  userIds?: string[];
-}): Promise<AttendanceTodayRow[]> {
-  let query = supabase.from("attendance_today").select("*");
-
-  if (filters?.userIds && filters.userIds.length > 0) {
-    query = query.in("users_id", filters.userIds);
-  }
-
-  const { data, error } = await query;
-  if (error) throw error;
-  return data ?? [];
-}
-
-// ============================================================
-// Manager: سجلات جدول attendance الخام لليوم الحالي (فيها id)
-// محتاجينها عشان نربط كل موظف بسجل الحضور بتاعه اليوم ده وبالتالي
-// بجدول breaks (اللي بياخد attendance_id مش users_id).
-// ============================================================
-
-export async function getTodayAttendanceRecords(): Promise<AttendanceRecord[]> {
-  const { data, error } = await supabase
-    .from("attendance")
-    .select("*")
-    .eq("attendance_date", todayISODate());
-  if (error) throw error;
-  return (data ?? []) as AttendanceRecord[];
-}
-
-// ============================================================
-// Manager: سجل الحضور لأي موظف (أو كل الموظفين) بفلاتر ورقم صفحة
-// ============================================================
-
-export async function getAttendanceHistory(
-  filters: AttendanceHistoryFilters = {},
-): Promise<{ data: AttendanceRecord[]; count: number }> {
-  let query = supabase.from("attendance").select("*", { count: "exact" });
-
-  if (filters.userId) query = query.eq("users_id", filters.userId);
-  if (filters.from) query = query.gte("attendance_date", filters.from);
-  if (filters.to) query = query.lte("attendance_date", filters.to);
-  if (filters.status) query = query.eq("status", filters.status);
-
-  const page = filters.page ?? 1;
-  const pageSize = filters.pageSize ?? 20;
-  const start = (page - 1) * pageSize;
-  const end = start + pageSize - 1;
-
-  const { data, error, count } = await query
-    .order("attendance_date", { ascending: false })
-    .range(start, end);
-
-  if (error) throw error;
-  return { data: (data ?? []) as AttendanceRecord[], count: count ?? 0 };
-}
-
-// ============================================================
-// Manager: ملخص الشركة كلها للشهر الحالي
-// ============================================================
-
-export async function getCompanyMonthSummary(): Promise<CompanyMonthSummary> {
-  const { firstDay, lastDay } = currentMonthRange();
-
-  const { data, error } = await supabase
-    .from("attendance")
-    .select("*")
-    .gte("attendance_date", firstDay)
-    .lte("attendance_date", lastDay);
-
-  if (error) throw error;
-  const rows = (data ?? []) as AttendanceRecord[];
-
-  if (rows.length === 0) {
-    return {
-      avgPresentDays: 0,
-      avgAbsentDays: 0,
-      compliancePct: 0,
-      totalWorkHours: 0,
-    };
-  }
-
-  const byUser = new Map<string, { present: number; absent: number }>();
-  let presentCount = 0;
-  let totalMinutes = 0;
-
-  for (const r of rows) {
-    const entry = byUser.get(r.users_id) ?? { present: 0, absent: 0 };
-    const attended = r.status === "present" || r.status === "late";
-    if (attended) {
-      entry.present += 1;
-      presentCount += 1;
-    } else if (r.status === "absent") {
-      entry.absent += 1;
-    }
-    totalMinutes += r.total_work_minutes ?? 0;
-    byUser.set(r.users_id, entry);
-  }
-
-  const employeeCount = byUser.size || 1;
-  const totalPresent = Array.from(byUser.values()).reduce(
-    (s, v) => s + v.present,
-    0,
-  );
-  const totalAbsent = Array.from(byUser.values()).reduce(
-    (s, v) => s + v.absent,
-    0,
-  );
-
-  return {
-    avgPresentDays: Math.round((totalPresent / employeeCount) * 10) / 10,
-    avgAbsentDays: Math.round((totalAbsent / employeeCount) * 10) / 10,
-    compliancePct: Math.round((presentCount / rows.length) * 100),
-    totalWorkHours: Math.round(totalMinutes / 60),
-  };
-}
-
-// ============================================================
-// Employee: تسجيل حضور (RPC)
-// ============================================================
-
-export async function checkIn(): Promise<unknown> {
-  const { data, error } = await supabase.rpc("check_in");
-  if (error) throw error;
+function throwIfError<T>(data: T | null, error: { message: string } | null, fallbackMsg: string): T {
+  if (error) throw new Error(error.message || fallbackMsg);
+  if (data === null) throw new Error(fallbackMsg);
   return data;
 }
 
+async function getAuthUserId(): Promise<string> {
+  const { data, error } = await supabase.auth.getUser();
+  if (error || !data.user) throw new Error("تعذر التحقق من هوية المستخدم — سجل الدخول تاني");
+  return data.user.id;
+}
+
+function todayDateISO(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
 // ============================================================
-// Employee: حالة اليوم بتاعي
+// check_in / check_out (RPC — بدون أي باراميترز)
 // ============================================================
 
-// ✅ فيكس: كانت بتستخدم .maybeSingle() اللي بيرمي error (PGRST116) لو رجع
-// أكتر من صف واحد لنفس اليوم — وده سيناريو معترف بيه وموثق فعليًا في نفس
-// المشروع (نفس المشكلة موجودة ومتعالجة في صفحة المدير عبر dedupedByUser).
-// لو حصل هنا، الاستثناء كان بيوقف تحميل الصفحة كلها ويوهم الموظف إن حالته
-// "لم يسجل حضور" حتى لو هو بالفعل مسجل فعليًا. دلوقتي بنجيب كل صفوف اليوم
-// ونرجّع الأحدث بالمقارنة بـ check_in_at، بدون أي افتراض إن الداتابيز
-// هترجع صف واحد بالظبط.
+export async function checkIn(): Promise<void> {
+  const { error } = await supabase.rpc("check_in");
+  if (error) throw new Error(error.message);
+}
+
+export async function checkOut(): Promise<void> {
+  const { error } = await supabase.rpc("check_out");
+  if (error) throw new Error(error.message);
+}
+
+// ============================================================
+// جدول attendance — سجل الموظف الحالي
+// ============================================================
+
+/**
+ * آخر سجل حضور للمستخدم الحالي النهاردة (لو المستخدم عمل check-in أكتر
+ * من مرة النهاردة — بيرجع الأحدث). null لو مفيش تسجيل حضور اليوم خالص.
+ */
 export async function getMyAttendanceToday(): Promise<AttendanceRecord | null> {
-  const rows = await getMyTodayAttendanceRecords();
-  return pickLatestByCheckIn(rows);
+  const userId = await getAuthUserId();
+  const { data, error } = await supabase
+    .from("attendance")
+    .select("*")
+    .eq("users_id", userId)
+    .eq("attendance_date", todayDateISO())
+    .order("check_in_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return (data as AttendanceRecord) ?? null;
 }
 
-// ============================================================
-// ✅ جديد: كل سجلات اليوم بتاعت الموظف الحالي (مش بس الأحدث)
-// ============================================================
-//
-// ⚠️ السبب اللي خلانا محتاجين الدالة دي: لو المستخدم عمل check-in أكتر
-// من مرة في نفس اليوم (بيحصل فعليًا أثناء الاختبار، أو لو النظام بيسمح
-// بيه)، بيتعمل أكتر من صف في جدول attendance لنفس اليوم. getMyAttendanceToday
-// بترجع بس آخر صف (أحدث check_in_at). لو فيه بريك اتفتح من صف أقدم النهاردة
-// ولسه متقفلش (orphan)، وإحنا بنجيب البريكات بـ attendance_id بتاع آخر
-// صف بس، هنبقى عمالين نجيب صفر بريكات ونفتكر إن مفيش بريك مفتوح — بينما
-// الباك (اللي بيتحقق فعليًا على مستوى المستخدم مش الصف) شايف البريك المفتوح
-// ده وبيرفض start_break برسالة P0001 "لديك استراحة قائمة بالفعل". النتيجة:
-// الفرونت وشايف حالة مختلفة تمامًا عن الباك.
-//
-// الحل: نجيب *كل* صفوف اليوم بتاعت المستخدم (مش بس الأحدث)، ونجمع بريكات
-// كل الصفوف دي مع بعض، فمفيش بريك مفتوح يفضل مخفي عن الواجهة.
+/**
+ * كل صفوف الحضور بتاعة المستخدم الحالي النهاردة (مش بس الأحدث) — لازمة
+ * لتجميع بريكات أي صف قديم النهاردة (لو حصل أكتر من check-in بالغلط).
+ */
 export async function getMyTodayAttendanceRecords(): Promise<AttendanceRecord[]> {
-  const userId = await getCurrentUserId();
-
+  const userId = await getAuthUserId();
   const { data, error } = await supabase
     .from("attendance")
     .select("*")
     .eq("users_id", userId)
-    .eq("attendance_date", todayISODate());
-
-  if (error) throw error;
-  return (data ?? []) as AttendanceRecord[];
+    .eq("attendance_date", todayDateISO())
+    .order("check_in_at", { ascending: true });
+  if (error) throw new Error(error.message);
+  return (data as AttendanceRecord[]) ?? [];
 }
 
-// ============================================================
-// Employee: سجل الحضور السابق
-// ============================================================
-
-export async function getMyAttendanceHistory(
-  limit = 7,
-): Promise<AttendanceRecord[]> {
-  const userId = await getCurrentUserId();
-
+/** آخر N يوم من سجل حضور المستخدم الحالي (من غير النهاردة)، الأحدث الأول. */
+export async function getMyAttendanceHistory(days = 7): Promise<AttendanceRecord[]> {
+  const userId = await getAuthUserId();
   const { data, error } = await supabase
     .from("attendance")
     .select("*")
     .eq("users_id", userId)
-    .neq("attendance_date", todayISODate())
+    .lt("attendance_date", todayDateISO())
     .order("attendance_date", { ascending: false })
-    .limit(limit);
-
-  if (error) throw error;
-  return data ?? [];
+    .limit(days);
+  if (error) throw new Error(error.message);
+  return (data as AttendanceRecord[]) ?? [];
 }
 
-// ============================================================
-// Employee: ملخص الشهر (أيام حضور / غياب / تأخير)
-// ============================================================
-
+/**
+ * ملخص الشهر الحالي (أيام حضور/غياب/تأخير/إجازة) — محسوب من صفوف
+ * attendance الفعلية بتاعة المستخدم على الفرونت، لأن مفيش RPC/view جاهزة
+ * لده في الباك.
+ */
 export async function getMyMonthSummary(): Promise<MonthSummary> {
-  const userId = await getCurrentUserId();
-  const { firstDay, lastDay } = currentMonthRange();
+  const userId = await getAuthUserId();
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+  const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10);
 
   const { data, error } = await supabase
     .from("attendance")
-    .select("*")
+    .select("status")
     .eq("users_id", userId)
-    .gte("attendance_date", firstDay)
-    .lte("attendance_date", lastDay);
+    .gte("attendance_date", monthStart)
+    .lte("attendance_date", monthEnd);
+  if (error) throw new Error(error.message);
 
-  if (error) throw error;
-  const rows = (data ?? []) as AttendanceRecord[];
-
-  return {
-    presentDays: rows.filter((r) => r.status === "present").length,
-    absentDays: rows.filter((r) => r.status === "absent").length,
-    lateDays: rows.filter((r) => r.status === "late").length,
-    totalDays: rows.length,
-  };
+  const rows = (data as { status: AttendanceStatus }[]) ?? [];
+  const summary: MonthSummary = { totalDays: rows.length, presentDays: 0, absentDays: 0, lateDays: 0, onLeaveDays: 0 };
+  for (const r of rows) {
+    if (r.status === "present" || r.status === "leave_early") summary.presentDays += 1;
+    else if (r.status === "late") summary.lateDays += 1;
+    else if (r.status === "absent") summary.absentDays += 1;
+    else if (r.status === "on_leave") summary.onLeaveDays += 1;
+  }
+  return summary;
 }
 
-export async function getBreaksByAttendanceId(
-  attendanceId: number,
-): Promise<BreakRecord[]> {
+// ============================================================
+// start_break / end_break (RPC — بدون باراميترز)
+// ============================================================
+
+export async function startBreak(): Promise<void> {
+  const { error } = await supabase.rpc("start_break");
+  if (error) throw new Error(error.message);
+}
+
+export async function endBreak(): Promise<void> {
+  const { error } = await supabase.rpc("end_break");
+  if (error) throw new Error(error.message);
+}
+
+// ============================================================
+// جدول breaks
+// ============================================================
+
+export async function getBreaksByAttendanceId(attendanceId: number): Promise<BreakRecord[]> {
   const { data, error } = await supabase
     .from("breaks")
     .select("*")
     .eq("attendance_id", attendanceId)
     .order("start_time", { ascending: true });
-  if (error) throw error;
-  return data ?? [];
+  if (error) throw new Error(error.message);
+  return (data as BreakRecord[]) ?? [];
 }
 
-export async function getBreaksByAttendanceIds(
-  attendanceIds: number[],
-): Promise<BreakRecord[]> {
+export async function getBreaksByAttendanceIds(attendanceIds: number[]): Promise<BreakRecord[]> {
   if (attendanceIds.length === 0) return [];
   const { data, error } = await supabase
     .from("breaks")
     .select("*")
     .in("attendance_id", attendanceIds)
     .order("start_time", { ascending: true });
-  if (error) throw error;
-  return data ?? [];
+  if (error) throw new Error(error.message);
+  return (data as BreakRecord[]) ?? [];
 }
 
-// دالة موجودة وشغالة — بترجع Map<attendance_id, إجمالي الدقايق> لكل سجلات
-// الـ ids الممررة، بضمّ كل البريكات المرتبطة بكل سجل (مش بريك واحد بس).
-export async function getBreaksSummaryByAttendanceIds(
-  attendanceIds: number[],
-): Promise<Map<number, number>> {
-  const summary = new Map<number, number>();
-  if (attendanceIds.length === 0) return summary;
-
-  const breaks = await getBreaksByAttendanceIds(attendanceIds);
-
-  for (const b of breaks) {
-    const mins = breakDurationMinutes(b) ?? 0; // بريك مفتوح في سجل سابق (حالة نادرة) بيتحسب صفر بدل ما يكسر المجموع
-    summary.set(b.attendance_id, (summary.get(b.attendance_id) ?? 0) + mins);
+/**
+ * إجمالي دقايق البريك (المقفولة فقط — end_time not null) لكل
+ * attendance_id، مبني على break_mins لو موجودة وإلا محسوبة من
+ * start_time/end_time. بترجع Map عشان تتربط بسهولة مع صفوف "سجل الحضور
+ * السابق".
+ */
+export async function getBreaksSummaryByAttendanceIds(attendanceIds: number[]): Promise<Map<number, number>> {
+  const map = new Map<number, number>();
+  if (attendanceIds.length === 0) return map;
+  const allBreaks = await getBreaksByAttendanceIds(attendanceIds);
+  for (const b of allBreaks) {
+    if (!b.end_time) continue; // بريك لسه مفتوح — منحسبوش في سجل يوم مقفول
+    const mins =
+      b.break_mins ?? Math.round((new Date(b.end_time).getTime() - new Date(b.start_time).getTime()) / 60000);
+    map.set(b.attendance_id, (map.get(b.attendance_id) ?? 0) + Math.max(0, mins));
   }
-
-  return summary;
+  return map;
 }
 
-export function subscribeToBreaks(onChange: () => void) {
+export function subscribeToBreaks(onChange: () => void): () => void {
   const channel = supabase
     .channel("breaks-changes")
-    .on(
-      "postgres_changes",
-      { event: "*", schema: "public", table: "breaks" },
-      () => onChange(),
-    )
+    .on("postgres_changes", { event: "*", schema: "public", table: "breaks" }, onChange)
     .subscribe();
-
   return () => {
     supabase.removeChannel(channel);
   };
 }
 
 // ============================================================
-// Manager: إعدادات الحضور (attendance_settings) — CRUD كامل
+// attendance_today (view) + attendance بتاع كل الموظفين النهاردة
 // ============================================================
 
-export async function getAttendanceSettings(
-  branchId?: number,
-): Promise<AttendanceSettings[]> {
-  let query = supabase
+export async function getAttendanceToday(): Promise<AttendanceTodayRow[]> {
+  const { data, error } = await supabase.from("attendance_today").select("*");
+  if (error) throw new Error(error.message);
+  return (data as AttendanceTodayRow[]) ?? [];
+}
+
+/**
+ * كل صفوف جدول attendance الفعلية النهاردة (مش الـ view) — لازمة لربط
+ * attendance_id بالـ users_id عشان نجمع بريكات كل موظف بالاسم الصح.
+ */
+export async function getTodayAttendanceRecords(): Promise<AttendanceRecord[]> {
+  const { data, error } = await supabase.from("attendance").select("*").eq("attendance_date", todayDateISO());
+  if (error) throw new Error(error.message);
+  return (data as AttendanceRecord[]) ?? [];
+}
+
+// ============================================================
+// attendance_settings — CRUD كامل، موثق بالكامل في الباك
+// ============================================================
+
+export async function getAttendanceSettings(): Promise<AttendanceSettings[]> {
+  const { data, error } = await supabase
     .from("attendance_settings")
     .select("*")
     .order("effective_from", { ascending: false });
-
-  if (branchId) query = query.eq("branch_id", branchId);
-
-  const { data, error } = await query;
-  if (error) throw error;
-  return data ?? [];
+  if (error) throw new Error(error.message);
+  return (data as AttendanceSettings[]) ?? [];
 }
 
-export async function createAttendanceSettings(
-  payload: AttendanceSettingsInput,
-): Promise<AttendanceSettings> {
-  const { data, error } = await supabase
-    .from("attendance_settings")
-    .insert(payload)
-    .select()
-    .single();
-  if (error) throw error;
-  return data;
+export async function createAttendanceSettings(payload: AttendanceSettingsInput): Promise<AttendanceSettings> {
+  const { data, error } = await supabase.from("attendance_settings").insert([payload]).select().single();
+  return throwIfError(data as AttendanceSettings, error, "تعذر إنشاء إعداد الحضور");
 }
 
 export async function updateAttendanceSettings(
   id: number,
-  patch: Partial<AttendanceSettingsInput>,
+  payload: AttendanceSettingsInput
 ): Promise<AttendanceSettings> {
   const { data, error } = await supabase
     .from("attendance_settings")
-    .update(patch)
+    .update(payload)
     .eq("id", id)
     .select()
     .single();
-  if (error) throw error;
-  return data;
+  return throwIfError(data as AttendanceSettings, error, "تعذر تحديث إعداد الحضور");
 }
 
 export async function deleteAttendanceSettings(id: number): Promise<void> {
-  const { error } = await supabase
-    .from("attendance_settings")
-    .delete()
-    .eq("id", id);
-  if (error) throw error;
+  const { error } = await supabase.from("attendance_settings").delete().eq("id", id);
+  if (error) throw new Error(error.message);
 }
 
 // ============================================================
-// Employee: طلبات الإجازة (leave) — RPC للكتابة
+// طلبات الإجازة — جدول leaves + الـ RPCs الموثقة
+//
+// ⚠️ التوثيق اللي وصلني فيه RPCs الإجازة (request_leave / update_leave /
+// delete_leave / end_leave_early / check_leave_status) من غير قسم صريح
+// لقراءة جدول الإجازات نفسه. الاسم "leaves" مأخوذ من تعليقات الكود
+// الأصلية ("مباشرة من جدول leaves في الباك"). لو الاسم الفعلي مختلف
+// (مثلاً leave_requests)، غيّره في السطر ده بس — كل الكود تحت بيعتمد عليه.
 // ============================================================
 
-export async function requestLeave(payload: {
-  p_start_date: string;
-  p_end_date: string;
-  p_leave_type: LeaveType;
-  p_reason: string;
-}): Promise<unknown> {
-  const { data, error } = await supabase.rpc("request_leave", payload);
-  if (error) throw error;
-  return data;
-}
+const LEAVES_TABLE = "leaves";
 
-export async function updateLeave(payload: {
-  p_leave_id: number;
-  p_start_date: string;
-  p_end_date: string;
-  p_reason: string;
-}): Promise<unknown> {
-  const { data, error } = await supabase.rpc("update_leave", payload);
-  if (error) throw error;
-  return data;
-}
-
-export async function deleteLeave(p_leave_id: number): Promise<unknown> {
-  const { data, error } = await supabase.rpc("delete_leave", { p_leave_id });
-  if (error) throw error;
-  return data;
-}
-
-export async function endLeaveEarly(p_leave_id: number): Promise<unknown> {
-  const { data, error } = await supabase.rpc("end_leave_early", { p_leave_id });
-  if (error) throw error;
-  return data;
-}
-
-// ============================================================
-// قراءة طلبات الإجازة — جدول public.leaves
-// ============================================================
-
-export async function getLeaveRequests(
-  filters: {
-    userId?: string;
-    status?: LeaveStatusFull;
-  } = {},
-): Promise<LeaveRequest[]> {
-  let query = supabase
-    .from("leaves")
-    .select("*")
-    .order("created_at", { ascending: false });
-
-  if (filters.userId) query = query.eq("users_id", filters.userId);
-  if (filters.status) query = query.eq("status", filters.status);
-
-  const { data, error } = await query;
-  if (error) throw error;
-  return (data ?? []) as LeaveRequest[];
-}
-
-/** طلبات إجازتي أنا بس (موظف) */
 export async function getMyLeaveRequests(): Promise<LeaveRequest[]> {
-  const userId = await getCurrentUserId();
-  return getLeaveRequests({ userId });
+  const userId = await getAuthUserId();
+  const { data, error } = await supabase
+    .from(LEAVES_TABLE)
+    .select("*")
+    .eq("users_id", userId)
+    .order("id", { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data as LeaveRequest[]) ?? [];
 }
 
-/** كل طلبات الإجازة (مدير) — ممكن تتفلتر بالحالة */
-export async function getAllLeaveRequests(
-  status?: LeaveStatusFull,
-): Promise<LeaveRequest[]> {
-  return getLeaveRequests(status ? { status } : {});
+/** كل طلبات الإجازة لكل الموظفين — لصفحة المدير (RLS المدير بتسمح بقراءة الكل). */
+export async function getAllLeaveRequests(): Promise<LeaveRequest[]> {
+  const { data, error } = await supabase.from(LEAVES_TABLE).select("*").order("id", { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data as LeaveRequest[]) ?? [];
 }
 
-/** اشتراك لايف على أي تغيير في جدول leaves */
-export function subscribeToLeaves(onChange: () => void) {
+export function subscribeToLeaves(onChange: () => void): () => void {
   const channel = supabase
     .channel("leaves-changes")
-    .on(
-      "postgres_changes",
-      { event: "*", schema: "public", table: "leaves" },
-      () => onChange(),
-    )
+    .on("postgres_changes", { event: "*", schema: "public", table: LEAVES_TABLE }, onChange)
     .subscribe();
-
   return () => {
     supabase.removeChannel(channel);
   };
 }
 
-// ============================================================
-// Manager: الموافقة/الرفض على طلب إجازة
-// ============================================================
+export interface SubmitLeavePayload {
+  p_start_date: string;
+  p_end_date: string;
+  p_leave_type: LeaveType;
+  p_reason: string;
+}
 
-export async function checkLeaveStatus(payload: {
+export async function submitLeave(payload: SubmitLeavePayload): Promise<void> {
+  const { error } = await supabase.rpc("request_leave", payload);
+  if (error) throw new Error(error.message);
+}
+
+export interface EditLeavePayload {
   p_leave_id: number;
-  p_new_status: LeaveStatus;
-}): Promise<unknown> {
-  const { data, error } = await supabase.rpc("check_leave_status", payload);
-  if (error) throw error;
-  return data;
+  p_start_date: string;
+  p_end_date: string;
+  p_reason: string;
 }
 
-// ============================================================
-// Employee: إعدادات الحضور الفعّالة لفرع الموظف الحالي (للتحقق قبل check-in)
-// ============================================================
-
-export async function getMyActiveAttendanceSettings(): Promise<AttendanceSettings | null> {
-  const userId = await getCurrentUserId();
-
-  // 1) هات branch_id بتاع الموظف من جدول users
-  const { data: userRow, error: userErr } = await supabase
-    .from("users")
-    .select("branch_id")
-    .eq("id", userId)
-    .single();
-
-  if (userErr) throw userErr;
-  if (!userRow?.branch_id) return null;
-
-  // 2) هات إعدادات الفرع الفعّالة النهاردة (effective_from <= اليوم <= effective_to أو effective_to = null)
-  const today = todayISODate();
-  const { data, error } = await supabase
-    .from("attendance_settings")
-    .select("*")
-    .eq("branch_id", userRow.branch_id)
-    .lte("effective_from", today)
-    .or(`effective_to.is.null,effective_to.gte.${today}`)
-    .order("effective_from", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (error) throw error;
-  return data;
+/**
+ * ⚠️ update_leave مالهاش p_leave_type — الباك مش بيسمح بتغيير نوع
+ * الإجازة بعد إنشائها، عشان كده select نوع الإجازة في مودال التعديل
+ * لازم يفضل disabled (زي ما هو في صفحة الموظف أصلًا).
+ */
+export async function editLeave(payload: EditLeavePayload): Promise<void> {
+  const { error } = await supabase.rpc("update_leave", payload);
+  if (error) throw new Error(error.message);
 }
 
-// ============================================================
-// Employee: البريك — الفلو البسيط
-// start_break → نجيب حالة المستخدم (on_work / break) → لو break نظهر
-// زرار end_break → نادي end_break. بدون أي fallback أو workaround —
-// أي إيرور من الـ RPC بيتّرمي زي ما هو ويتعالج في مكان النداء (توست خطأ).
-// ============================================================
-
-export async function startBreak(): Promise<unknown> {
-  const { data, error } = await supabase.rpc("start_break");
-  if (error) throw error;
-  return data;
+/**
+ * إلغاء نهائي (حذف) لطلب إجازة لسه ما بدأش — يستخدمها الموظف بتاع نفسه
+ * فقط (عن طريق RLS). الباك برضه بيرفض لو start_date <= النهاردة.
+ */
+export async function removeLeave(leaveId: number): Promise<void> {
+  const { error } = await supabase.rpc("delete_leave", { p_leave_id: leaveId });
+  if (error) throw new Error(error.message);
 }
 
-export async function endBreak(): Promise<unknown> {
-  const { data, error } = await supabase.rpc("end_break");
-  if (error) throw error;
-  return data;
+/** قرار المدير: قبول / رفض / إلغاء طلب إجازة موظف. */
+export async function setLeaveStatus(
+  leaveId: number,
+  status: Extract<LeaveStatus, "accepted" | "rejected" | "cancelled">
+): Promise<void> {
+  const { error } = await supabase.rpc("check_leave_status", {
+    p_leave_id: leaveId,
+    p_new_status: status,
+  });
+  if (error) throw new Error(error.message);
 }
 
-// ============================================================
-// checkOut — نداء RPC مباشر بدون fallback
-// ============================================================
-
-export async function checkOut(): Promise<AttendanceRecord> {
-  const { data, error } = await supabase.rpc("check_out");
-  if (error) throw error;
-  return data;
+/**
+ * إنهاء إجازة مقبولة (accepted) بدري — الباك بيرفض لو الحالة مش accepted.
+ * متاحة هنا جاهزة للاستخدام لو حبيت تضيف زرار "إنهاء الإجازة بدري"
+ * لاحقًا؛ حاليًا مش مستخدمة في أي من صفحتي الموظف/المدير.
+ */
+export async function endLeaveEarly(leaveId: number): Promise<void> {
+  const { error } = await supabase.rpc("end_leave_early", { p_leave_id: leaveId });
+  if (error) throw new Error(error.message);
 }

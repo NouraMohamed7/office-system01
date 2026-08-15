@@ -1,231 +1,142 @@
 // src/modules/attendance/api/hooks/useAttendance.ts
-'use client'
+"use client";
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from "react";
 import {
-  checkIn,
-  checkOut,
-  getAttendanceHistory,
-  getAttendanceToday,
   getMyLeaveRequests,
   getAllLeaveRequests,
-  requestLeave,
-  updateLeave,
-  deleteLeave,
-  endLeaveEarly,
-  checkLeaveStatus,
-  type LeaveStatus as ApiLeaveStatus,
-} from '../attendance.api'
-import type {
-  AttendanceFilters,
-  AttendanceRecord,
-  AttendanceToday,
-  LeaveRequest,
-  LeaveStatus,
-  LeaveType,
-} from '@/types/attendance'
+  submitLeave,
+  editLeave,
+  removeLeave,
+  setLeaveStatus,
+  type SubmitLeavePayload,
+  type EditLeavePayload,
+} from "../attendance.api";
+import type { LeaveRequest, LeaveStatus } from "@/types/attendance";
 
-function getErrorMessage(e: unknown, fallback: string) {
-  return e instanceof Error ? e.message : fallback
-}
+/**
+ * ⚠️ ملحوظة عن react-hooks/set-state-in-effect:
+ * كل هوك من التلاتة دي فيه:
+ *   1) دالة `refresh` (مُصدَّرة للاستخدام اليدوي بعد أكشن زي حفظ/إلغاء
+ *      طلب) — دي بتنادي setLoading(true) على طول، وده طبيعي ومقبول
+ *      لأنها مش جوه useEffect.
+ *   2) useEffect منفصل للتحميل الأول عند mount — ده بيعمل الـ fetch
+ *      مباشرة (supabase call) ومبينادوش refresh() ولا أي setState قبل
+ *      أول await، عشان أي تحديث state بيحصل جوه .then/.catch/.finally
+ *      (يعني بعد رجوع النتيجة من الشبكة فعليًا)، مش synchronously في
+ *      جسم الـ effect — وده بالظبط اللي القاعدة عايزاه.
+ */
 
-// ------------------------------------------------------------
-// موظّف: حضور/انصراف اليوم
-// ------------------------------------------------------------
-export function useCheckInOut() {
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  const doCheckIn = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      return await checkIn()
-    } catch (e) {
-      setError(getErrorMessage(e, 'فشل تسجيل الحضور'))
-      throw e
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  const doCheckOut = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      return await checkOut()
-    } catch (e) {
-      setError(getErrorMessage(e, 'فشل تسجيل الانصراف'))
-      throw e
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  return { checkIn: doCheckIn, checkOut: doCheckOut, loading, error }
-}
-
-// ------------------------------------------------------------
-// مدير: حضور كل الموظفين النهارده (attendance_today view)
-// ------------------------------------------------------------
-export function useAttendanceToday(userIds?: string[]) {
-  const [data, setData] = useState<AttendanceToday[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
-  const refresh = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      setData(await getAttendanceToday({ userIds }))
-    } catch (e) {
-      setError(getErrorMessage(e, 'تعذر تحميل بيانات الحضور'))
-    } finally {
-      setLoading(false)
-    }
-  }, [JSON.stringify(userIds)])
-
-  useEffect(() => {
-    refresh()
-  }, [refresh])
-
-  return { data, loading, error, refresh }
-}
-
-// ------------------------------------------------------------
-// سجل الحضور (موظف بيشوف بتاعه، مدير بيشوف بتاع أي حد بفلتر userId)
-// ------------------------------------------------------------
-export function useAttendanceHistory(filters: AttendanceFilters) {
-  const [data, setData] = useState<AttendanceRecord[]>([])
-  const [count, setCount] = useState(0)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
-  const refresh = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const result = await getAttendanceHistory(filters)
-      setData(result.data as unknown as AttendanceRecord[])
-      setCount(result.count)
-    } catch (e) {
-      setError(getErrorMessage(e, 'تعذر تحميل سجل الحضور'))
-    } finally {
-      setLoading(false)
-    }
-  }, [JSON.stringify(filters)])
-
-  useEffect(() => {
-    refresh()
-  }, [refresh])
-
-  return { data, count, loading, error, refresh }
-}
-
-// ------------------------------------------------------------
-// موظف: طلبات إجازتي أنا — مربوط بالكامل بجدول leaves في الباك
-// ------------------------------------------------------------
+/** طلبات إجازة المستخدم الحالي فقط — لصفحة الموظف. */
 export function useMyLeaveRequests() {
-  const [data, setData] = useState<LeaveRequest[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [data, setData] = useState<LeaveRequest[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    setLoading(true)
-    setError(null)
+    setLoading(true);
     try {
-      setData(await getMyLeaveRequests())
-    } catch (e) {
-      setError(getErrorMessage(e, 'تعذر تحميل طلبات الإجازة'))
+      const rows = await getMyLeaveRequests();
+      setData(rows);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "تعذر تحميل طلبات الإجازة");
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }, [])
+  }, []);
 
   useEffect(() => {
-    refresh()
-  }, [refresh])
+    let ignore = false;
+    getMyLeaveRequests()
+      .then((rows) => {
+        if (ignore) return;
+        setData(rows);
+        setError(null);
+      })
+      .catch((err) => {
+        if (ignore) return;
+        setError(err instanceof Error ? err.message : "تعذر تحميل طلبات الإجازة");
+      })
+      .finally(() => {
+        if (!ignore) setLoading(false);
+      });
+    return () => {
+      ignore = true;
+    };
+    // التحميل الأول بس عند mount — التحديثات بعد كده بتتم عبر refresh()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  return { data, loading, error, refresh }
+  return { data, loading, error, refresh };
 }
 
-// ------------------------------------------------------------
-// مدير: كل طلبات الإجازة (ممكن فلترة بالحالة، مثلاً 'pending')
-// من غير فلتر بترجع كل الطلبات بكل الحالات
-// ------------------------------------------------------------
-export function useManagerLeaveRequests(status?: LeaveStatus) {
-  const [data, setData] = useState<LeaveRequest[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+/** كل طلبات الإجازة لكل الموظفين — لصفحة المدير. */
+export function useManagerLeaveRequests() {
+  const [data, setData] = useState<LeaveRequest[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    setLoading(true)
-    setError(null)
+    setLoading(true);
     try {
-      setData(await getAllLeaveRequests(status))
-    } catch (e) {
-      setError(getErrorMessage(e, 'تعذر تحميل طلبات الإجازة'))
+      const rows = await getAllLeaveRequests();
+      setData(rows);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "تعذر تحميل طلبات الإجازة");
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }, [status])
+  }, []);
 
   useEffect(() => {
-    refresh()
-  }, [refresh])
+    let ignore = false;
+    getAllLeaveRequests()
+      .then((rows) => {
+        if (ignore) return;
+        setData(rows);
+        setError(null);
+      })
+      .catch((err) => {
+        if (ignore) return;
+        setError(err instanceof Error ? err.message : "تعذر تحميل طلبات الإجازة");
+      })
+      .finally(() => {
+        if (!ignore) setLoading(false);
+      });
+    return () => {
+      ignore = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  return { data, loading, error, refresh }
+  return { data, loading, error, refresh };
 }
 
-// ------------------------------------------------------------
-// إدارة طلبات الإجازة (كتابة — RPC)
-// ------------------------------------------------------------
+/**
+ * أكشنز الإجازة (تقديم / تعديل / إلغاء / قرار المدير). loading هنا عام
+ * لكل الأكشنز — الصفحتين بيحطوا فوقه حماية إضافية على مستوى الصف
+ * (busyLeave / busyLeaveId) عشان يمنعوا ضغط متزامن على صفوف مختلفة.
+ */
 export function useLeaveActions() {
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false);
 
-  async function run<T>(fn: () => Promise<T>, fallback: string) {
-    setLoading(true)
-    setError(null)
+  const run = useCallback(async <T,>(fn: () => Promise<T>): Promise<T> => {
+    setLoading(true);
     try {
-      return await fn()
-    } catch (e) {
-      setError(getErrorMessage(e, fallback))
-      throw e
+      return await fn();
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }
+  }, []);
 
   return {
     loading,
-    error,
-    // موظف
-    submitLeave: (payload: {
-      p_start_date: string
-      p_end_date: string
-      p_leave_type: LeaveType
-      p_reason: string
-    }) => run(() => requestLeave(payload), 'فشل إرسال طلب الإجازة'),
-    editLeave: (payload: {
-      p_leave_id: number
-      p_start_date: string
-      p_end_date: string
-      p_reason: string
-    }) => run(() => updateLeave(payload), 'فشل تعديل طلب الإجازة'),
-    removeLeave: (leaveId: number) =>
-      run(() => deleteLeave(leaveId), 'فشل حذف طلب الإجازة'),
-    endEarly: (leaveId: number) =>
-      run(() => endLeaveEarly(leaveId), 'فشل إنهاء الإجازة مبكرًا'),
-    // مدير — الباك بيقبل بس accepted/rejected/cancelled (public.leave_status)
-    setLeaveStatus: (leaveId: number, newStatus: Extract<LeaveStatus, 'accepted' | 'rejected' | 'cancelled'>) =>
-      run(
-        () =>
-          checkLeaveStatus({
-            p_leave_id: leaveId,
-            p_new_status: newStatus as ApiLeaveStatus,
-          }),
-        'فشل تحديث حالة طلب الإجازة'
-      ),
-  }
+    submitLeave: (payload: SubmitLeavePayload) => run(() => submitLeave(payload)),
+    editLeave: (payload: EditLeavePayload) => run(() => editLeave(payload)),
+    removeLeave: (leaveId: number) => run(() => removeLeave(leaveId)),
+    setLeaveStatus: (leaveId: number, status: Extract<LeaveStatus, "accepted" | "rejected" | "cancelled">) =>
+      run(() => setLeaveStatus(leaveId, status)),
+  };
 }
