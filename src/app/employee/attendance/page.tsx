@@ -263,6 +263,14 @@ export default function AttendancePage() {
   // بما إن فيه بريك مفتوح دلوقتي، isOnBreak هتبقى true تلقائيًا وهيظهر
   // زرار "إنهاء البريك" بدل "بدء البريك".
   //
+  // ✅ فاليديشن فرونت — مرآة لقواعد الباك، عشان المستخدم ياخد رسالة
+  // واضحة فورًا من غير ما ننتظر رد RPC هيترفض أكيد:
+  // 1) لازم يكون مسجل حضور فعلاً ولسه مسجلش انصراف — مينفعش تاخد بريك
+  //    قبل ما تسجل حضور، ولا بعد ما تسجل انصراف.
+  // 2) مينفعش تبدأ بريك وانت أصلاً في بريك مفتوح — الزرار أصلاً بيتخفي
+  //    وقت isOnBreak، بس ده حارس صريح إضافي (دفاع في العمق) لو حصل أي
+  //    سباق أو ضغط سريع قبل ما الحالة تتحدّث بصريًا.
+  //
   // ✅ فيكس أساسي: لو الباك رفض start_break (مثلاً P0001 "لديك استراحة
   // قائمة بالفعل" — بيحصل لو فيه بريك مفتوح فعليًا مش ظاهر صح في
   // الواجهة القديمة)، لازم نعمل refreshBreaks() *حتى مع الفشل* عشان
@@ -270,6 +278,20 @@ export default function AttendancePage() {
   // المستخدم شايف "بدء البريك" وهو فعليًا في استراحة من الأصل.
   async function handleStartBreak() {
     if (breakSubmitting) return;
+
+    if (!hasCheckedIn) {
+      showToast("error", "لازم تسجل حضورك الأول قبل ما تاخد بريك");
+      return;
+    }
+    if (hasCheckedOut) {
+      showToast("error", "مينفعش تاخد بريك بعد ما سجلت انصراف");
+      return;
+    }
+    if (isOnBreak) {
+      showToast("error", "انت أصلاً في بريك دلوقتي");
+      return;
+    }
+
     setBreakSubmitting(true);
     try {
       await apiStartBreak();
@@ -296,10 +318,19 @@ export default function AttendancePage() {
   // آخر بريك بقى له end_time، فـ isOnBreak هترجع false ويظهر زرار
   // "بدء البريك" تاني.
   //
+  // ✅ فاليديشن فرونت: مينفعش تنهي بريك ومفيش بريك مفتوح أصلاً — حارس
+  // صريح زي بتاع handleStartBreak، بدل ما نسيب الطلب يمشي للباك ويترفض.
+  //
   // ✅ نفس فيكس المزامنة الإجبارية: لو end_break فشل (مثلاً "مفيش بريك
   // مفتوح أصلاً" لأي سبب)، برضه نعمل refresh عشان الواجهة تعكس الحقيقة.
   async function handleEndBreak() {
     if (breakSubmitting) return;
+
+    if (!isOnBreak) {
+      showToast("error", "مفيش بريك شغال دلوقتي عشان تنهيه");
+      return;
+    }
+
     setBreakSubmitting(true);
     try {
       await apiEndBreak();
