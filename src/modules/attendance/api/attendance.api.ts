@@ -204,14 +204,32 @@ export async function getMyMonthSummary(): Promise<MonthSummary> {
 // start_break / end_break (RPC — بدون باراميترز)
 // ============================================================
 
-export async function startBreak(): Promise<void> {
-  const { error } = await supabase.rpc("start_break");
-  if (error) throw new Error(error.message);
+/**
+ * ⚠️ الدوك موضّح إن start_break/end_break بترجعوا data فعليًا (زي
+ * console.log(data) في مثال الاستدعاء)، بس شكل الـ data بالظبط مش
+ * موثّق حرفيًا (ممكن يرجع صف واحد من breaks أو array فيه صف واحد).
+ * قبل كده كنا بنتجاهل الـ data خالص ونعتمد بالكامل على refetch منفصل
+ * بعد الاستدعاء — ده كان بيسبب مشكلة إن الواجهة تفضل شايفة "بدء
+ * البريك" رغم إن الباك فعليًا فتح بريك، لو الـ refetch اترجّع فاضي أو
+ * متأخر لأي سبب. دلوقتي بنستخدم نفس الـ data الراجعة من الـ RPC عشان
+ * الصفحة تقدر تحدّث حالتها فورًا من غير ما تستنى refetch تاني.
+ */
+function normalizeSingleBreakResult(data: unknown): BreakRecord | null {
+  if (!data) return null;
+  if (Array.isArray(data)) return (data[0] as BreakRecord) ?? null;
+  return data as BreakRecord;
 }
 
-export async function endBreak(): Promise<void> {
-  const { error } = await supabase.rpc("end_break");
+export async function startBreak(): Promise<BreakRecord | null> {
+  const { data, error } = await supabase.rpc("start_break");
   if (error) throw new Error(error.message);
+  return normalizeSingleBreakResult(data);
+}
+
+export async function endBreak(): Promise<BreakRecord | null> {
+  const { data, error } = await supabase.rpc("end_break");
+  if (error) throw new Error(error.message);
+  return normalizeSingleBreakResult(data);
 }
 
 // ============================================================
