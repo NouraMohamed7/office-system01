@@ -4,7 +4,7 @@ import type {
   AttendanceStatus,
   LeaveType,
   LeaveStatus as LeaveStatusFull,
-} from "@/lib/attendance-labels";
+} from "@/lib/constants";
 import type { LeaveRequest } from "@/types/attendance";
 
 // ============================================================
@@ -296,6 +296,27 @@ export async function checkIn(): Promise<unknown> {
 // ونرجّع الأحدث بالمقارنة بـ check_in_at، بدون أي افتراض إن الداتابيز
 // هترجع صف واحد بالظبط.
 export async function getMyAttendanceToday(): Promise<AttendanceRecord | null> {
+  const rows = await getMyTodayAttendanceRecords();
+  return pickLatestByCheckIn(rows);
+}
+
+// ============================================================
+// ✅ جديد: كل سجلات اليوم بتاعت الموظف الحالي (مش بس الأحدث)
+// ============================================================
+//
+// ⚠️ السبب اللي خلانا محتاجين الدالة دي: لو المستخدم عمل check-in أكتر
+// من مرة في نفس اليوم (بيحصل فعليًا أثناء الاختبار، أو لو النظام بيسمح
+// بيه)، بيتعمل أكتر من صف في جدول attendance لنفس اليوم. getMyAttendanceToday
+// بترجع بس آخر صف (أحدث check_in_at). لو فيه بريك اتفتح من صف أقدم النهاردة
+// ولسه متقفلش (orphan)، وإحنا بنجيب البريكات بـ attendance_id بتاع آخر
+// صف بس، هنبقى عمالين نجيب صفر بريكات ونفتكر إن مفيش بريك مفتوح — بينما
+// الباك (اللي بيتحقق فعليًا على مستوى المستخدم مش الصف) شايف البريك المفتوح
+// ده وبيرفض start_break برسالة P0001 "لديك استراحة قائمة بالفعل". النتيجة:
+// الفرونت وشايف حالة مختلفة تمامًا عن الباك.
+//
+// الحل: نجيب *كل* صفوف اليوم بتاعت المستخدم (مش بس الأحدث)، ونجمع بريكات
+// كل الصفوف دي مع بعض، فمفيش بريك مفتوح يفضل مخفي عن الواجهة.
+export async function getMyTodayAttendanceRecords(): Promise<AttendanceRecord[]> {
   const userId = await getCurrentUserId();
 
   const { data, error } = await supabase
@@ -305,7 +326,7 @@ export async function getMyAttendanceToday(): Promise<AttendanceRecord | null> {
     .eq("attendance_date", todayISODate());
 
   if (error) throw error;
-  return pickLatestByCheckIn((data ?? []) as AttendanceRecord[]);
+  return (data ?? []) as AttendanceRecord[];
 }
 
 // ============================================================

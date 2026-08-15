@@ -9,11 +9,13 @@ import {
   checkIn as apiCheckIn,
   checkOut as apiCheckOut,
   getMyAttendanceToday,
+  getMyTodayAttendanceRecords,
   getMyAttendanceHistory,
   getMyMonthSummary,
   startBreak as apiStartBreak,
   endBreak as apiEndBreak,
   getBreaksByAttendanceId,
+  getBreaksByAttendanceIds,
   getBreaksSummaryByAttendanceIds,
   type AttendanceRecord,
   type MonthSummary,
@@ -112,6 +114,11 @@ export default function AttendancePage() {
   const [breaks, setBreaks] = useState<BreakRecord[]>([]);
   const [breakSubmitting, setBreakSubmitting] = useState(false);
   const [breakElapsedSec, setBreakElapsedSec] = useState(0);
+  // ✅ جديد: كل الـ attendance_id بتاعت صفوف اليوم كلها (مش بس آخر صف).
+  // لازمة عشان refreshBreaks تقدر تجيب بريكات أي صف قديم النهاردة برضه،
+  // مش بس الصف الحالي المعروض — راجع شرح getMyTodayAttendanceRecords
+  // في attendance.api.ts لسبب المشكلة دي بالتفصيل.
+  const [todayAttendanceIds, setTodayAttendanceIds] = useState<number[]>([]);
 
   // ---- طلبات الإجازة — مباشرة من جدول leaves في الباك ----
   const {
@@ -169,8 +176,16 @@ export default function AttendancePage() {
         setHistory(hist);
         setMonthSummary(summary);
 
-        if (todayRec) {
-          const todayBreaks = await getBreaksByAttendanceId(todayRec.id);
+        // ✅ فيكس: بنجيب كل صفوف اليوم بتاعت المستخدم (مش بس الأحدث)
+        // وبنجمع بريكات كل الصفوف دي مع بعض. لو المستخدم عمل check-in
+        // أكتر من مرة النهاردة (اختبار مثلاً)، وفيه بريك مفتوح اتفتح من
+        // صف قديم النهاردة ولسه متقفلش، هيظهر هنا بدل ما يفضل مخفي عن
+        // الواجهة بينما الباك شايفه وبيرفض start_break بسببه.
+        const todayRecords = await getMyTodayAttendanceRecords();
+        const ids = todayRecords.map((r) => r.id);
+        setTodayAttendanceIds(ids);
+        if (ids.length > 0) {
+          const todayBreaks = await getBreaksByAttendanceIds(ids);
           setBreaks(todayBreaks);
         }
 
@@ -215,9 +230,26 @@ export default function AttendancePage() {
   const hasCheckedIn = !!record?.check_in_at;
   const hasCheckedOut = !!record?.check_out_at;
 
-  async function refreshBreaks(attendanceId: number) {
-    const fresh = await getBreaksByAttendanceId(attendanceId);
+  // ✅ فيكس: بنجيب بريكات كل صفوف اليوم (todayAttendanceIds) مش صف واحد
+  // بس، عشان لو الباك بيتعامل مع البريك على مستوى المستخدم مش الصف
+  // (زي ما ظهر من رفض start_break رغم إن الصف الحالي مفيهوش بريك مفتوح)،
+  // الواجهة تفضل شايفة الصورة كاملة دايمًا.
+  async function refreshBreaks(attendanceIds: number[]) {
+    if (attendanceIds.length === 0) {
+      setBreaks([]);
+      return;
+    }
+    const fresh = await getBreaksByAttendanceIds(attendanceIds);
     setBreaks(fresh);
+  }
+
+  // ✅ لو صف حضور جديد اتعمل (مثلاً بعد check-in) ومكانش في اللستة، نضيفه
+  // عشان refreshBreaks الجاية تجيب بريكاته هو كمان.
+  async function refreshTodayAttendanceIds(): Promise<number[]> {
+    const todayRecords = await getMyTodayAttendanceRecords();
+    const ids = todayRecords.map((r) => r.id);
+    setTodayAttendanceIds(ids);
+    return ids;
   }
 
   async function handleCheckIn() {
@@ -295,18 +327,20 @@ export default function AttendancePage() {
     setBreakSubmitting(true);
     try {
       await apiStartBreak();
-      if (record) await refreshBreaks(record.id);
+      const ids = await refreshTodayAttendanceIds();
+      await refreshBreaks(ids);
       setBreakElapsedSec(0);
       showToast("success", `بدأت البريك الساعة ${time}`);
     } catch (err) {
-      // مزامنة إجبارية: لو الباك رافض لوجود بريك مفتوح بالفعل، نعرض
-      // الحالة الصح فورًا (isOnBreak هيبقى true تلقائيًا بعد الـ refresh)
-      if (record) {
-        try {
-          await refreshBreaks(record.id);
-        } catch {
-          // تجاهل فشل الـ refresh نفسه — التوست تحت هيوضح المشكلة الأصلية
-        }
+      // مزامنة إجبارية: لو الباك رافض لوجود بريك مفتوح بالفعل (حتى لو
+      // في صف حضور قديم النهاردة)، نعرض الحالة الصح فورًا — isOnBreak
+      // هيبقى true تلقائيًا بعد الـ refresh لأننا بنجيب بريكات كل صفوف
+      // اليوم مش صف واحد بس.
+      try {
+        const ids = await refreshTodayAttendanceIds();
+        await refreshBreaks(ids);
+      } catch {
+        // تجاهل فشل الـ refresh نفسه — التوست تحت هيوضح المشكلة الأصلية
       }
       showToast("error", err instanceof Error ? err.message : "تعذر بدء البريك");
     } finally {
