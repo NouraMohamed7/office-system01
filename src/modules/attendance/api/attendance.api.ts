@@ -291,33 +291,6 @@ export async function getAttendanceToday(): Promise<AttendanceTodayRow[]> {
 }
 
 /**
- * صف المستخدم الحالي من الـ view attendance_today. عمود status هنا
- * موثّق كـ "text" (مش public.attendance_type زي جدول attendance نفسه)
- * — يعني محتمل يكون فيه قيم زي "on_work" / "break" وقت البريك.
- * لازم نتأكد بالتجربة الفعلية من القيمة الراجعة (فيه console.log مؤقت
- * في page.tsx لحد ما نتأكد).
- */
-export interface MyTodayStatusRow {
-  users_id: string;
-  name: string;
-  check_in_at: string | null;
-  check_out_at: string | null;
-  late_minutes: number | null;
-  status: string | null;
-}
-
-export async function getMyTodayStatusRow(): Promise<MyTodayStatusRow | null> {
-  const userId = await getAuthUserId();
-  const { data, error } = await supabase
-    .from("attendance_today")
-    .select("*")
-    .eq("users_id", userId)
-    .maybeSingle();
-  if (error) throw new Error(error.message);
-  return (data as MyTodayStatusRow) ?? null;
-}
-
-/**
  * كل صفوف جدول attendance الفعلية النهاردة (مش الـ view) — لازمة لربط
  * attendance_id بالـ users_id عشان نجمع بريكات كل موظف بالاسم الصح.
  */
