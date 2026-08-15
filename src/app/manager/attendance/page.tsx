@@ -24,6 +24,14 @@ import {
   type BreakRecord,
 } from "@/modules/attendance/api/attendance.api";
 import {
+  summarizeBreaks,
+  formatBreakCell,
+  formatMinutesAsHours,
+  isLeaveStarted,
+  resolveStatus,
+  dedupeAttendanceTodayByUser,
+} from "@/modules/attendance/api/attendance-logic";
+import {
   useManagerLeaveRequests,
   useLeaveActions,
 } from "@/modules/attendance/api/hooks/useAttendance";
@@ -40,14 +48,12 @@ import {
   type Tone,
   type LeaveType,
   type LeaveStatus,
-} from "@/lib/attendance-labels";
+} from "@/lib/constants";
 import { StatusPill } from "@/components/portal-layout";
 
 type Status = AttendanceStatus;
 // قرارات المدير الوحيدة اللي check_leave_status بيقبلها فعليًا
 type LeaveDecision = Extract<LeaveStatus, "accepted" | "rejected" | "cancelled">;
-
-const KNOWN_STATUSES: Status[] = ["present", "absent", "late", "on_leave", "not_checked_in", "leave_early"];
 
 type Row = {
   id: string;
@@ -77,50 +83,17 @@ type LeaveRow = {
   status: LeaveStatus;
 };
 
-// ⚠️ مؤكد فعليًا من الباك: check_leave_status بالإلغاء (cancelled) بيرفض
-// برسالة "Cannot cancel a leave that has already started" لو start_date <=
-// النهاردة، حتى لو الحالة لسه pending. القبول/الرفض مش موثقين بنفس القيد.
-function isLeaveStarted(startDate: string): boolean {
-  const today = new Date().toISOString().slice(0, 10);
-  return startDate <= today;
-}
-
 function formatTimeAr(iso: string | null) {
   if (!iso) return "—";
   return new Date(iso).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
-function formatMinutesAsHours(mins: number): string {
-  const h = Math.floor(mins / 60);
-  const m = mins % 60;
-  return `${h}:${String(m).padStart(2, "0")}`;
-}
-
-// فيكس مشكلة "فين وقت البريك؟" على مستوى المدير — كانت بتاخد بريك واحد
-// بس (آخر واحد في الترتيب) بدل ما تجمع كل البريكات المرتبطة بسجل الحضور.
-// دلوقتي بتاخد قايمة البريكات كاملة، تجمع دقايق المكتمل منها، وتعلّم لو
-// فيه بريك مفتوح (شغال) دلوقتي عشان نوريه واضح في الجدول.
-function summarizeBreaks(userBreaks: BreakRecord[]): { totalMinutes: number; isOnBreakNow: boolean } {
-  let totalMinutes = 0;
-  let isOnBreakNow = false;
-  for (const b of userBreaks) {
-    if (b.break_mins !== null) {
-      totalMinutes += b.break_mins;
-    } else if (b.end_time) {
-      const mins = Math.round((new Date(b.end_time).getTime() - new Date(b.start_time).getTime()) / 60000);
-      totalMinutes += mins > 0 ? mins : 0;
-    } else {
-      isOnBreakNow = true;
-    }
-  }
-  return { totalMinutes, isOnBreakNow };
-}
-
-function formatBreakCell(totalMinutes: number, isOnBreakNow: boolean): string {
-  if (totalMinutes === 0 && !isOnBreakNow) return "—";
-  if (totalMinutes === 0 && isOnBreakNow) return "جاري الآن...";
-  return isOnBreakNow ? `${formatMinutesAsHours(totalMinutes)} (+ جارية الآن)` : formatMinutesAsHours(totalMinutes);
-}
+// ✅ فيكس: summarizeBreaks / formatBreakCell / formatMinutesAsHours و
+// isLeaveStarted كانوا معرّفين محليًا هنا بنسخة مكررة عن نفس المنطق في
+// employee/attendance/page.tsx وفي attendance-logic.ts (اللي فيه الاختبارات
+// الفعلية). أي تعديل مستقبلي كان محتاج يتنسخ في 3 أماكن يدويًا — ده اللي
+// خلّى فيكسات زي "getCurrentOpenBreak" تتطبق في مكان وتتنسى في التاني.
+// دلوقتي كل حاجة بتيجي من مصدر واحد مختبَر: attendance-logic.ts.
 
 function mapTodayRowToRow(
   r: AttendanceTodayRow,
@@ -130,15 +103,7 @@ function mapTodayRowToRow(
   const inTime = formatTimeAr(r.check_in_at);
   const outTime = formatTimeAr(r.check_out_at);
 
-  let status: Status;
-  if (r.status && (KNOWN_STATUSES as string[]).includes(r.status)) {
-    status = r.status as Status;
-  } else if (r.check_in_at) {
-    status = r.late_minutes && r.late_minutes > 0 ? "late" : "present";
-  } else {
-    status = "not_checked_in";
-  }
-
+  const status = resolveStatus(r);
   const { totalMinutes, isOnBreakNow } = summarizeBreaks(breaksByUser.get(r.users_id) ?? []);
 
   return {
@@ -285,15 +250,9 @@ export default function AttendancePage() {
       // ⚠️ dedupe: لو موظف عنده أكتر من سجل attendance في نفس اليوم (مثلاً
       // check-in/check-out متكررين أثناء الاختبار)، view attendance_today
       // بترجع صف لكل سجل، فبيتكرر users_id وده بيكسر الـ key في الجدول.
-      // بنسيب بس آخر سجل (أحدث check_in_at) لكل موظف.
-      const dedupedByUser = new Map<string, AttendanceTodayRow>();
-      for (const r of todayRowsRaw) {
-        const existing = dedupedByUser.get(r.users_id);
-        if (!existing || (r.check_in_at ?? "") >= (existing.check_in_at ?? "")) {
-          dedupedByUser.set(r.users_id, r);
-        }
-      }
-      const todayRows = Array.from(dedupedByUser.values());
+      // بنسيب بس آخر سجل (أحدث check_in_at) لكل موظف — عبر الدالة الموحّدة
+      // والمختبَرة dedupeAttendanceTodayByUser بدل نسخة محلية.
+      const todayRows = dedupeAttendanceTodayByUser(todayRowsRaw);
 
       const deptMap = new Map<string, string>();
       const nameMap = new Map<string, string>();
@@ -475,7 +434,7 @@ export default function AttendancePage() {
     }
   }
 
-  // ✅ جديد: حذف إعداد حضور — كان الـ API function موجودة (deleteAttendanceSettings)
+  // ✅ حذف إعداد حضور — كان الـ API function موجودة (deleteAttendanceSettings)
   // بس مش متستخدمة في الـ UI خالص، مفيش أي زرار حذف لإعداد قديم/غلط.
   // بيسأل تأكيد الأول (نفس نمط handleDeleteEmployee في صفحة الموظفين)،
   // وبيمنع الحذف لو الإعداد ده هو نفسه اللي بيتعدّل دلوقتي في الفورم.
@@ -784,7 +743,7 @@ export default function AttendancePage() {
                               {s.start_time.slice(0, 5)} - {s.end_time.slice(0, 5)} | مهلة تأخير {s.late_tolerance_minutes} د | cutoff {s.cutoff_time.slice(0, 5)}
                             </div>
                           </div>
-                          {/* ✅ جديد: زرار الحذف — كانت الدالة موجودة في الـ API
+                          {/* ✅ زرار الحذف — كانت الدالة موجودة في الـ API
                               بس مالهاش أي استخدام في الواجهة خالص */}
                           <div className="flex shrink-0 items-center gap-2">
                             <button

@@ -1,23 +1,29 @@
 // src/modules/attendance/api/attendance-logic.ts
 // دوال منطق خالصة (pure functions) لصفحات الحضور — من غير أي Supabase calls
 // جواها، عشان تتختبر بسهولة بـ node:test.
+//
+// ⚠️ ملحوظة: الملف ده متسيّبش من غير استخدام تاني زي ما كان — دلوقتي
+// employee/attendance/page.tsx و manager/attendance/page.tsx بيستوردوا
+// منه مباشرة (getCurrentOpenBreak, computeTotalBreakSeconds, summarizeBreaks,
+// formatBreakCell, isLeaveStarted, resolveStatus, dedupeAttendanceTodayByUser)
+// بدل ما يكرروا نفس المنطق محليًا في كل صفحة.
 
 import {
   ATTENDANCE_STATUS_TONE,
   LEAVE_STATUS_TONE,
   type AttendanceStatus,
-} from "@/lib/attendance-labels";
+} from "@/lib/constants";
 import type { AttendanceTodayRow, BreakRecord } from "./attendance.api";
 
 export { ATTENDANCE_STATUS_TONE, LEAVE_STATUS_TONE };
 
 // ============================================================
-// Issue #3: البريكات
+// البريكات
 // ============================================================
 
 /** دقايق البريك الفعلية لسجل واحد — بيفضّل break_mins الجاهز من الباك،
- *  ولو مش موجود بيحسبه من الفرق بين start/end. لو البريك لسه مفتوح
- *  (end_time = null) بيرجع null عشان نميّزه عن "صفر". */
+ *  ولو مش موجود (سجل قديم/edge case) بيحسبه من الفرق بين start/end. لو
+ *  البريك لسه مفتوح (end_time = null) بيرجع null عشان نميّزه عن "صفر". */
 export function breakDurationMinutes(b: BreakRecord): number | null {
   if (b.break_mins !== null) return b.break_mins;
   if (!b.end_time) return null; // بريك لسه مفتوح
@@ -85,7 +91,7 @@ export function formatMinutesAsHours(mins: number): string {
 }
 
 /**
- * 🔧 فيكس جديد: بيرجع البريك المفتوح فعليًا دلوقتي (end_time = null).
+ * بيرجع البريك المفتوح فعليًا دلوقتي (end_time = null).
  * بيدوّر صراحةً عن آخر بريك بدأ من بين كل البريكات المفتوحة، بدل ما
  * يعتمد على ترتيب المصفوفة أو أول/آخر عنصر فيها — عشان لو فيه بريك
  * "يتيم" (orphan) سابق سايبه باگ end_break الموثق في الباك، منتلخبطش
@@ -100,14 +106,14 @@ export function getCurrentOpenBreak(breaks: BreakRecord[]): BreakRecord | null {
 }
 
 /**
- * 🔧 فيكس جديد: إجمالي وقت البريك النهاردة بالثواني — مصمم عشان يتعرض
+ * إجمالي وقت البريك النهاردة بالثواني — مصمم عشان يتعرض
  * لايف كل ثانية للبريك الحالي بس.
  * - بريك مقفول: بياخد break_mins الجاهزة لو موجودة، وإلا بيحسبها من start/end.
  * - البريك الحالي (المفتوح فعليًا دلوقتي، محدد بالـ id): بياخد
  *   breakElapsedSec القادمة من الـ tick بتاع الـ component.
  * - أي بريك تاني مفتوح غير الحالي (orphan من باگ end_break السابق):
  *   بيتجاهل تمامًا من المجموع، لأننا مش عارفين مدته الحقيقية، وضمّه
- *   كان بيضخّم الإجمالي غلط (المشكلة الأصلية اللي المستخدم بلّغ عنها).
+ *   كان بيضخّم الإجمالي غلط.
  */
 export function computeTotalBreakSeconds(
   breaks: BreakRecord[],
@@ -142,9 +148,8 @@ export function pickLatestByCheckIn<T extends { check_in_at: string | null }>(
 }
 
 // ============================================================
-// isLeaveStarted — نفس القاعدة المكررة في صفحتي المدير والموظف، بس
-// دلوقتي بتاخد "النهاردة" كـ parameter اختياري عشان تتختبر من غير ما
-// تعتمد على new Date() الحقيقي.
+// isLeaveStarted — قاعدة موحّدة، بتاخد "النهاردة" كـ parameter اختياري
+// عشان تتختبر من غير ما تعتمد على new Date() الحقيقي.
 // ============================================================
 
 export function isLeaveStarted(

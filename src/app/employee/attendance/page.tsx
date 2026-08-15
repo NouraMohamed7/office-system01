@@ -19,6 +19,11 @@ import {
   type MonthSummary,
   type BreakRecord,
 } from "@/modules/attendance/api/attendance.api";
+import {
+  getCurrentOpenBreak,
+  computeTotalBreakSeconds,
+  isLeaveStarted as isLeaveStartedPure,
+} from "@/modules/attendance/api/attendance-logic";
 import { useMyLeaveRequests, useLeaveActions } from "@/modules/attendance/api/hooks/useAttendance";
 import {
   ATTENDANCE_STATUS_LABEL,
@@ -27,7 +32,7 @@ import {
   LEAVE_STATUS_LABEL,
   LEAVE_STATUS_TONE,
   type LeaveType,
-} from "@/lib/attendance-labels";
+} from "@/lib/constants";
 import type { LeaveRequest } from "@/types/attendance";
 
 // ⚠️ قواعد مؤكدة فعليًا من الباك (اتفحصت مباشرة عبر الـ RPCs):
@@ -37,9 +42,12 @@ import type { LeaveRequest } from "@/types/attendance";
 //   لو الحالة مش accepted. منضيفش عليها هنا شرط start_date لأن المفروض
 //   تنفع تتاستخدم أثناء الإجازة (يعني start_date <= النهاردة <= end_date)
 //   — ده بالظبط عكس isLeaveStarted بتاعة باقي الإجراءات، فبنسيبها زي ما هي.
+//
+// ✅ فيكس: كانت الدالة دي معرّفة محليًا هنا وفي صفحة المدير كمان (نسخة
+// مكررة) بدل ما تستخدم النسخة الموحّدة والمختبَرة في attendance-logic.ts.
+// بنستخدم isLeaveStartedPure دلوقتي (نفس المنطق بالظبط، بس مصدر واحد).
 function isLeaveStarted(startDate: string): boolean {
-  const today = new Date().toISOString().slice(0, 10);
-  return startDate <= today;
+  return isLeaveStartedPure(startDate);
 }
 
 // 🔧 VALIDATION FIX: تاريخ اليوم كسلسلة نصية — مستخدم في أكتر من مكان
@@ -91,6 +99,16 @@ export default function AttendancePage() {
   // ---- البريك: جدول breaks + RPC start_break/end_break ----
   // الفلو: start_break → نجيب حالة البريك تاني من جدول breaks (فيه بريك
   // مفتوح ولا لأ) → لو فيه بريك مفتوح (isOnBreak = true) يظهر زرار end_break.
+  //
+  // ✅ فيكس أساسي: "isOnBreak" و"currentBreak" كانوا بيتحسبوا بأخذ آخر
+  // عنصر في مصفوفة breaks (breaks[breaks.length - 1])، وده غلط لو فيه
+  // أكتر من بريك مفتوح (orphan قديم من باگ سابق في end_break) أو لو
+  // الترتيب من الباك مش مضمون. النتيجة العملية: المستخدم يعمل start_break
+  // بنجاح، الباك يفتح بريك فعلي، لكن الواجهة تفضل عارضة زرار "بدء البريك"
+  // بدل "إنهاء البريك" — وده بالظبط اللي ظهر في اختبارك (الباك رفض
+  // start_break التانية برسالة "لديك استراحة قائمة بالفعل" والواجهة كانت
+  // لسه شايفة إن مفيش بريك شغال). getCurrentOpenBreak() مصدر واحد موحّد
+  // ومختبَر بيدور فعليًا على أحدث بريك end_time=null.
   const [breaks, setBreaks] = useState<BreakRecord[]>([]);
   const [breakSubmitting, setBreakSubmitting] = useState(false);
   const [breakElapsedSec, setBreakElapsedSec] = useState(0);
@@ -171,10 +189,13 @@ export default function AttendancePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // حالة البريك الحالية مشتقة من آخر سجل في جدول breaks: لو آخر سجل
-  // end_time بتاعه لسه null، يبقى المستخدم في بريك دلوقتي.
-  const currentBreak = breaks.length > 0 ? breaks[breaks.length - 1] : null;
-  const isOnBreak = !!currentBreak && currentBreak.end_time === null;
+  // ✅ فيكس: بدل ما ناخد آخر عنصر في المصفوفة، بندور فعليًا على أحدث
+  // بريك مفتوح (end_time === null) — نفس الدالة المستخدمة والمختبَرة في
+  // attendance-logic.ts (getCurrentOpenBreak). لو فيه orphan قديم (بريك
+  // فاضل مفتوح من باگ سابق في end_break)، الدالة دي بتتجاهله وتاخد
+  // الأحدث بالظبط.
+  const currentBreak = getCurrentOpenBreak(breaks);
+  const isOnBreak = !!currentBreak;
 
   useEffect(() => {
     if (!isOnBreak || !currentBreak) return;
@@ -241,6 +262,12 @@ export default function AttendancePage() {
   // الفلو: نادي start_break → نجيب حالة البريك تاني (refreshBreaks) →
   // بما إن فيه بريك مفتوح دلوقتي، isOnBreak هتبقى true تلقائيًا وهيظهر
   // زرار "إنهاء البريك" بدل "بدء البريك".
+  //
+  // ✅ فيكس أساسي: لو الباك رفض start_break (مثلاً P0001 "لديك استراحة
+  // قائمة بالفعل" — بيحصل لو فيه بريك مفتوح فعليًا مش ظاهر صح في
+  // الواجهة القديمة)، لازم نعمل refreshBreaks() *حتى مع الفشل* عشان
+  // نزامن الواجهة مع الحالة الحقيقية في الباك فورًا، بدل ما نسيب
+  // المستخدم شايف "بدء البريك" وهو فعليًا في استراحة من الأصل.
   async function handleStartBreak() {
     if (breakSubmitting) return;
     setBreakSubmitting(true);
@@ -250,6 +277,15 @@ export default function AttendancePage() {
       setBreakElapsedSec(0);
       showToast("success", `بدأت البريك الساعة ${time}`);
     } catch (err) {
+      // مزامنة إجبارية: لو الباك رافض لوجود بريك مفتوح بالفعل، نعرض
+      // الحالة الصح فورًا (isOnBreak هيبقى true تلقائيًا بعد الـ refresh)
+      if (record) {
+        try {
+          await refreshBreaks(record.id);
+        } catch {
+          // تجاهل فشل الـ refresh نفسه — التوست تحت هيوضح المشكلة الأصلية
+        }
+      }
       showToast("error", err instanceof Error ? err.message : "تعذر بدء البريك");
     } finally {
       setBreakSubmitting(false);
@@ -259,6 +295,9 @@ export default function AttendancePage() {
   // الفلو: نادي end_break → نجيب حالة البريك تاني (refreshBreaks) →
   // آخر بريك بقى له end_time، فـ isOnBreak هترجع false ويظهر زرار
   // "بدء البريك" تاني.
+  //
+  // ✅ نفس فيكس المزامنة الإجبارية: لو end_break فشل (مثلاً "مفيش بريك
+  // مفتوح أصلاً" لأي سبب)، برضه نعمل refresh عشان الواجهة تعكس الحقيقة.
   async function handleEndBreak() {
     if (breakSubmitting) return;
     setBreakSubmitting(true);
@@ -268,6 +307,13 @@ export default function AttendancePage() {
       setBreakElapsedSec(0);
       showToast("success", `انتهت البريك الساعة ${time}`);
     } catch (err) {
+      if (record) {
+        try {
+          await refreshBreaks(record.id);
+        } catch {
+          // تجاهل فشل الـ refresh نفسه
+        }
+      }
       showToast("error", err instanceof Error ? err.message : "تعذر إنهاء البريك");
     } finally {
       setBreakSubmitting(false);
@@ -276,11 +322,11 @@ export default function AttendancePage() {
 
   const todayStatus = record?.status ?? null;
 
-  const totalBreakSeconds = breaks.reduce((sum, b) => {
-    if (b.break_mins !== null) return sum + b.break_mins * 60;
-    if (b.end_time === null) return sum + breakElapsedSec;
-    return sum + computeSecondsBetween(b.start_time, b.end_time);
-  }, 0);
+  // ✅ فيكس: بدل reduce يدوي كان بيدي breakElapsedSec لأي بريك مفتوح
+  // (لو فيه أكتر من واحد مفتوح بالغلط كان بيتضاعف الرقم غلط)، بنستخدم
+  // computeTotalBreakSeconds المختبَرة اللي بتاخد بس البريك المفتوح
+  // الحقيقي (نفس currentBreak) وتتجاهل أي orphan.
+  const totalBreakSeconds = computeTotalBreakSeconds(breaks, breakElapsedSec);
 
   const formatDuration = (totalSec: number) => {
     const m = Math.floor(totalSec / 60).toString().padStart(2, "0");
