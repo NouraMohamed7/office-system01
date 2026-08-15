@@ -169,8 +169,8 @@ export default function AttendancePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const currentBreak = breaks.length > 0 ? breaks[breaks.length - 1] : null;
-  const isOnBreak = !!currentBreak && currentBreak.end_time === null;
+const currentBreak = breaks.find((b) => b.end_time === null) ?? null;
+const isOnBreak = !!currentBreak;
 
   useEffect(() => {
     if (!isOnBreak || !currentBreak) return;
