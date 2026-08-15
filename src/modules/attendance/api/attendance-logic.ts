@@ -22,7 +22,7 @@ export function breakDurationMinutes(b: BreakRecord): number | null {
   if (b.break_mins !== null) return b.break_mins;
   if (!b.end_time) return null; // بريك لسه مفتوح
   const mins = Math.round(
-    (new Date(b.end_time).getTime() - new Date(b.start_time).getTime()) / 60000
+    (new Date(b.end_time).getTime() - new Date(b.start_time).getTime()) / 60000,
   );
   return mins > 0 ? mins : 0;
 }
@@ -50,7 +50,7 @@ export function summarizeBreaks(userBreaks: BreakRecord[]): {
  *  جاهزة (بدل ما تعمل fetch بنفسها) وترجع Map<attendance_id, إجمالي الدقايق>. */
 export async function getBreaksSummaryByAttendanceIdsPure(
   attendanceIds: number[],
-  allBreaks: BreakRecord[]
+  allBreaks: BreakRecord[],
 ): Promise<Map<number, number>> {
   const summary = new Map<number, number>();
   if (attendanceIds.length === 0) return summary;
@@ -66,7 +66,10 @@ export async function getBreaksSummaryByAttendanceIdsPure(
 }
 
 /** بيحوّل إجمالي الدقايق + هل فيه بريك جاري لنص عرض في الجدول */
-export function formatBreakCell(totalMinutes: number, isOnBreakNow: boolean): string {
+export function formatBreakCell(
+  totalMinutes: number,
+  isOnBreakNow: boolean,
+): string {
   if (totalMinutes === 0 && !isOnBreakNow) return "—";
   if (totalMinutes === 0 && isOnBreakNow) return "جاري الآن...";
   return isOnBreakNow
@@ -81,13 +84,54 @@ export function formatMinutesAsHours(mins: number): string {
   return `${h}:${String(m).padStart(2, "0")}`;
 }
 
+/**
+ * 🔧 فيكس جديد: بيرجع البريك المفتوح فعليًا دلوقتي (end_time = null).
+ * بيدوّر صراحةً عن آخر بريك بدأ من بين كل البريكات المفتوحة، بدل ما
+ * يعتمد على ترتيب المصفوفة أو أول/آخر عنصر فيها — عشان لو فيه بريك
+ * "يتيم" (orphan) سابق سايبه باگ end_break الموثق في الباك، منتلخبطش
+ * ونعتبره هو البريك الحالي بالغلط.
+ */
+export function getCurrentOpenBreak(breaks: BreakRecord[]): BreakRecord | null {
+  const openBreaks = breaks.filter((b) => b.end_time === null);
+  if (openBreaks.length === 0) return null;
+  return openBreaks.reduce((latest, b) =>
+    b.start_time > latest.start_time ? b : latest,
+  );
+}
+
+/**
+ * 🔧 فيكس جديد: إجمالي وقت البريك النهاردة بالثواني — مصمم عشان يتعرض
+ * لايف كل ثانية للبريك الحالي بس.
+ * - بريك مقفول: بياخد break_mins الجاهزة لو موجودة، وإلا بيحسبها من start/end.
+ * - البريك الحالي (المفتوح فعليًا دلوقتي، محدد بالـ id): بياخد
+ *   breakElapsedSec القادمة من الـ tick بتاع الـ component.
+ * - أي بريك تاني مفتوح غير الحالي (orphan من باگ end_break السابق):
+ *   بيتجاهل تمامًا من المجموع، لأننا مش عارفين مدته الحقيقية، وضمّه
+ *   كان بيضخّم الإجمالي غلط (المشكلة الأصلية اللي المستخدم بلّغ عنها).
+ */
+export function computeTotalBreakSeconds(
+  breaks: BreakRecord[],
+  breakElapsedSec: number,
+): number {
+  const currentBreak = getCurrentOpenBreak(breaks);
+
+  return breaks.reduce((sum, b) => {
+    if (b.break_mins !== null) return sum + b.break_mins * 60;
+    if (currentBreak && b.id === currentBreak.id) return sum + breakElapsedSec;
+    if (b.end_time === null) return sum; // orphan — بنتجاهله بدل ما نضخّم الإجمالي
+    const start = new Date(b.start_time).getTime();
+    const end = new Date(b.end_time).getTime();
+    return sum + Math.max(0, Math.floor((end - start) / 1000));
+  }, 0);
+}
+
 // ============================================================
 // getMyAttendanceToday: بياخد أحدث سجل بدل ما يعتمد على .maybeSingle()
 // ============================================================
 
 /** بياخد أحدث سجل من مجموعة سجلات (بالمقارنة بـ check_in_at) */
 export function pickLatestByCheckIn<T extends { check_in_at: string | null }>(
-  rows: T[]
+  rows: T[],
 ): T | null {
   if (rows.length === 0) return null;
   let latest = rows[0];
@@ -105,7 +149,7 @@ export function pickLatestByCheckIn<T extends { check_in_at: string | null }>(
 
 export function isLeaveStarted(
   startDate: string,
-  today: string = new Date().toISOString().slice(0, 10)
+  today: string = new Date().toISOString().slice(0, 10),
 ): boolean {
   return startDate <= today;
 }
@@ -138,7 +182,7 @@ export function resolveStatus(r: AttendanceTodayRow): AttendanceStatus {
 /** لو موظف عنده أكتر من سجل attendance_today في نفس اليوم، بياخد بس
  *  آخر سجل (أحدث check_in_at) لكل users_id. */
 export function dedupeAttendanceTodayByUser(
-  rows: AttendanceTodayRow[]
+  rows: AttendanceTodayRow[],
 ): AttendanceTodayRow[] {
   const dedupedByUser = new Map<string, AttendanceTodayRow>();
   for (const r of rows) {

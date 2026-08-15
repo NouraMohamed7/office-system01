@@ -3,7 +3,20 @@
 
 import { PortalLayout, Card, StatusPill } from "@/components/portal-layout";
 import { useToast } from "@/components/toast";
-import { Clock, Check, LogIn, LogOut, Coffee, PlayCircle, Loader2, Palmtree, X, Pencil, Trash2, Eye } from "lucide-react";
+import {
+  Clock,
+  Check,
+  LogIn,
+  LogOut,
+  Coffee,
+  PlayCircle,
+  Loader2,
+  Palmtree,
+  X,
+  Pencil,
+  Trash2,
+  Eye,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import {
   checkIn as apiCheckIn,
@@ -19,7 +32,14 @@ import {
   type MonthSummary,
   type BreakRecord,
 } from "@/modules/attendance/api/attendance.api";
-import { useMyLeaveRequests, useLeaveActions } from "@/modules/attendance/api/hooks/useAttendance";
+import {
+  getCurrentOpenBreak,
+  computeTotalBreakSeconds,
+} from "@/modules/attendance/api/attendance-logic";
+import {
+  useMyLeaveRequests,
+  useLeaveActions,
+} from "@/modules/attendance/api/hooks/useAttendance";
 import {
   ATTENDANCE_STATUS_LABEL,
   LEAVE_TYPE_LABEL,
@@ -56,17 +76,26 @@ const MIN_LEAVE_REASON_LENGTH = 5;
 
 function formatTime(iso: string | null): string {
   if (!iso) return "—";
-  return new Date(iso).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  return new Date(iso).toLocaleTimeString("ar-EG", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
 }
 
-function computeSecondsBetween(startISO: string, endISO: string | null): number {
+function computeSecondsBetween(
+  startISO: string,
+  endISO: string | null,
+): number {
   const start = new Date(startISO).getTime();
   const end = endISO ? new Date(endISO).getTime() : Date.now();
   return Math.max(0, Math.floor((end - start) / 1000));
 }
 
 function formatMinutesAsHhMm(mins: number): string {
-  const h = Math.floor(mins / 60).toString().padStart(2, "0");
+  const h = Math.floor(mins / 60)
+    .toString()
+    .padStart(2, "0");
   const m = (mins % 60).toString().padStart(2, "0");
   return `${h}:${m}`;
 }
@@ -83,7 +112,9 @@ export default function AttendancePage() {
   const [record, setRecord] = useState<AttendanceRecord | null>(null);
   const [history, setHistory] = useState<AttendanceRecord[]>([]);
   // إجمالي دقايق البريك لكل سجل في "سجل الحضور السابق"
-  const [historyBreakMinutes, setHistoryBreakMinutes] = useState<Map<number, number>>(new Map());
+  const [historyBreakMinutes, setHistoryBreakMinutes] = useState<
+    Map<number, number>
+  >(new Map());
   const [monthSummary, setMonthSummary] = useState<MonthSummary | null>(null);
   const [loadingToday, setLoadingToday] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -107,7 +138,10 @@ export default function AttendancePage() {
   // بضغط متكرر/متزامن يبعت نفس الـ RPC مرتين، النداء التاني بيفشل برسالة من الباك
   // (لأن الحالة اتغيرت بالنداء الأول) — إيرور بيظهر من غير أي سبب واضح للمستخدم
   // ومفيش حماية تمنعه. الحل: نتبع أي صف/أكشن بالظبط شغال دلوقتي، ونعطّل زراره بس.
-  const [busyLeave, setBusyLeave] = useState<{ id: number; action: LeaveRowAction } | null>(null);
+  const [busyLeave, setBusyLeave] = useState<{
+    id: number;
+    action: LeaveRowAction;
+  } | null>(null);
 
   // كارد تفاصيل الإجازة — مودال منفصل يعرض تفاصيل طلب الإجازة كاملة
   // (خصوصًا السبب لو فقرة طويلة) بدون أي قطع/truncate.
@@ -156,11 +190,16 @@ export default function AttendancePage() {
 
         // إجمالي دقايق البريك لكل سجل في السجل السابق دفعة واحدة
         if (hist.length > 0) {
-          const summaryMap = await getBreaksSummaryByAttendanceIds(hist.map((h) => h.id));
+          const summaryMap = await getBreaksSummaryByAttendanceIds(
+            hist.map((h) => h.id),
+          );
           setHistoryBreakMinutes(summaryMap);
         }
       } catch (err) {
-        showToast("error", err instanceof Error ? err.message : "حصل خطأ في تحميل بيانات الحضور");
+        showToast(
+          "error",
+          err instanceof Error ? err.message : "حصل خطأ في تحميل بيانات الحضور",
+        );
       } finally {
         setLoadingToday(false);
       }
@@ -169,20 +208,38 @@ export default function AttendancePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-const currentBreak = breaks.find((b) => b.end_time === null) ?? null;
-const isOnBreak = !!currentBreak;
+  // 🔧 فيكس: بندوّر صراحةً عن البريك المفتوح فعليًا (وليس آخر عنصر في
+  // المصفوفة ولا أول عنصر فيها بشكل خام) — عشان لو فيه بريك "يتيم" (orphan)
+  // سايبه باگ end_break السابق في الباك (موثق في attendance.api.ts)،
+  // نلتقط البريك الحالي الصحيح مش أي بريك مفتوح قديم بالغلط.
+  const currentBreak = getCurrentOpenBreak(breaks);
+  const isOnBreak = !!currentBreak;
 
   useEffect(() => {
     if (!isOnBreak || !currentBreak) return;
-    const tick = () => setBreakElapsedSec(computeSecondsBetween(currentBreak.start_time, null));
+    const tick = () =>
+      setBreakElapsedSec(computeSecondsBetween(currentBreak.start_time, null));
     tick();
     const t = setInterval(tick, 1000);
     return () => clearInterval(t);
   }, [isOnBreak, currentBreak]);
 
   const mounted = now !== null;
-  const time = now ? now.toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—:—:—";
-  const date = now ? now.toLocaleDateString("ar-EG", { weekday: "long", day: "numeric", month: "long", year: "numeric" }) : "";
+  const time = now
+    ? now.toLocaleTimeString("ar-EG", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      })
+    : "—:—:—";
+  const date = now
+    ? now.toLocaleDateString("ar-EG", {
+        weekday: "long",
+        day: "numeric",
+        month: "long",
+        year: "numeric",
+      })
+    : "";
   const shortDate = now ? now.toISOString().slice(0, 10) : "";
 
   const checkInTime = formatTime(record?.check_in_at ?? null);
@@ -204,12 +261,18 @@ const isOnBreak = !!currentBreak;
       setRecord(fresh);
       const exactTime = formatTime(fresh?.check_in_at ?? null);
       if (fresh && fresh.late_minutes > 0) {
-        showToast("error", `تم تسجيل حضورك الساعة ${exactTime} — بتأخير عن الموعد الرسمي`);
+        showToast(
+          "error",
+          `تم تسجيل حضورك الساعة ${exactTime} — بتأخير عن الموعد الرسمي`,
+        );
       } else {
         showToast("success", `تم تسجيل حضورك الساعة ${exactTime}`);
       }
     } catch (err) {
-      showToast("error", err instanceof Error ? err.message : "تعذر تسجيل الحضور");
+      showToast(
+        "error",
+        err instanceof Error ? err.message : "تعذر تسجيل الحضور",
+      );
     } finally {
       setSubmitting(false);
     }
@@ -226,9 +289,15 @@ const isOnBreak = !!currentBreak;
       await apiCheckOut();
       const fresh = await getMyAttendanceToday();
       setRecord(fresh);
-      showToast("success", `تم تسجيل انصرافك الساعة ${formatTime(fresh?.check_out_at ?? null)}`);
+      showToast(
+        "success",
+        `تم تسجيل انصرافك الساعة ${formatTime(fresh?.check_out_at ?? null)}`,
+      );
     } catch (err) {
-      showToast("error", err instanceof Error ? err.message : "تعذر تسجيل الانصراف");
+      showToast(
+        "error",
+        err instanceof Error ? err.message : "تعذر تسجيل الانصراف",
+      );
     } finally {
       setSubmitting(false);
     }
@@ -243,7 +312,10 @@ const isOnBreak = !!currentBreak;
       setBreakElapsedSec(0);
       showToast("success", `بدأت البريك الساعة ${time}`);
     } catch (err) {
-      showToast("error", err instanceof Error ? err.message : "تعذر بدء البريك");
+      showToast(
+        "error",
+        err instanceof Error ? err.message : "تعذر بدء البريك",
+      );
     } finally {
       setBreakSubmitting(false);
     }
@@ -258,7 +330,10 @@ const isOnBreak = !!currentBreak;
       setBreakElapsedSec(0);
       showToast("success", `انتهت البريك الساعة ${time}`);
     } catch (err) {
-      showToast("error", err instanceof Error ? err.message : "تعذر إنهاء البريك");
+      showToast(
+        "error",
+        err instanceof Error ? err.message : "تعذر إنهاء البريك",
+      );
     } finally {
       setBreakSubmitting(false);
     }
@@ -266,20 +341,25 @@ const isOnBreak = !!currentBreak;
 
   const todayStatus = record?.status ?? null;
 
-  const totalBreakSeconds = breaks.reduce((sum, b) => {
-    if (b.break_mins !== null) return sum + b.break_mins * 60;
-    if (b.end_time === null) return sum + breakElapsedSec;
-    return sum + computeSecondsBetween(b.start_time, b.end_time);
-  }, 0);
+  // 🔧 الفيكس الأساسي: قبل كده كان أي بريك مفتوح (end_time === null) —
+  // حتى لو مش البريك الحالي فعليًا — بياخد breakElapsedSec ويتضاف للمجموع.
+  // لو فيه بريك يتيم (orphan) من باگ end_break السابق، كان بيتحسب كأنه
+  // شغال لحد دلوقتي وده اللي كان بيضخّم "إجمالي وقت البريك" غلط.
+  // computeTotalBreakSeconds بتحدد البريك الحالي بالـ id وتتجاهل أي orphan.
+  const totalBreakSeconds = computeTotalBreakSeconds(breaks, breakElapsedSec);
 
   const formatDuration = (totalSec: number) => {
-    const m = Math.floor(totalSec / 60).toString().padStart(2, "0");
+    const m = Math.floor(totalSec / 60)
+      .toString()
+      .padStart(2, "0");
     const s = (totalSec % 60).toString().padStart(2, "0");
     return `${m}:${s}`;
   };
 
   const summaryPct = (count: number) =>
-    monthSummary && monthSummary.totalDays > 0 ? Math.round((count / monthSummary.totalDays) * 100) : 0;
+    monthSummary && monthSummary.totalDays > 0
+      ? Math.round((count / monthSummary.totalDays) * 100)
+      : 0;
 
   // ============================================================
   // طلبات الإجازة
@@ -320,7 +400,10 @@ const isOnBreak = !!currentBreak;
       return;
     }
     if (trimmedReason.length < MIN_LEAVE_REASON_LENGTH) {
-      showToast("error", `سبب الإجازة قصير جدًا — اكتب ${MIN_LEAVE_REASON_LENGTH} أحرف على الأقل`);
+      showToast(
+        "error",
+        `سبب الإجازة قصير جدًا — اكتب ${MIN_LEAVE_REASON_LENGTH} أحرف على الأقل`,
+      );
       return;
     }
     // فاليديشن: من غير ده ممكن تبعت تاريخ نهاية قبل تاريخ البداية
@@ -357,7 +440,10 @@ const isOnBreak = !!currentBreak;
       await refreshLeaves();
       setLeaveOpen(false);
     } catch (err) {
-      showToast("error", err instanceof Error ? err.message : "تعذر إرسال طلب الإجازة");
+      showToast(
+        "error",
+        err instanceof Error ? err.message : "تعذر إرسال طلب الإجازة",
+      );
     }
   }
 
@@ -370,14 +456,20 @@ const isOnBreak = !!currentBreak;
       await refreshLeaves();
       showToast("success", "تم إلغاء طلب الإجازة");
     } catch (err) {
-      showToast("error", err instanceof Error ? err.message : "تعذر إلغاء طلب الإجازة");
+      showToast(
+        "error",
+        err instanceof Error ? err.message : "تعذر إلغاء طلب الإجازة",
+      );
     } finally {
       setBusyLeave(null);
     }
   }
 
   return (
-    <PortalLayout title="الحضور" subtitle="سجل حضورك وانصرافك اليومي وراجع تاريخك">
+    <PortalLayout
+      title="الحضور"
+      subtitle="سجل حضورك وانصرافك اليومي وراجع تاريخك"
+    >
       <Card className="p-8 mb-6 text-center relative overflow-hidden">
         <div className="absolute inset-0 bg-gradient-to-b from-primary/5 to-transparent pointer-events-none" />
         <div className="relative">
@@ -393,18 +485,28 @@ const isOnBreak = !!currentBreak;
           </div>
 
           <div className="text-sm text-muted-foreground">{date}</div>
-          <div className="text-5xl font-bold text-foreground tabular-nums mt-2 mb-6">{time}</div>
+          <div className="text-5xl font-bold text-foreground tabular-nums mt-2 mb-6">
+            {time}
+          </div>
 
           {loadingToday && (
             <div className="flex items-center justify-center gap-2 text-muted-foreground py-4">
-              <Loader2 className="h-5 w-5 animate-spin" /> جاري تحميل حالة اليوم...
+              <Loader2 className="h-5 w-5 animate-spin" /> جاري تحميل حالة
+              اليوم...
             </div>
           )}
 
           {!loadingToday && !hasCheckedIn && (
-            <button onClick={handleCheckIn} disabled={!mounted || submitting}
-              className="inline-flex items-center gap-3 bg-primary text-primary-foreground rounded-2xl px-8 py-4 font-bold text-lg hover:bg-primary-dark transition shadow-warm disabled:opacity-40 disabled:cursor-not-allowed">
-              {submitting ? <Loader2 className="h-6 w-6 animate-spin" /> : <LogIn className="h-6 w-6" />}
+            <button
+              onClick={handleCheckIn}
+              disabled={!mounted || submitting}
+              className="inline-flex items-center gap-3 bg-primary text-primary-foreground rounded-2xl px-8 py-4 font-bold text-lg hover:bg-primary-dark transition shadow-warm disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {submitting ? (
+                <Loader2 className="h-6 w-6 animate-spin" />
+              ) : (
+                <LogIn className="h-6 w-6" />
+              )}
               تسجيل الحضور
             </button>
           )}
@@ -417,7 +519,9 @@ const isOnBreak = !!currentBreak;
                 </div>
                 <div className="text-right">
                   <div className="font-bold">تم تسجيل حضورك</div>
-                  <div className="text-sm tabular-nums">الساعة {checkInTime}</div>
+                  <div className="text-sm tabular-nums">
+                    الساعة {checkInTime}
+                  </div>
                 </div>
               </div>
 
@@ -428,37 +532,63 @@ const isOnBreak = !!currentBreak;
                   </div>
                   <div className="text-right">
                     <div className="font-bold">في استراحة الآن</div>
-                    <div className="text-sm tabular-nums">{formatDuration(breakElapsedSec)}</div>
+                    <div className="text-sm tabular-nums">
+                      {formatDuration(breakElapsedSec)}
+                    </div>
                   </div>
                 </div>
               )}
 
               <div className="flex flex-wrap items-center justify-center gap-3">
                 {!isOnBreak && (
-                  <button onClick={handleStartBreak} disabled={breakSubmitting}
-                    className="inline-flex items-center gap-2 bg-warning/15 text-warning rounded-2xl px-6 py-3 font-bold hover:bg-warning/25 transition disabled:opacity-50">
-                    {breakSubmitting ? <Loader2 className="h-5 w-5 animate-spin" /> : <Coffee className="h-5 w-5" />}
+                  <button
+                    onClick={handleStartBreak}
+                    disabled={breakSubmitting}
+                    className="inline-flex items-center gap-2 bg-warning/15 text-warning rounded-2xl px-6 py-3 font-bold hover:bg-warning/25 transition disabled:opacity-50"
+                  >
+                    {breakSubmitting ? (
+                      <Loader2 className="h-5 w-5 animate-spin" />
+                    ) : (
+                      <Coffee className="h-5 w-5" />
+                    )}
                     بدء البريك
                   </button>
                 )}
                 {isOnBreak && (
-                  <button onClick={handleEndBreak} disabled={breakSubmitting}
-                    className="inline-flex items-center gap-2 bg-success/15 text-success rounded-2xl px-6 py-3 font-bold hover:bg-success/25 transition disabled:opacity-50">
-                    {breakSubmitting ? <Loader2 className="h-5 w-5 animate-spin" /> : <PlayCircle className="h-5 w-5" />}
+                  <button
+                    onClick={handleEndBreak}
+                    disabled={breakSubmitting}
+                    className="inline-flex items-center gap-2 bg-success/15 text-success rounded-2xl px-6 py-3 font-bold hover:bg-success/25 transition disabled:opacity-50"
+                  >
+                    {breakSubmitting ? (
+                      <Loader2 className="h-5 w-5 animate-spin" />
+                    ) : (
+                      <PlayCircle className="h-5 w-5" />
+                    )}
                     إنهاء البريك
                   </button>
                 )}
 
-                <button onClick={handleCheckOut} disabled={isOnBreak || submitting}
-                  className="inline-flex items-center gap-2 bg-destructive text-destructive-foreground rounded-2xl px-8 py-3 font-bold text-lg hover:opacity-90 transition shadow-warm disabled:opacity-40 disabled:cursor-not-allowed">
-                  {submitting ? <Loader2 className="h-5 w-5 animate-spin" /> : <LogOut className="h-5 w-5" />}
+                <button
+                  onClick={handleCheckOut}
+                  disabled={isOnBreak || submitting}
+                  className="inline-flex items-center gap-2 bg-destructive text-destructive-foreground rounded-2xl px-8 py-3 font-bold text-lg hover:opacity-90 transition shadow-warm disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {submitting ? (
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                  ) : (
+                    <LogOut className="h-5 w-5" />
+                  )}
                   تسجيل الانصراف
                 </button>
               </div>
 
               {breaks.length > 0 && (
                 <div className="text-sm text-muted-foreground">
-                  إجمالي وقت البريك النهاردة: <span className="font-bold tabular-nums text-foreground">{formatDuration(totalBreakSeconds)}</span>
+                  إجمالي وقت البريك النهاردة:{" "}
+                  <span className="font-bold tabular-nums text-foreground">
+                    {formatDuration(totalBreakSeconds)}
+                  </span>
                 </div>
               )}
             </div>
@@ -469,18 +599,24 @@ const isOnBreak = !!currentBreak;
               <div className="bg-success/10 text-success rounded-2xl p-4">
                 <LogIn className="h-5 w-5 mx-auto mb-1" />
                 <div className="text-xs font-semibold">وقت الحضور</div>
-                <div className="text-lg font-bold tabular-nums mt-1">{checkInTime}</div>
+                <div className="text-lg font-bold tabular-nums mt-1">
+                  {checkInTime}
+                </div>
               </div>
               <div className="bg-destructive/10 text-destructive rounded-2xl p-4">
                 <LogOut className="h-5 w-5 mx-auto mb-1" />
                 <div className="text-xs font-semibold">وقت الانصراف</div>
-                <div className="text-lg font-bold tabular-nums mt-1">{checkOutTime}</div>
+                <div className="text-lg font-bold tabular-nums mt-1">
+                  {checkOutTime}
+                </div>
               </div>
               {breaks.length > 0 && (
                 <div className="col-span-2 bg-warning/10 text-warning rounded-2xl p-4">
                   <Coffee className="h-5 w-5 mx-auto mb-1" />
                   <div className="text-xs font-semibold">إجمالي وقت البريك</div>
-                  <div className="text-lg font-bold tabular-nums mt-1">{formatDuration(totalBreakSeconds)}</div>
+                  <div className="text-lg font-bold tabular-nums mt-1">
+                    {formatDuration(totalBreakSeconds)}
+                  </div>
                 </div>
               )}
               <div className="col-span-2 text-sm text-muted-foreground mt-1">
@@ -499,20 +635,28 @@ const isOnBreak = !!currentBreak;
           <h3 className="font-bold text-foreground mb-1 flex items-center gap-2">
             <Palmtree className="h-4 w-4 text-teal" /> طلبات الإجازة
           </h3>
-          {loadingLeaves && <p className="text-xs text-muted-foreground mb-4">جاري التحميل...</p>}
+          {loadingLeaves && (
+            <p className="text-xs text-muted-foreground mb-4">
+              جاري التحميل...
+            </p>
+          )}
           <div className="space-y-2">
             {leaves.map((l) => {
               const started = isLeaveStarted(l.start_date);
               // تعديل/إلغاء: متاحين بس لو الإجازة لسه ما بدأتش (مطابق لرسالة الباك)
               const canEditOrCancel = !started;
               const hasAnyAction = canEditOrCancel;
-              const isCancelling = busyLeave?.id === l.id && busyLeave.action === "cancel";
+              const isCancelling =
+                busyLeave?.id === l.id && busyLeave.action === "cancel";
               const rowBusy = busyLeave?.id === l.id;
 
               // السبب بيتقصّ بصريًا هنا (line-clamp-2) بس دايمًا فيه طريقة
               // مضمونة تشوفه كامل من غير قطع: زرار "عرض التفاصيل" بيفتح كارد.
               return (
-                <div key={l.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border p-3 text-sm">
+                <div
+                  key={l.id}
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border p-3 text-sm"
+                >
                   <button
                     type="button"
                     onClick={() => setDetailsLeave(l)}
@@ -520,7 +664,8 @@ const isOnBreak = !!currentBreak;
                     title="عرض التفاصيل كاملة"
                   >
                     <div className="font-semibold flex items-center gap-2 flex-wrap">
-                      {LEAVE_TYPE_LABEL[l.leave_type]} — {l.start_date} إلى {l.end_date}
+                      {LEAVE_TYPE_LABEL[l.leave_type]} — {l.start_date} إلى{" "}
+                      {l.end_date}
                       {/* ✅ فيكس: كان بيستخدم ternary ناقص (نفس المشكلة اللي في
                           المودال تحت) بيرجّع "muted" لأي حالة مش accepted/rejected/
                           pending، يعني "cancelled" و"end_leave_early" بلون واحد
@@ -529,7 +674,9 @@ const isOnBreak = !!currentBreak;
                         {LEAVE_STATUS_LABEL[l.status]}
                       </StatusPill>
                     </div>
-                    <div className="text-muted-foreground text-xs line-clamp-2 mt-0.5">{l.reason}</div>
+                    <div className="text-muted-foreground text-xs line-clamp-2 mt-0.5">
+                      {l.reason}
+                    </div>
                   </button>
                   {hasAnyAction ? (
                     <div className="flex items-center gap-2 shrink-0">
@@ -557,7 +704,11 @@ const isOnBreak = !!currentBreak;
                           className="rounded-lg border border-border p-2 hover:bg-destructive/10 disabled:opacity-40 disabled:cursor-not-allowed"
                           title="إلغاء"
                         >
-                          {isCancelling ? <Loader2 className="h-4 w-4 animate-spin text-destructive" /> : <Trash2 className="h-4 w-4 text-destructive" />}
+                          {isCancelling ? (
+                            <Loader2 className="h-4 w-4 animate-spin text-destructive" />
+                          ) : (
+                            <Trash2 className="h-4 w-4 text-destructive" />
+                          )}
                         </button>
                       )}
                     </div>
@@ -571,7 +722,9 @@ const isOnBreak = !!currentBreak;
                         <Eye className="h-4 w-4" />
                       </button>
                       <span className="text-xs text-muted-foreground">
-                        {started ? "بدأت الإجازة — لا يمكن التعديل" : "لا يوجد إجراء متاح"}
+                        {started
+                          ? "بدأت الإجازة — لا يمكن التعديل"
+                          : "لا يوجد إجراء متاح"}
                       </span>
                     </div>
                   )}
@@ -599,12 +752,26 @@ const isOnBreak = !!currentBreak;
               </thead>
               <tbody>
                 <tr className="border-b border-border/60">
-                  <td className="py-3 text-foreground tabular-nums">{checkInTime}</td>
-                  <td className="py-3 text-muted-foreground tabular-nums">{hasCheckedOut ? checkOutTime : "— لسه ماسجلتيش انصراف —"}</td>
-                  <td className="py-3 text-muted-foreground tabular-nums">{formatDuration(totalBreakSeconds)}</td>
+                  <td className="py-3 text-foreground tabular-nums">
+                    {checkInTime}
+                  </td>
+                  <td className="py-3 text-muted-foreground tabular-nums">
+                    {hasCheckedOut ? checkOutTime : "— لسه ماسجلتيش انصراف —"}
+                  </td>
+                  <td className="py-3 text-muted-foreground tabular-nums">
+                    {formatDuration(totalBreakSeconds)}
+                  </td>
                   <td className="py-3">
                     {todayStatus && (
-                      <StatusPill tone={todayStatus === "present" ? "success" : todayStatus === "late" ? "warning" : "danger"}>
+                      <StatusPill
+                        tone={
+                          todayStatus === "present"
+                            ? "success"
+                            : todayStatus === "late"
+                              ? "warning"
+                              : "danger"
+                        }
+                      >
                         {ATTENDANCE_STATUS_LABEL[todayStatus]}
                       </StatusPill>
                     )}
@@ -616,15 +783,21 @@ const isOnBreak = !!currentBreak;
 
           {breaks.length > 0 && (
             <div className="mt-5 pt-5 border-t border-border/60">
-              <h4 className="text-sm font-semibold text-foreground mb-3">تفاصيل البريكات</h4>
+              <h4 className="text-sm font-semibold text-foreground mb-3">
+                تفاصيل البريكات
+              </h4>
               <div className="space-y-2">
                 {breaks.map((b, i) => (
-                  <div key={b.id} className="flex items-center justify-between text-sm bg-warning/5 rounded-xl px-4 py-2">
+                  <div
+                    key={b.id}
+                    className="flex items-center justify-between text-sm bg-warning/5 rounded-xl px-4 py-2"
+                  >
                     <span className="flex items-center gap-2 text-warning font-semibold">
                       <Coffee className="h-4 w-4" /> بريك {i + 1}
                     </span>
                     <span className="tabular-nums text-muted-foreground">
-                      {formatTime(b.start_time)} — {b.end_time ? formatTime(b.end_time) : "جارية الآن"}
+                      {formatTime(b.start_time)} —{" "}
+                      {b.end_time ? formatTime(b.end_time) : "جارية الآن"}
                     </span>
                   </div>
                 ))}
@@ -650,21 +823,43 @@ const isOnBreak = !!currentBreak;
             <tbody>
               {history.length === 0 && !loadingToday && (
                 <tr>
-                  <td colSpan={5} className="py-6 text-center text-muted-foreground">مفيش سجل سابق</td>
+                  <td
+                    colSpan={5}
+                    className="py-6 text-center text-muted-foreground"
+                  >
+                    مفيش سجل سابق
+                  </td>
                 </tr>
               )}
               {history.map((r) => {
                 const breakMins = historyBreakMinutes.get(r.id) ?? 0;
                 return (
-                  <tr key={r.id} className="border-b border-border/60 hover:bg-primary/5 transition">
-                    <td className="py-3 text-foreground">{r.attendance_date}</td>
-                    <td className="py-3 text-muted-foreground tabular-nums">{formatTime(r.check_in_at)}</td>
-                    <td className="py-3 text-muted-foreground tabular-nums">{formatTime(r.check_out_at)}</td>
+                  <tr
+                    key={r.id}
+                    className="border-b border-border/60 hover:bg-primary/5 transition"
+                  >
+                    <td className="py-3 text-foreground">
+                      {r.attendance_date}
+                    </td>
+                    <td className="py-3 text-muted-foreground tabular-nums">
+                      {formatTime(r.check_in_at)}
+                    </td>
+                    <td className="py-3 text-muted-foreground tabular-nums">
+                      {formatTime(r.check_out_at)}
+                    </td>
                     <td className="py-3 text-muted-foreground tabular-nums">
                       {breakMins > 0 ? formatMinutesAsHhMm(breakMins) : "—"}
                     </td>
                     <td className="py-3">
-                      <StatusPill tone={r.status === "present" ? "success" : r.status === "late" ? "warning" : "danger"}>
+                      <StatusPill
+                        tone={
+                          r.status === "present"
+                            ? "success"
+                            : r.status === "late"
+                              ? "warning"
+                              : "danger"
+                        }
+                      >
                         {ATTENDANCE_STATUS_LABEL[r.status]}
                       </StatusPill>
                     </td>
@@ -679,9 +874,24 @@ const isOnBreak = !!currentBreak;
       <div>
         <h3 className="font-bold text-foreground mb-3">ملخص الشهر</h3>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <SummaryCard label="أيام الحضور" value={String(monthSummary?.presentDays ?? 0)} tone="success" pct={summaryPct(monthSummary?.presentDays ?? 0)} />
-          <SummaryCard label="أيام الغياب" value={String(monthSummary?.absentDays ?? 0)} tone="danger" pct={summaryPct(monthSummary?.absentDays ?? 0)} />
-          <SummaryCard label="أيام التأخير" value={String(monthSummary?.lateDays ?? 0)} tone="warning" pct={summaryPct(monthSummary?.lateDays ?? 0)} />
+          <SummaryCard
+            label="أيام الحضور"
+            value={String(monthSummary?.presentDays ?? 0)}
+            tone="success"
+            pct={summaryPct(monthSummary?.presentDays ?? 0)}
+          />
+          <SummaryCard
+            label="أيام الغياب"
+            value={String(monthSummary?.absentDays ?? 0)}
+            tone="danger"
+            pct={summaryPct(monthSummary?.absentDays ?? 0)}
+          />
+          <SummaryCard
+            label="أيام التأخير"
+            value={String(monthSummary?.lateDays ?? 0)}
+            tone="warning"
+            pct={summaryPct(monthSummary?.lateDays ?? 0)}
+          />
         </div>
       </div>
 
@@ -690,14 +900,22 @@ const isOnBreak = !!currentBreak;
       ============================================================ */}
       {leaveOpen && (
         <>
-          <div className="fixed inset-0 z-40 bg-black/40" onClick={() => setLeaveOpen(false)} />
+          <div
+            className="fixed inset-0 z-40 bg-black/40"
+            onClick={() => setLeaveOpen(false)}
+          />
           <div className="fixed inset-x-4 top-1/2 z-50 mx-auto max-w-md -translate-y-1/2 rounded-2xl border border-border bg-card p-6 shadow-warm">
             <div className="mb-4 flex items-center justify-between">
               <h3 className="text-lg font-bold flex items-center gap-2">
                 <Palmtree className="h-5 w-5 text-teal" />
-                {editingLeaveId !== null ? "تعديل طلب الإجازة" : "طلب إجازة جديد"}
+                {editingLeaveId !== null
+                  ? "تعديل طلب الإجازة"
+                  : "طلب إجازة جديد"}
               </h3>
-              <button onClick={() => setLeaveOpen(false)} className="text-muted-foreground hover:text-foreground">
+              <button
+                onClick={() => setLeaveOpen(false)}
+                className="text-muted-foreground hover:text-foreground"
+              >
                 <X className="h-4 w-4" />
               </button>
             </div>
@@ -717,7 +935,8 @@ const isOnBreak = !!currentBreak;
                       setLeaveForm((f) => {
                         const start_date = e.target.value;
                         // لو تاريخ النهاية بقى قبل البداية الجديدة، نزوّده تلقائيًا
-                        const end_date = f.end_date < start_date ? start_date : f.end_date;
+                        const end_date =
+                          f.end_date < start_date ? start_date : f.end_date;
                         return { ...f, start_date, end_date };
                       })
                     }
@@ -730,7 +949,9 @@ const isOnBreak = !!currentBreak;
                     type="date"
                     value={leaveForm.end_date}
                     min={leaveForm.start_date}
-                    onChange={(e) => setLeaveForm((f) => ({ ...f, end_date: e.target.value }))}
+                    onChange={(e) =>
+                      setLeaveForm((f) => ({ ...f, end_date: e.target.value }))
+                    }
                     className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary/50"
                   />
                 </label>
@@ -740,13 +961,22 @@ const isOnBreak = !!currentBreak;
                 <span className="text-muted-foreground">نوع الإجازة</span>
                 <select
                   value={leaveForm.leave_type}
-                  onChange={(e) => setLeaveForm((f) => ({ ...f, leave_type: e.target.value as LeaveType }))}
+                  onChange={(e) =>
+                    setLeaveForm((f) => ({
+                      ...f,
+                      leave_type: e.target.value as LeaveType,
+                    }))
+                  }
                   disabled={editingLeaveId !== null}
                   className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary/50 disabled:opacity-60"
                 >
-                  <option value="" disabled>اختار نوع الإجازة</option>
+                  <option value="" disabled>
+                    اختار نوع الإجازة
+                  </option>
                   {LEAVE_TYPE_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
                   ))}
                 </select>
               </label>
@@ -756,11 +986,16 @@ const isOnBreak = !!currentBreak;
                   السبب
                   {/* 🔧 VALIDATION FIX: توضيح الحد الأدنى في الليبل نفسه عشان
                       المستخدم يعرف مقدمًا بدل ما يتفاجئ بالإيرور بعد الإرسال */}
-                  <span className="text-muted-foreground/70"> (لا يقل عن {MIN_LEAVE_REASON_LENGTH} أحرف)</span>
+                  <span className="text-muted-foreground/70">
+                    {" "}
+                    (لا يقل عن {MIN_LEAVE_REASON_LENGTH} أحرف)
+                  </span>
                 </span>
                 <textarea
                   value={leaveForm.reason}
-                  onChange={(e) => setLeaveForm((f) => ({ ...f, reason: e.target.value }))}
+                  onChange={(e) =>
+                    setLeaveForm((f) => ({ ...f, reason: e.target.value }))
+                  }
                   rows={3}
                   className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary/50"
                 />
@@ -771,7 +1006,11 @@ const isOnBreak = !!currentBreak;
                 disabled={leaveActions.loading}
                 className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-60"
               >
-                {leaveActions.loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Palmtree className="h-4 w-4" />}
+                {leaveActions.loading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Palmtree className="h-4 w-4" />
+                )}
                 {editingLeaveId !== null ? "حفظ التعديل" : "إرسال الطلب"}
               </button>
             </div>
@@ -785,7 +1024,10 @@ const isOnBreak = !!currentBreak;
       ============================================================ */}
       {detailsLeave && (
         <>
-          <div className="fixed inset-0 z-40 bg-black/40" onClick={() => setDetailsLeave(null)} />
+          <div
+            className="fixed inset-0 z-40 bg-black/40"
+            onClick={() => setDetailsLeave(null)}
+          />
           <div className="fixed inset-x-4 top-1/2 z-50 mx-auto max-w-lg -translate-y-1/2 rounded-2xl border border-border bg-card p-6 shadow-warm max-h-[85vh] overflow-y-auto">
             <div className="mb-4 flex items-start justify-between gap-3">
               <div>
@@ -801,19 +1043,30 @@ const isOnBreak = !!currentBreak;
                   </StatusPill>
                 </div>
               </div>
-              <button onClick={() => setDetailsLeave(null)} className="text-muted-foreground hover:text-foreground shrink-0">
+              <button
+                onClick={() => setDetailsLeave(null)}
+                className="text-muted-foreground hover:text-foreground shrink-0"
+              >
                 <X className="h-4 w-4" />
               </button>
             </div>
 
             <div className="grid grid-cols-2 gap-3 text-sm mb-4">
               <div className="rounded-xl bg-accent/30 p-3">
-                <div className="text-xs text-muted-foreground mb-1">من تاريخ</div>
-                <div className="font-semibold tabular-nums">{detailsLeave.start_date}</div>
+                <div className="text-xs text-muted-foreground mb-1">
+                  من تاريخ
+                </div>
+                <div className="font-semibold tabular-nums">
+                  {detailsLeave.start_date}
+                </div>
               </div>
               <div className="rounded-xl bg-accent/30 p-3">
-                <div className="text-xs text-muted-foreground mb-1">إلى تاريخ</div>
-                <div className="font-semibold tabular-nums">{detailsLeave.end_date}</div>
+                <div className="text-xs text-muted-foreground mb-1">
+                  إلى تاريخ
+                </div>
+                <div className="font-semibold tabular-nums">
+                  {detailsLeave.end_date}
+                </div>
               </div>
             </div>
 
@@ -840,20 +1093,57 @@ const isOnBreak = !!currentBreak;
   );
 }
 
-function SummaryCard({ label, value, tone, pct }: { label: string; value: string; tone: "success" | "danger" | "warning"; pct: number }) {
-  const color = tone === "success" ? "var(--success)" : tone === "warning" ? "var(--warning)" : "var(--destructive)";
+function SummaryCard({
+  label,
+  value,
+  tone,
+  pct,
+}: {
+  label: string;
+  value: string;
+  tone: "success" | "danger" | "warning";
+  pct: number;
+}) {
+  const color =
+    tone === "success"
+      ? "var(--success)"
+      : tone === "warning"
+        ? "var(--warning)"
+        : "var(--destructive)";
   return (
     <Card className="p-5 flex items-center gap-4">
       <div className="relative h-16 w-16 shrink-0">
         <svg viewBox="0 0 36 36" className="h-16 w-16 -rotate-90">
-          <circle cx="18" cy="18" r="15" fill="none" stroke="var(--color-border)" strokeWidth="3" />
-          <circle cx="18" cy="18" r="15" fill="none" stroke={color} strokeWidth="3" strokeLinecap="round"
-            strokeDasharray={`${pct * 0.94} 100`} />
+          <circle
+            cx="18"
+            cy="18"
+            r="15"
+            fill="none"
+            stroke="var(--color-border)"
+            strokeWidth="3"
+          />
+          <circle
+            cx="18"
+            cy="18"
+            r="15"
+            fill="none"
+            stroke={color}
+            strokeWidth="3"
+            strokeLinecap="round"
+            strokeDasharray={`${pct * 0.94} 100`}
+          />
         </svg>
-        <div className="absolute inset-0 grid place-items-center text-xs font-bold tabular-nums" style={{ color }}>{pct}%</div>
+        <div
+          className="absolute inset-0 grid place-items-center text-xs font-bold tabular-nums"
+          style={{ color }}
+        >
+          {pct}%
+        </div>
       </div>
       <div>
-        <div className="text-3xl font-bold text-foreground tabular-nums">{value}</div>
+        <div className="text-3xl font-bold text-foreground tabular-nums">
+          {value}
+        </div>
         <div className="text-sm text-muted-foreground">{label}</div>
       </div>
     </Card>
