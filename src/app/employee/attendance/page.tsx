@@ -20,6 +20,7 @@ import {
   submitLeave as apiSubmitLeave,
   editLeave as apiEditLeave,
   removeLeave as apiRemoveLeave,
+  getMyTodayStatusRow,
   type AttendanceRecord,
   type MonthSummary,
   type BreakRecord,
@@ -51,6 +52,8 @@ function isLeaveStarted(startDate: string): boolean {
 
 // بندور على أحدث بريك مفتوح (end_time === null). لو فيه orphan قديم
 // (بريك فاضل مفتوح من باگ سابق في end_break)، بنتجاهله ونستخدم الأحدث.
+// ده fallback بنستخدمه بس لو attendance_today.status مش راجع قيمة واضحة
+// (on_work/break) — شوف isOnBreak تحت.
 function getCurrentOpenBreak(breaks: BreakRecord[]): BreakRecord | null {
   const open = breaks.filter((b) => b.end_time === null);
   if (open.length === 0) return null;
@@ -121,6 +124,9 @@ export default function AttendancePage() {
   const [breaks, setBreaks] = useState<BreakRecord[]>([]);
   const [breakSubmitting, setBreakSubmitting] = useState(false);
   const [breakElapsedSec, setBreakElapsedSec] = useState(0);
+  // حالة البريك زي ما راجعة من attendance_today.status ("on_work" / "break"
+  // متوقعين، بس لسه بنتأكد بالـ console.log تحت). null لحد أول قراءة.
+  const [todayBreakStatus, setTodayBreakStatus] = useState<string | null>(null);
   // كل الـ attendance_id بتاعت صفوف اليوم كلها (مش بس آخر صف) — لازمة عشان
   // refreshBreaks تقدر تجيب بريكات أي صف قديم النهاردة برضه.
   const [todayAttendanceIds, setTodayAttendanceIds] = useState<number[]>([]);
@@ -178,6 +184,20 @@ export default function AttendancePage() {
     };
   }, []);
 
+  // ✅ قراءة حالة البريك من attendance_today.status ("on_work"/"break"
+  // متوقعين). بنسيب console.log مؤقت لحد ما نتأكد بالتجربة الفعلية من
+  // القيمة الراجعة، وبعدين نشيله.
+  const refreshTodayBreakStatus = useCallback(async () => {
+    try {
+      const row = await getMyTodayStatusRow();
+      // eslint-disable-next-line no-console
+      console.log("[attendance_today.status]", row?.status);
+      setTodayBreakStatus(row?.status ?? null);
+    } catch {
+      // تجاهل — هنرجع نعتمد على استنتاج breaks (fallback تحت)
+    }
+  }, []);
+
   // تحميل حالة اليوم + البريكات + السجل السابق + ملخص الشهر أول ما الصفحة تفتح
   useEffect(() => {
     async function load() {
@@ -206,6 +226,8 @@ export default function AttendancePage() {
           const summaryMap = await getBreaksSummaryByAttendanceIds(hist.map((h) => h.id));
           setHistoryBreakMinutes(summaryMap);
         }
+
+        await refreshTodayBreakStatus();
       } catch (err) {
         showToast("error", err instanceof Error ? err.message : "حصل خطأ في تحميل بيانات الحضور");
       } finally {
@@ -217,7 +239,12 @@ export default function AttendancePage() {
   }, []);
 
   const currentBreak = getCurrentOpenBreak(breaks);
-  const isOnBreak = !!currentBreak;
+  const inferredOnBreak = !!currentBreak;
+  // ✅ مصدر الحقيقة الأساسي: attendance_today.status لو راجع قيمة واضحة.
+  // fallback آمن: استنتاج من جدول breaks (end_time === null) لو الـ status
+  // مش "on_work" ولا "break" بالظبط (يعني القيمة مش زي ما توقعنا).
+  const isOnBreak =
+    todayBreakStatus === "break" ? true : todayBreakStatus === "on_work" ? false : inferredOnBreak;
 
   useEffect(() => {
     if (!isOnBreak || !currentBreak) return;
@@ -297,7 +324,7 @@ export default function AttendancePage() {
     }
   }
 
- async function handleStartBreak() {
+  async function handleStartBreak() {
     if (breakSubmitting) return;
 
     if (!hasCheckedIn) {
@@ -315,28 +342,19 @@ export default function AttendancePage() {
 
     setBreakSubmitting(true);
     try {
-      const newBreak = await apiStartBreak();
-      // ✅ تحديث فوري من الـ data الراجعة من الـ RPC نفسه — من غير ما
-      // نستنى refetch كامل لجدول breaks. لو الـ refetch اللي بعده فشل،
-      // الواجهة برضه هتفضل شايفة إن البريك بدأ فعلاً.
-      if (newBreak) {
-        setBreaks((prev) => [...prev, newBreak]);
-      }
+      await apiStartBreak();
+      // ✅ مصدر الحقيقة الوحيد: refetch كامل لجدول breaks + attendance_today.
+      // شكل الـ data الراجعة من الـ RPC نفسها مش موثّق، فمنعتمدش عليها.
+      const ids = await refreshTodayAttendanceIds();
+      await refreshBreaks(ids);
+      await refreshTodayBreakStatus();
       setBreakElapsedSec(0);
       showToast("success", `بدأت البريك الساعة ${time}`);
-
-      // مزامنة في الخلفية (تأكيد الحالة + التقاط أي attendance id جديد)
-      try {
-        const ids = await refreshTodayAttendanceIds();
-        await refreshBreaks(ids);
-      } catch {
-        // التحديث المتفائل فوق كافي لعرض الزرار الصح؛ فشل المزامنة
-        // في الخلفية مش لازم يوقف حاجة
-      }
     } catch (err) {
       try {
         const ids = await refreshTodayAttendanceIds();
         await refreshBreaks(ids);
+        await refreshTodayBreakStatus();
       } catch {
         // تجاهل فشل الـ refresh نفسه — التوست تحت هيوضح المشكلة الأصلية
       }
@@ -356,36 +374,27 @@ export default function AttendancePage() {
 
     setBreakSubmitting(true);
     try {
-      const closedBreak = await apiEndBreak();
-      // ✅ نفس الفكرة: نحدّث نفس صف البريك في الـ state من الـ data
-      // الراجعة مباشرة بدل الاستنى على refetch.
-      if (closedBreak) {
-        setBreaks((prev) => prev.map((b) => (b.id === closedBreak.id ? closedBreak : b)));
-      }
+      await apiEndBreak();
+      // ✅ نفس المبدأ: refetch كامل. بنستخدم todayAttendanceIds (كل صفوف
+      // اليوم) مش صف واحد بس — عشان نغطي حالة أكتر من check-in في نفس اليوم.
+      const ids = todayAttendanceIds.length > 0 ? todayAttendanceIds : await refreshTodayAttendanceIds();
+      await refreshBreaks(ids);
+      await refreshTodayBreakStatus();
       setBreakElapsedSec(0);
       showToast("success", `انتهت البريك الساعة ${time}`);
-
-      if (record) {
-        try {
-          await refreshBreaks([record.id]);
-        } catch {
-          // التحديث المتفائل فوق كافي لإخفاء الزرار الصح
-        }
-      }
     } catch (err) {
-      if (record) {
-        try {
-          await refreshBreaks([record.id]);
-        } catch {
-          // تجاهل فشل الـ refresh نفسه
-        }
+      try {
+        const ids = todayAttendanceIds.length > 0 ? todayAttendanceIds : await refreshTodayAttendanceIds();
+        await refreshBreaks(ids);
+        await refreshTodayBreakStatus();
+      } catch {
+        // تجاهل فشل الـ refresh نفسه
       }
       showToast("error", err instanceof Error ? err.message : "تعذر إنهاء البريك");
     } finally {
       setBreakSubmitting(false);
     }
   }
-  
 
   const todayStatus = record?.status ?? null;
 

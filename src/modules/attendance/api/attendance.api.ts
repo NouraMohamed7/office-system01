@@ -205,31 +205,25 @@ export async function getMyMonthSummary(): Promise<MonthSummary> {
 // ============================================================
 
 /**
- * ⚠️ الدوك موضّح إن start_break/end_break بترجعوا data فعليًا (زي
- * console.log(data) في مثال الاستدعاء)، بس شكل الـ data بالظبط مش
- * موثّق حرفيًا (ممكن يرجع صف واحد من breaks أو array فيه صف واحد).
- * قبل كده كنا بنتجاهل الـ data خالص ونعتمد بالكامل على refetch منفصل
- * بعد الاستدعاء — ده كان بيسبب مشكلة إن الواجهة تفضل شايفة "بدء
- * البريك" رغم إن الباك فعليًا فتح بريك، لو الـ refetch اترجّع فاضي أو
- * متأخر لأي سبب. دلوقتي بنستخدم نفس الـ data الراجعة من الـ RPC عشان
- * الصفحة تقدر تحدّث حالتها فورًا من غير ما تستنى refetch تاني.
+ * ⚠️ شكل الـ data الراجعة من start_break/end_break مش موثّق حرفيًا في
+ * الباك (التوثيق بيقول بس "console.log(data)"). عشان كده الكود اللي
+ * بيستخدم الفانكشنين دول (في page.tsx) بيعتمد على refetch كامل من جدول
+ * breaks كمصدر الحقيقة الوحيد، مش على شكل الـ data الراجعة هنا — تجربة
+ * فعلية أثبتت إن الاعتماد على شكل غير مؤكد بيسبب حالة "بريك ما بيقفلش".
+ * سايبين الدالتين ترجعوا الـ data الخام زي ما هي (من غير أي افتراض على
+ * شكلها) لأي استخدام مستقبلي، لكن من غير تطبيع (normalize) بيفترض إنها
+ * BreakRecord.
  */
-function normalizeSingleBreakResult(data: unknown): BreakRecord | null {
-  if (!data) return null;
-  if (Array.isArray(data)) return (data[0] as BreakRecord) ?? null;
-  return data as BreakRecord;
-}
-
-export async function startBreak(): Promise<BreakRecord | null> {
+export async function startBreak(): Promise<unknown> {
   const { data, error } = await supabase.rpc("start_break");
   if (error) throw new Error(error.message);
-  return normalizeSingleBreakResult(data);
+  return data;
 }
 
-export async function endBreak(): Promise<BreakRecord | null> {
+export async function endBreak(): Promise<unknown> {
   const { data, error } = await supabase.rpc("end_break");
   if (error) throw new Error(error.message);
-  return normalizeSingleBreakResult(data);
+  return data;
 }
 
 // ============================================================
@@ -294,6 +288,33 @@ export async function getAttendanceToday(): Promise<AttendanceTodayRow[]> {
   const { data, error } = await supabase.from("attendance_today").select("*");
   if (error) throw new Error(error.message);
   return (data as AttendanceTodayRow[]) ?? [];
+}
+
+/**
+ * صف المستخدم الحالي من الـ view attendance_today. عمود status هنا
+ * موثّق كـ "text" (مش public.attendance_type زي جدول attendance نفسه)
+ * — يعني محتمل يكون فيه قيم زي "on_work" / "break" وقت البريك.
+ * لازم نتأكد بالتجربة الفعلية من القيمة الراجعة (فيه console.log مؤقت
+ * في page.tsx لحد ما نتأكد).
+ */
+export interface MyTodayStatusRow {
+  users_id: string;
+  name: string;
+  check_in_at: string | null;
+  check_out_at: string | null;
+  late_minutes: number | null;
+  status: string | null;
+}
+
+export async function getMyTodayStatusRow(): Promise<MyTodayStatusRow | null> {
+  const userId = await getAuthUserId();
+  const { data, error } = await supabase
+    .from("attendance_today")
+    .select("*")
+    .eq("users_id", userId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return (data as MyTodayStatusRow) ?? null;
 }
 
 /**
