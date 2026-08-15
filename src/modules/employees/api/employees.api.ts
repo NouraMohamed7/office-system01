@@ -232,9 +232,9 @@ export async function createEmployee(payload: {
     formData.append('photo', payload.photo)
   }
 
-  const { data, error } = await supabase.functions.invoke('create_user', {
-    body: formData,
-  })
+const { data, error } = await supabase.functions.invoke('create-user', {
+  body: formData,
+})
 
   if (error) {
     const message = await extractErrorMessage(error, data)
