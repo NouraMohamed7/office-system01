@@ -4,11 +4,11 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Card, PageHeader } from "@/components/manager/primitives";
+import { useToast } from "@/components/toast";
+import { useConfirm } from "@/components/confirm-dialog";
 import { cn } from "@/lib/utils";
 import {
   Loader2,
-  CheckCircle2,
-  AlertCircle,
   Plus,
   Pencil,
   Trash2,
@@ -60,17 +60,6 @@ const NOTIFY_LABELS: { key: keyof Omit<MyNotifySettings, "id">; label: string }[
 export default function SettingsPage() {
   const router = useRouter();
   const [tab, setTab] = useState(0);
-  const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
-
-  function notify(message: string, type: "success" | "error" = "success") {
-    setToast({ message, type });
-  }
-
-  useEffect(() => {
-    if (!toast) return;
-    const t = setTimeout(() => setToast(null), 2800);
-    return () => clearTimeout(t);
-  }, [toast]);
 
   return (
     <div className="space-y-6">
@@ -92,25 +81,11 @@ export default function SettingsPage() {
         </Card>
 
         <Card className="lg:col-span-3">
-          {tab === 0 && <SecurityTab notify={notify} onSignedOutEverywhere={() => router.push("/login")} />}
-          {tab === 1 && <NotificationsTab notify={notify} />}
-          {tab === 2 && <OrgStructureTab notify={notify} />}
+          {tab === 0 && <SecurityTab onSignedOutEverywhere={() => router.push("/login")} />}
+          {tab === 1 && <NotificationsTab />}
+          {tab === 2 && <OrgStructureTab />}
         </Card>
       </div>
-
-      {toast && (
-        <div
-          className={cn(
-            "fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-xl border px-4 py-3 text-sm font-medium shadow-lg",
-            toast.type === "success"
-              ? "border-teal/30 bg-teal/10 text-teal"
-              : "border-destructive/30 bg-destructive/10 text-destructive"
-          )}
-        >
-          {toast.type === "success" ? <CheckCircle2 className="size-4" /> : <AlertCircle className="size-4" />}
-          {toast.message}
-        </div>
-      )}
     </div>
   );
 }
@@ -118,13 +93,10 @@ export default function SettingsPage() {
 // ============================================================
 // تبويب الأمان — تغيير باسورد حقيقي + تسجيل خروج من كل الأجهزة
 // ============================================================
-function SecurityTab({
-  notify,
-  onSignedOutEverywhere,
-}: {
-  notify: (m: string, t?: "success" | "error") => void;
-  onSignedOutEverywhere: () => void;
-}) {
+function SecurityTab({ onSignedOutEverywhere }: { onSignedOutEverywhere: () => void }) {
+  const showToast = useToast();
+  const confirm = useConfirm();
+
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -133,39 +105,46 @@ function SecurityTab({
 
   async function handleUpdatePassword() {
     if (!currentPassword || !newPassword || !confirmPassword) {
-      notify("لازم تملأ كل الحقول", "error");
+      showToast("error", "لازم تملأ كل الحقول");
       return;
     }
     if (newPassword.length < 6) {
-      notify("كلمة المرور الجديدة لازم تكون 6 حروف على الأقل", "error");
+      showToast("error", "كلمة المرور الجديدة لازم تكون 6 حروف على الأقل");
       return;
     }
     if (newPassword !== confirmPassword) {
-      notify("كلمة المرور الجديدة والتأكيد مش متطابقين", "error");
+      showToast("error", "كلمة المرور الجديدة والتأكيد مش متطابقين");
       return;
     }
     setSaving(true);
     try {
       await changeMyPassword(currentPassword, newPassword);
-      notify("تم تحديث كلمة المرور بنجاح");
+      showToast("success", "تم تحديث كلمة المرور بنجاح");
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
     } catch (err) {
-      notify(err instanceof Error ? err.message : "حصل خطأ أثناء تحديث كلمة المرور", "error");
+      showToast("error", err instanceof Error ? err.message : "حصل خطأ أثناء تحديث كلمة المرور");
     } finally {
       setSaving(false);
     }
   }
 
   async function handleSignOutEverywhere() {
-    if (!window.confirm("هل تريد تسجيل الخروج من جميع الأجهزة؟")) return;
+    const ok = await confirm({
+      title: "تسجيل الخروج من جميع الأجهزة",
+      message: "هيتم تسجيل خروجك من كل الأجهزة المسجل دخول فيها، وهتحتاج تسجل دخول تاني في كل واحد فيها.",
+      confirmLabel: "تسجيل الخروج",
+      tone: "danger",
+    });
+    if (!ok) return;
+
     setSigningOut(true);
     try {
       await signOutEverywhere();
       onSignedOutEverywhere();
     } catch (err) {
-      notify(err instanceof Error ? err.message : "حصل خطأ أثناء تسجيل الخروج", "error");
+      showToast("error", err instanceof Error ? err.message : "حصل خطأ أثناء تسجيل الخروج");
       setSigningOut(false);
     }
   }
@@ -226,7 +205,9 @@ function SecurityTab({
 // ============================================================
 // تبويب الإشعارات — notify_settings الحقيقي، مربوط بـ manager_id
 // ============================================================
-function NotificationsTab({ notify }: { notify: (m: string, t?: "success" | "error") => void }) {
+function NotificationsTab() {
+  const showToast = useToast();
+
   const [settings, setSettings] = useState<MyNotifySettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [savingKey, setSavingKey] = useState<string | null>(null);
@@ -238,7 +219,8 @@ function NotificationsTab({ notify }: { notify: (m: string, t?: "success" | "err
         const data = await getMyNotifySettings();
         if (!cancelled) setSettings(data);
       } catch (err) {
-        if (!cancelled) notify(err instanceof Error ? err.message : "حصل خطأ في تحميل إعدادات الإشعارات", "error");
+        if (!cancelled)
+          showToast("error", err instanceof Error ? err.message : "حصل خطأ في تحميل إعدادات الإشعارات");
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -262,7 +244,7 @@ function NotificationsTab({ notify }: { notify: (m: string, t?: "success" | "err
       setSettings(updated);
     } catch (err) {
       setSettings((s) => (s ? { ...s, [key]: prevValue } : s));
-      notify(err instanceof Error ? err.message : "حصل خطأ أثناء التحديث", "error");
+      showToast("error", err instanceof Error ? err.message : "حصل خطأ أثناء التحديث");
     } finally {
       setSavingKey(null);
     }
@@ -310,7 +292,7 @@ function NotificationsTab({ notify }: { notify: (m: string, t?: "success" | "err
 // ============================================================
 type OrgSubTab = "departments" | "positions" | "branches";
 
-function OrgStructureTab({ notify }: { notify: (m: string, t?: "success" | "error") => void }) {
+function OrgStructureTab() {
   const [subTab, setSubTab] = useState<OrgSubTab>("departments");
 
   const subTabs: { key: OrgSubTab; label: string; icon: React.ReactNode }[] = [
@@ -339,15 +321,18 @@ function OrgStructureTab({ notify }: { notify: (m: string, t?: "success" | "erro
         ))}
       </div>
 
-      {subTab === "departments" && <DepartmentsPanel notify={notify} />}
-      {subTab === "positions" && <PositionsPanel notify={notify} />}
-      {subTab === "branches" && <BranchesPanel notify={notify} />}
+      {subTab === "departments" && <DepartmentsPanel />}
+      {subTab === "positions" && <PositionsPanel />}
+      {subTab === "branches" && <BranchesPanel />}
     </div>
   );
 }
 
 // ---------- الأقسام ----------
-function DepartmentsPanel({ notify }: { notify: (m: string, t?: "success" | "error") => void }) {
+function DepartmentsPanel() {
+  const showToast = useToast();
+  const confirm = useConfirm();
+
   const [items, setItems] = useState<Department[]>([]);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
@@ -362,7 +347,7 @@ function DepartmentsPanel({ notify }: { notify: (m: string, t?: "success" | "err
       const data = await getDepartments();
       setItems(data);
     } catch (err) {
-      notify(err instanceof Error ? err.message : "حصل خطأ أثناء تحميل الأقسام", "error");
+      showToast("error", err instanceof Error ? err.message : "حصل خطأ أثناء تحميل الأقسام");
     } finally {
       setLoading(false);
     }
@@ -376,7 +361,7 @@ function DepartmentsPanel({ notify }: { notify: (m: string, t?: "success" | "err
   async function handleAdd() {
     const name = newName.trim();
     if (!name) {
-      notify("لازم تكتب اسم القسم", "error");
+      showToast("error", "لازم تكتب اسم القسم");
       return;
     }
     setAdding(true);
@@ -384,9 +369,9 @@ function DepartmentsPanel({ notify }: { notify: (m: string, t?: "success" | "err
       const created = await createDepartment(name);
       setItems((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name, "ar")));
       setNewName("");
-      notify("تم إضافة القسم بنجاح");
+      showToast("success", "تم إضافة القسم بنجاح");
     } catch (err) {
-      notify(err instanceof Error ? err.message : "حصل خطأ أثناء إضافة القسم", "error");
+      showToast("error", err instanceof Error ? err.message : "حصل خطأ أثناء إضافة القسم");
     } finally {
       setAdding(false);
     }
@@ -405,7 +390,7 @@ function DepartmentsPanel({ notify }: { notify: (m: string, t?: "success" | "err
   async function handleSaveEdit(id: number) {
     const name = editValue.trim();
     if (!name) {
-      notify("اسم القسم مينفعش يبقى فاضي", "error");
+      showToast("error", "اسم القسم مينفعش يبقى فاضي");
       return;
     }
     setBusyId(id);
@@ -413,23 +398,30 @@ function DepartmentsPanel({ notify }: { notify: (m: string, t?: "success" | "err
       const updated = await updateDepartment(id, name);
       setItems((prev) => prev.map((it) => (it.id === id ? updated : it)));
       cancelEdit();
-      notify("تم تحديث القسم بنجاح");
+      showToast("success", "تم تحديث القسم بنجاح");
     } catch (err) {
-      notify(err instanceof Error ? err.message : "حصل خطأ أثناء تحديث القسم", "error");
+      showToast("error", err instanceof Error ? err.message : "حصل خطأ أثناء تحديث القسم");
     } finally {
       setBusyId(null);
     }
   }
 
   async function handleDelete(item: Department) {
-    if (!window.confirm(`هل تريد حذف قسم "${item.name}"؟ لو فيه موظفين أو مهام مرتبطة بيه ممكن العملية تفشل.`)) return;
+    const ok = await confirm({
+      title: `حذف قسم "${item.name}"؟`,
+      message: "لو فيه موظفين أو مهام مرتبطة بالقسم ده، العملية ممكن تفشل. الإجراء ده لا يمكن التراجع عنه.",
+      confirmLabel: "حذف",
+      tone: "danger",
+    });
+    if (!ok) return;
+
     setBusyId(item.id);
     try {
       await deleteDepartment(item.id);
       setItems((prev) => prev.filter((it) => it.id !== item.id));
-      notify("تم حذف القسم بنجاح");
+      showToast("success", "تم حذف القسم بنجاح");
     } catch (err) {
-      notify(err instanceof Error ? err.message : "تعذر حذف القسم — قد يكون مرتبطًا ببيانات أخرى", "error");
+      showToast("error", err instanceof Error ? err.message : "تعذر حذف القسم — قد يكون مرتبطًا ببيانات أخرى");
     } finally {
       setBusyId(null);
     }
@@ -530,7 +522,10 @@ function DepartmentsPanel({ notify }: { notify: (m: string, t?: "success" | "err
 }
 
 // ---------- الوظائف ----------
-function PositionsPanel({ notify }: { notify: (m: string, t?: "success" | "error") => void }) {
+function PositionsPanel() {
+  const showToast = useToast();
+  const confirm = useConfirm();
+
   const [items, setItems] = useState<Position[]>([]);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
@@ -545,7 +540,7 @@ function PositionsPanel({ notify }: { notify: (m: string, t?: "success" | "error
       const data = await getPositions();
       setItems(data);
     } catch (err) {
-      notify(err instanceof Error ? err.message : "حصل خطأ أثناء تحميل الوظائف", "error");
+      showToast("error", err instanceof Error ? err.message : "حصل خطأ أثناء تحميل الوظائف");
     } finally {
       setLoading(false);
     }
@@ -559,7 +554,7 @@ function PositionsPanel({ notify }: { notify: (m: string, t?: "success" | "error
   async function handleAdd() {
     const title = newTitle.trim();
     if (!title) {
-      notify("لازم تكتب اسم الوظيفة", "error");
+      showToast("error", "لازم تكتب اسم الوظيفة");
       return;
     }
     setAdding(true);
@@ -567,9 +562,9 @@ function PositionsPanel({ notify }: { notify: (m: string, t?: "success" | "error
       const created = await createPosition(title);
       setItems((prev) => [...prev, created].sort((a, b) => a.title.localeCompare(b.title, "ar")));
       setNewTitle("");
-      notify("تم إضافة الوظيفة بنجاح");
+      showToast("success", "تم إضافة الوظيفة بنجاح");
     } catch (err) {
-      notify(err instanceof Error ? err.message : "حصل خطأ أثناء إضافة الوظيفة", "error");
+      showToast("error", err instanceof Error ? err.message : "حصل خطأ أثناء إضافة الوظيفة");
     } finally {
       setAdding(false);
     }
@@ -588,7 +583,7 @@ function PositionsPanel({ notify }: { notify: (m: string, t?: "success" | "error
   async function handleSaveEdit(id: number) {
     const title = editValue.trim();
     if (!title) {
-      notify("اسم الوظيفة مينفعش يبقى فاضي", "error");
+      showToast("error", "اسم الوظيفة مينفعش يبقى فاضي");
       return;
     }
     setBusyId(id);
@@ -596,23 +591,30 @@ function PositionsPanel({ notify }: { notify: (m: string, t?: "success" | "error
       const updated = await updatePosition(id, title);
       setItems((prev) => prev.map((it) => (it.id === id ? updated : it)));
       cancelEdit();
-      notify("تم تحديث الوظيفة بنجاح");
+      showToast("success", "تم تحديث الوظيفة بنجاح");
     } catch (err) {
-      notify(err instanceof Error ? err.message : "حصل خطأ أثناء تحديث الوظيفة", "error");
+      showToast("error", err instanceof Error ? err.message : "حصل خطأ أثناء تحديث الوظيفة");
     } finally {
       setBusyId(null);
     }
   }
 
   async function handleDelete(item: Position) {
-    if (!window.confirm(`هل تريد حذف وظيفة "${item.title}"؟ لو فيه موظفين مرتبطين بيها ممكن العملية تفشل.`)) return;
+    const ok = await confirm({
+      title: `حذف وظيفة "${item.title}"؟`,
+      message: "لو فيه موظفين مرتبطين بالوظيفة دي، العملية ممكن تفشل. الإجراء ده لا يمكن التراجع عنه.",
+      confirmLabel: "حذف",
+      tone: "danger",
+    });
+    if (!ok) return;
+
     setBusyId(item.id);
     try {
       await deletePosition(item.id);
       setItems((prev) => prev.filter((it) => it.id !== item.id));
-      notify("تم حذف الوظيفة بنجاح");
+      showToast("success", "تم حذف الوظيفة بنجاح");
     } catch (err) {
-      notify(err instanceof Error ? err.message : "تعذر حذف الوظيفة — قد تكون مرتبطة ببيانات أخرى", "error");
+      showToast("error", err instanceof Error ? err.message : "تعذر حذف الوظيفة — قد تكون مرتبطة ببيانات أخرى");
     } finally {
       setBusyId(null);
     }
@@ -716,7 +718,10 @@ function PositionsPanel({ notify }: { notify: (m: string, t?: "success" | "error
 type BranchFormState = { city: string; country: string; address: string };
 const EMPTY_BRANCH_FORM: BranchFormState = { city: "", country: "", address: "" };
 
-function BranchesPanel({ notify }: { notify: (m: string, t?: "success" | "error") => void }) {
+function BranchesPanel() {
+  const showToast = useToast();
+  const confirm = useConfirm();
+
   const [items, setItems] = useState<Branch[]>([]);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
@@ -731,7 +736,7 @@ function BranchesPanel({ notify }: { notify: (m: string, t?: "success" | "error"
       const data = await getBranches();
       setItems(data);
     } catch (err) {
-      notify(err instanceof Error ? err.message : "حصل خطأ أثناء تحميل الفروع", "error");
+      showToast("error", err instanceof Error ? err.message : "حصل خطأ أثناء تحميل الفروع");
     } finally {
       setLoading(false);
     }
@@ -746,7 +751,7 @@ function BranchesPanel({ notify }: { notify: (m: string, t?: "success" | "error"
     const city = newBranch.city.trim();
     const country = newBranch.country.trim();
     if (!city || !country) {
-      notify("المدينة والدولة مطلوبين", "error");
+      showToast("error", "المدينة والدولة مطلوبين");
       return;
     }
     setAdding(true);
@@ -758,9 +763,9 @@ function BranchesPanel({ notify }: { notify: (m: string, t?: "success" | "error"
       });
       setItems((prev) => [...prev, created].sort((a, b) => a.city.localeCompare(b.city, "ar")));
       setNewBranch(EMPTY_BRANCH_FORM);
-      notify("تم إضافة الفرع بنجاح");
+      showToast("success", "تم إضافة الفرع بنجاح");
     } catch (err) {
-      notify(err instanceof Error ? err.message : "حصل خطأ أثناء إضافة الفرع", "error");
+      showToast("error", err instanceof Error ? err.message : "حصل خطأ أثناء إضافة الفرع");
     } finally {
       setAdding(false);
     }
@@ -780,7 +785,7 @@ function BranchesPanel({ notify }: { notify: (m: string, t?: "success" | "error"
     const city = editValue.city.trim();
     const country = editValue.country.trim();
     if (!city || !country) {
-      notify("المدينة والدولة مطلوبين", "error");
+      showToast("error", "المدينة والدولة مطلوبين");
       return;
     }
     setBusyId(id);
@@ -792,23 +797,30 @@ function BranchesPanel({ notify }: { notify: (m: string, t?: "success" | "error"
       });
       setItems((prev) => prev.map((it) => (it.id === id ? updated : it)));
       cancelEdit();
-      notify("تم تحديث الفرع بنجاح");
+      showToast("success", "تم تحديث الفرع بنجاح");
     } catch (err) {
-      notify(err instanceof Error ? err.message : "حصل خطأ أثناء تحديث الفرع", "error");
+      showToast("error", err instanceof Error ? err.message : "حصل خطأ أثناء تحديث الفرع");
     } finally {
       setBusyId(null);
     }
   }
 
   async function handleDelete(item: Branch) {
-    if (!window.confirm(`هل تريد حذف فرع "${item.city}"؟ لو فيه موظفين مرتبطين بيه ممكن العملية تفشل.`)) return;
+    const ok = await confirm({
+      title: `حذف فرع "${item.city}"؟`,
+      message: "لو فيه موظفين مرتبطين بالفرع ده، العملية ممكن تفشل. الإجراء ده لا يمكن التراجع عنه.",
+      confirmLabel: "حذف",
+      tone: "danger",
+    });
+    if (!ok) return;
+
     setBusyId(item.id);
     try {
       await deleteBranch(item.id);
       setItems((prev) => prev.filter((it) => it.id !== item.id));
-      notify("تم حذف الفرع بنجاح");
+      showToast("success", "تم حذف الفرع بنجاح");
     } catch (err) {
-      notify(err instanceof Error ? err.message : "تعذر حذف الفرع — قد يكون مرتبطًا ببيانات أخرى", "error");
+      showToast("error", err instanceof Error ? err.message : "تعذر حذف الفرع — قد يكون مرتبطًا ببيانات أخرى");
     } finally {
       setBusyId(null);
     }
