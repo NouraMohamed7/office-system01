@@ -5,15 +5,8 @@
 // بوب أب بيظهر في نص الشاشة للموظف لما يبقى عنده إعلان جديد لسه ما شافوش.
 // متركب مرة واحدة في src/app/employee/layout.tsx عشان يشتغل من أي صفحة
 // الموظف يفتحها (زي أي global modal) — مفيش صفحة إعلانات منفصلة.
-//
-// السلوك:
-// 1) أول ما الكومبوننت يعمل mount بيجيب كل الإعلانات غير المشاهدة.
-// 2) لو فيه أكتر من واحد، بيعرضهم واحد ورا التاني (queue).
-// 3) مشترك في realtime على جدول announcements، فلو المدير نشر إعلان جديد
-//    وهو (الموظف) فاتح الصفحة، البوب أب يظهر فورًا من غير refresh.
-// 4) لما الموظف يضغط "تم الاطلاع" بننده mark_announcement_seen ونقفل.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { Megaphone, X } from "lucide-react";
 import {
   getUnseenAnnouncementsWithDetails,
@@ -24,39 +17,25 @@ import {
 
 export function AnnouncementPopup() {
   const [queue, setQueue] = useState<AnnouncementRow[]>([]);
-  const [current, setCurrent] = useState<AnnouncementRow | null>(null);
   const [closing, setClosing] = useState(false);
 
-  // ⚠️ الباگ الأصلي: loadUnseen كانت useCallback بـ deps فاضية، فكانت
-  // بتقفل (closure) على قيمة current وقت أول render بس (null) وتفضل
-  // شايفاها null للأبد، حتى لو فعليًا فيه إعلان معروض حاليًا. النتيجة:
-  // أي إعلان جديد ينشره المدير وهو نفس اللحظة اللي فيها إعلان معروض،
-  // كان بيرجّع نفس الإعلان المعروض تاني للـ queue (لأنه لسه فعليًا
-  // "غير مشاهد" في الداتابيز لحد ما المستخدم يضغط "تم الاطلاع") —
-  // فكان بيتكرر ظهوره تاني بعد القفل.
-  //
-  // الحل: نستخدم ref بدل ما نعتمد على الـ closure، عشان نقرأ القيمة
-  // الحالية الفعلية لـ current من غير ما نضطر نغيّر مرجع loadUnseen
-  // (لو ضفنا current في deps مباشرة، كان هيعيد الاشتراك في الـ realtime
-  // channel كل مرة current تتغير، وده أوفرهيد مش محتاجينه).
-  const currentRef = useRef<AnnouncementRow | null>(null);
+  // مرجع (ref) بيعكس الطابور الحالي، مش state — بنستخدمه جوه loadUnseen
+  // عشان نمنع تكرار إضافة نفس الإعلان، من غير ما نحط queue كـ dependency
+  // في useCallback (لو عملنا كده، subscribeNewAnnouncements كان هيعيد
+  // الاشتراك في realtime channel كل مرة الطابور يتغير — أوفرهيد مش لازم).
+  const queueRef = useRef<AnnouncementRow[]>([]);
   useEffect(() => {
-    currentRef.current = current;
-  }, [current]);
+    queueRef.current = queue;
+  }, [queue]);
 
   const loadUnseen = useCallback(async () => {
     try {
       const rows = await getUnseenAnnouncementsWithDetails();
-      if (rows.length > 0) {
-        // نتفادى تكرار نفس الإعلان لو كان موجود بالفعل في الطابور أو معروض حاليًا
-        setQueue((prev) => {
-          const existingIds = new Set([
-            ...prev.map((r) => r.id),
-            ...(currentRef.current ? [currentRef.current.id] : []),
-          ]);
-          const fresh = rows.filter((r) => !existingIds.has(r.id));
-          return [...prev, ...fresh];
-        });
+      if (rows.length === 0) return;
+      const existingIds = new Set(queueRef.current.map((r) => r.id));
+      const fresh = rows.filter((r) => !existingIds.has(r.id));
+      if (fresh.length > 0) {
+        setQueue((prev) => [...prev, ...fresh]);
       }
     } catch {
       // بوب أب معلوماتي بس — لو فشل الجلب منسكتش الموظف بخطأ، هيتحاول تاني المرة الجاية
@@ -65,7 +44,6 @@ export function AnnouncementPopup() {
 
   // أول تحميل
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount، الـ setState بيحصل جوه دالة async بعد await
     loadUnseen();
   }, [loadUnseen]);
 
@@ -77,13 +55,9 @@ export function AnnouncementPopup() {
     return unsubscribe;
   }, [loadUnseen]);
 
-  // نطلع أول عنصر من الطابور لما مفيش حاجة معروضة
-  useEffect(() => {
-    if (!current && queue.length > 0) {
-      setCurrent(queue[0]);
-      setQueue((q) => q.slice(1));
-    }
-  }, [queue, current]);
+  // "المعروض حاليًا" = أول عنصر في الطابور — قيمة مُشتقة، مش state منفصلة.
+  // ده بيلغي الحاجة لـ effect كان بيزامن queue -> current.
+  const current = queue[0] ?? null;
 
   async function handleAcknowledge() {
     if (!current || closing) return;
@@ -94,7 +68,7 @@ export function AnnouncementPopup() {
       // هيتعاد عرضه المرة الجاية لو التعليم فشل — أأمن من إنه يضيع بدون ما المدير يتأكد إنه اتشاف
     } finally {
       setClosing(false);
-      setCurrent(null);
+      setQueue((q) => q.slice(1)); // ننتقل للإعلان اللي بعده (لو موجود) — event handler، مش effect
     }
   }
 
@@ -106,19 +80,31 @@ export function AnnouncementPopup() {
     year: "numeric",
   });
 
+  const remainingCount = queue.length; // شامل المعروض حاليًا
+
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4">
+    <div className="fixed inset-0 z-100 flex items-center justify-center bg-black/40 p-4">
+      {/* key={current.id}: يخلي React يعمل remount للعنصر مع كل إعلان جديد،
+          فأنيميشن الدخول بتشتغل تلقائيًا من غير أي state إضافي */}
       <div
+        key={current.id}
         role="dialog"
         aria-modal="true"
-        className="w-full max-w-md rounded-2xl bg-card p-6 shadow-warm-lg"
+        className="popup-enter w-full max-w-md rounded-2xl bg-card p-6 shadow-warm-lg"
       >
         <div className="flex items-start gap-3">
           <div className="grid size-11 shrink-0 place-items-center rounded-xl pill-primary">
             <Megaphone className="size-5" />
           </div>
           <div className="min-w-0 flex-1">
-            <div className="text-xs font-semibold text-primary">إعلان جديد</div>
+            <div className="flex items-center gap-2 text-xs font-semibold text-primary">
+              <span>إعلان جديد</span>
+              {remainingCount > 1 && (
+                <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] text-primary">
+                  {remainingCount} إعلانات لم تُقرأ
+                </span>
+              )}
+            </div>
             <h3 className="mt-1 text-lg font-bold text-foreground">{current.title}</h3>
             <div className="mt-0.5 text-xs text-muted-foreground">{dateLabel}</div>
           </div>
@@ -148,6 +134,22 @@ export function AnnouncementPopup() {
           </button>
         </div>
       </div>
+
+      <style jsx>{`
+        .popup-enter {
+          animation: popup-enter 200ms ease-out;
+        }
+        @keyframes popup-enter {
+          from {
+            opacity: 0;
+            transform: scale(0.95);
+          }
+          to {
+            opacity: 1;
+            transform: scale(1);
+          }
+        }
+      `}</style>
     </div>
   );
 }

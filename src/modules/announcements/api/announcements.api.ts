@@ -3,13 +3,15 @@ import { supabase } from "@/lib/supabase/client";
 /**
  * ============================================================
  *  Announcements API
- *  يغطي كل اللي الباك اند عامله لفيتشر الإعلانات:
- *  - جدول announcements            (CRUD - مدير فقط)
- *  - جدول department                (لبناء قائمة الجمهور المستهدف)
- *  - view  announcement_seen_status (حالة كل إعلان لكل مستخدم - RLS)
- *  - جدول announcement_seen         (سجل تاريخي - مين شاف امتى)
+ *  - جدول announcements            (CRUD - النشر/الحذف مدير فقط، القراءة حسب القسم عبر RLS)
+ *  - جدول announcement_seen         (سجل: مين شاف امتى - كل مستخدم بيشوف صفوفه هو بس)
  *  - RPC   mark_announcement_seen   (تعليم الإعلان كمشاهد)
  *  - Realtime على جدول announcements
+ *
+ *  ملاحظة: مبقيناش بنستخدم الـ view "announcement_seen_status" من هنا،
+ *  لأنه view تقريري للمدير (بيرجع حالة كل الموظفين مع أسمائهم)، وصلاحياته
+ *  مقفولة على المدير — استخدامه من جانب الموظف كان بيرجع صفوف فاضية دايمًا
+ *  وده سبب إن الإعلانات ما كانتش بتظهر للموظف خالص.
  * ============================================================
  */
 
@@ -29,16 +31,6 @@ export type AnnouncementRow = {
   department_id: number | null; // null = يظهر لكل الموظفين
   created_by: string;
   created_at: string;
-};
-
-export type AnnouncementSeenStatusRow = {
-  announcement_id: number;
-  title: string;
-  department_id: number | null;
-  users_id: string;
-  name: string;
-  seen_at: string | null;
-  has_seen: boolean;
 };
 
 // ---------------------------------------------------------------
@@ -106,17 +98,6 @@ export async function deleteAnnouncement(id: number): Promise<void> {
  * عدد الموظفين اللي شافوا إعلان معين — يستخدم لعمود "المشاهدات" في صفحة المدير.
  * (announcement_seen هو السجل التاريخي: صف لكل مرة اتشاف فيها الإعلان لأول مرة)
  */
-export async function getAnnouncementViews(announcementId: number): Promise<number> {
-  const { count, error } = await supabase
-    .from("announcement_seen")
-    .select("id", { count: "exact", head: true })
-    .eq("announcement_id", announcementId);
-
-  if (error) throw error;
-  return count ?? 0;
-}
-
-/** يجيب عدد المشاهدات لعدة إعلانات مرة واحدة (يفادي N+1 قدر الإمكان) */
 export async function getAnnouncementViewsMap(
   announcementIds: number[]
 ): Promise<Record<number, number>> {
@@ -154,56 +135,33 @@ export function subscribeAnnouncements(onChange: () => void): () => void {
 }
 
 // ---------------------------------------------------------------
-// Employee: قراءة حالة الإعلانات + تعليمها كمشاهدة
+// Employee: الإعلانات اللي لسه ما شافهاش
 // ---------------------------------------------------------------
 
-/** كل الإعلانات (مشاهدة وغير مشاهدة) الخاصة بالموظف الحالي — الفلترة حسب القسم متكفل بيها RLS */
-export async function getAnnouncementSeenStatus(): Promise<AnnouncementSeenStatusRow[]> {
-  const { data, error } = await supabase
-    .from("announcement_seen_status")
-    .select("*")
-    .order("announcement_id", { ascending: false });
-
-  if (error) throw error;
-  return data ?? [];
-}
-
-/** بس الإعلانات اللي الموظف لسه ما شافهاش */
-export async function getUnseenAnnouncements(): Promise<AnnouncementSeenStatusRow[]> {
-  const { data, error } = await supabase
-    .from("announcement_seen_status")
-    .select("*")
-    .eq("has_seen", false)
-    .order("announcement_id", { ascending: false });
-
-  if (error) throw error;
-  return data ?? [];
-}
-
 /**
- * الـ view announcement_seen_status مفيهاش عمود "details"، فبنجيب تفاصيل
- * الإعلانات غير المشاهدة من جدول announcements نفسه عشان نعرضها كاملة في البوب أب.
+ * كل الإعلانات اللي لسه الموظف الحالي ما شافهاش، بالتفاصيل كاملة.
+ * - "الإعلانات المرئية ليّا" بتيجي من جدول announcements مباشرة (RLS بيفلتر
+ *   حسب القسم: عام department_id=null أو قسم الموظف نفسه).
+ * - "اللي شفتها فعلاً" بتيجي من announcement_seen مفلترة بالـ user id بتاعي.
+ * - الفرق بينهم = اللي لسه محتاج يشوفها.
  */
-export async function getAnnouncementsDetails(ids: number[]): Promise<AnnouncementRow[]> {
-  if (ids.length === 0) return [];
-
-  const { data, error } = await supabase.from("announcements").select("*").in("id", ids);
-
-  if (error) throw error;
-  return data ?? [];
-}
-
-/** يجمع الاتنين مع بعض: قايمة الإعلانات غير المشاهدة بالتفاصيل الكاملة، الأحدث أولاً */
 export async function getUnseenAnnouncementsWithDetails(): Promise<AnnouncementRow[]> {
-  const unseen = await getUnseenAnnouncements();
-  if (unseen.length === 0) return [];
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
-  const ids = unseen.map((u) => u.announcement_id);
-  const full = await getAnnouncementsDetails(ids);
+  if (!user) return [];
 
-  return unseen
-    .map((u) => full.find((f) => f.id === u.announcement_id))
-    .filter((a): a is AnnouncementRow => Boolean(a));
+  const [visibleRes, seenRes] = await Promise.all([
+    supabase.from("announcements").select("*").order("created_at", { ascending: false }),
+    supabase.from("announcement_seen").select("announcement_id").eq("users_id", user.id),
+  ]);
+
+  if (visibleRes.error) throw visibleRes.error;
+  if (seenRes.error) throw seenRes.error;
+
+  const seenIds = new Set((seenRes.data ?? []).map((r) => r.announcement_id as number));
+  return (visibleRes.data ?? []).filter((a) => !seenIds.has(a.id));
 }
 
 /** تعليم إعلان كمشاهد — بينده RPC مين المستخدم الحالي أوتوماتيك من الـ auth context */

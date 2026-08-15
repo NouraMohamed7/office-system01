@@ -8,7 +8,7 @@ import { Avatar, Button, Card, Input, PageHeader, Pill, Select, StatCard, TableS
 import { useToast } from "@/components/toast";
 import * as XLSX from "xlsx";
 import {
-  Plus, Search, Users, MoreVertical, X, Eye, EyeOff, RefreshCw, Copy, Trash2, Power, Pencil, FileSpreadsheet,
+  Plus, Search, Users, MoreVertical, X, Eye, EyeOff, RefreshCw, Copy, Power, Pencil, FileSpreadsheet,
 } from "lucide-react";
 import { getDepartments, type Department } from "@/modules/department/api/department.api";
 import {
@@ -16,7 +16,6 @@ import {
   createEmployee,
   updateEmployee,
   updateEmployeeStatus,
-  deleteEmployee,
   getAllPositions,
   getAllBranches,
 } from "@/modules/employees/api/employees.api";
@@ -143,7 +142,6 @@ export default function EmployeesPage() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
@@ -197,7 +195,7 @@ export default function EmployeesPage() {
     if (btn) {
       const rect = btn.getBoundingClientRect();
       const menuWidth = 176; // w-44
-      const menuHeight = 148; // تقريبي لـ 3 عناصر (~49px للعنصر)
+      const menuHeight = 108; // تقريبي لعنصرين (~54px للعنصر بعد ما شلنا الحذف)
       const viewportHeight = window.innerHeight;
       const viewportWidth = window.innerWidth;
 
@@ -528,33 +526,6 @@ export default function EmployeesPage() {
     setMenuPos(null);
   }
 
-  // متصلة فعليًا بـ delete-user Edge Function
-  // (بتمسح كل بيانات الموظف نهائيًا: مهام/حضور/تقارير/تعليقات/ملفات/حساب دخول)
-  async function handleDeleteEmployee(emp: Employee) {
-    const confirmed = window.confirm(
-      `متأكد إنك عايز تحذف ${emp.name}؟\n\nهيتم حذف كل بياناته نهائيًا: الملف الشخصي، المهام، الحضور، التقارير، التعليقات، الإشعارات، والملفات، وحساب الدخول.\nالإجراء ده لا يمكن التراجع عنه.`
-    );
-    if (!confirmed) return;
-
-    setDeletingId(emp.id);
-    try {
-      const result = await deleteEmployee(emp.id);
-      setEmployees((list) => list.filter((e) => e.id !== emp.id));
-      if (result.storage_warnings?.length) {
-        showToast("success", `تم حذف ${emp.name} (فيه تحذيرات في مسح بعض الملفات — راجع اللوج)`);
-      } else {
-        showToast("success", `تم حذف ${emp.name} نهائيًا`);
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "حصل خطأ غير متوقع";
-      showToast("error", `فشل حذف الموظف: ${message}`);
-    } finally {
-      setDeletingId(null);
-      setOpenMenuId(null);
-      setMenuPos(null);
-    }
-  }
-
   function handleExportExcel() {
     if (filtered.length === 0) {
       showToast("error", "مفيش بيانات عشان تتصدّر");
@@ -690,8 +661,7 @@ export default function EmployeesPage() {
                     <button
                       ref={(el) => { menuButtonRefs.current[e.id] = el; }}
                       onClick={() => toggleMenu(e.id)}
-                      disabled={deletingId === e.id}
-                      className="grid size-8 place-items-center rounded-lg hover:bg-accent disabled:opacity-50"
+                      className="grid size-8 place-items-center rounded-lg hover:bg-accent"
                     >
                       <MoreVertical className="size-4" />
                     </button>
@@ -730,9 +700,6 @@ export default function EmployeesPage() {
                   </button>
                   <button onClick={() => toggleStatus(emp)} className="flex w-full items-center gap-2 px-3.5 py-2.5 text-right text-sm hover:bg-accent">
                     <Power className="size-4 text-warning" /> {emp.status === "suspended" ? "تفعيل الحساب" : "تعطيل الحساب"}
-                  </button>
-                  <button onClick={() => handleDeleteEmployee(emp)} className="flex w-full items-center gap-2 px-3.5 py-2.5 text-right text-sm text-destructive hover:bg-destructive/10">
-                    <Trash2 className="size-4" /> حذف الموظف
                   </button>
                 </>
               );
