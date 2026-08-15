@@ -89,6 +89,8 @@ export default function AttendancePage() {
   const [submitting, setSubmitting] = useState(false);
 
   // ---- البريك: جدول breaks + RPC start_break/end_break ----
+  // الفلو: start_break → نجيب حالة البريك تاني من جدول breaks (فيه بريك
+  // مفتوح ولا لأ) → لو فيه بريك مفتوح (isOnBreak = true) يظهر زرار end_break.
   const [breaks, setBreaks] = useState<BreakRecord[]>([]);
   const [breakSubmitting, setBreakSubmitting] = useState(false);
   const [breakElapsedSec, setBreakElapsedSec] = useState(0);
@@ -169,6 +171,8 @@ export default function AttendancePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // حالة البريك الحالية مشتقة من آخر سجل في جدول breaks: لو آخر سجل
+  // end_time بتاعه لسه null، يبقى المستخدم في بريك دلوقتي.
   const currentBreak = breaks.length > 0 ? breaks[breaks.length - 1] : null;
   const isOnBreak = !!currentBreak && currentBreak.end_time === null;
 
@@ -234,6 +238,9 @@ export default function AttendancePage() {
     }
   }
 
+  // الفلو: نادي start_break → نجيب حالة البريك تاني (refreshBreaks) →
+  // بما إن فيه بريك مفتوح دلوقتي، isOnBreak هتبقى true تلقائيًا وهيظهر
+  // زرار "إنهاء البريك" بدل "بدء البريك".
   async function handleStartBreak() {
     if (breakSubmitting) return;
     setBreakSubmitting(true);
@@ -249,6 +256,9 @@ export default function AttendancePage() {
     }
   }
 
+  // الفلو: نادي end_break → نجيب حالة البريك تاني (refreshBreaks) →
+  // آخر بريك بقى له end_time، فـ isOnBreak هترجع false ويظهر زرار
+  // "بدء البريك" تاني.
   async function handleEndBreak() {
     if (breakSubmitting) return;
     setBreakSubmitting(true);
