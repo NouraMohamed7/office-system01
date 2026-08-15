@@ -19,7 +19,6 @@ const tabs = ["الأمان", "الإشعارات"];
 const NOTIFY_LABELS: { key: keyof Omit<MyNotifySettings, "id">; label: string }[] = [
   { key: "task_notify", label: "إشعارات المهام" },
   { key: "report_notify", label: "إشعارات التقارير" },
-  { key: "comment_settings", label: "إشعارات التعليقات" },
   { key: "attendance_notify", label: "إشعارات الحضور" },
   { key: "cash_notify", label: "إشعارات الخزنة" },
   { key: "system_notify", label: "إشعارات النظام" },

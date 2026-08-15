@@ -9,7 +9,6 @@ export interface MyNotifySettings {
   attendance_notify: boolean
   task_notify: boolean
   cash_notify: boolean
-  comment_settings: boolean
   report_notify: boolean
 }
 
@@ -23,7 +22,7 @@ export async function getMyNotifySettings(): Promise<MyNotifySettings | null> {
 
   const { data, error } = await supabase
     .from('notify_settings')
-    .select('*')
+    .select('id, system_notify, attendance_notify, task_notify, cash_notify, report_notify')
     .eq('manager_id', authUser.id)
     .maybeSingle()
 
@@ -44,14 +43,11 @@ export async function updateMyNotifySettings(
     .from('notify_settings')
     .update(patch)
     .eq('manager_id', authUser.id)
-    .select()
+    .select('id, system_notify, attendance_notify, task_notify, cash_notify, report_notify')
     .maybeSingle()
 
   if (error) throw error
 
-  // الدوك موثّق فيها "Update rows" بس، مفيش Insert موثّق لـ notify_settings.
-  // لو data === null معناها مفيش صف افتراضي اتعمل للمدير ده لسه — لازم تتأكد
-  // مع الباك: هل بيتعمل تلقائي عند إنشاء حساب مدير، ولا محتاجين upsert من هنا؟
   if (!data) {
     throw new Error('مفيش إعدادات إشعارات لحسابك بعد — لازم تتأكد مع الباك إند')
   }
@@ -61,7 +57,6 @@ export async function updateMyNotifySettings(
 
 // ---------------- الأمان (تغيير الباسورد + تسجيل الخروج من كل الأجهزة) ----------------
 
-// بنتحقق من الباسورد الحالي بمحاولة signInWithPassword بيه، لو نجحت نغيّرها بـ auth.updateUser
 export async function changeMyPassword(
   currentPassword: string,
   newPassword: string
@@ -82,7 +77,6 @@ export async function changeMyPassword(
   if (updateError) throw updateError
 }
 
-// scope: 'global' بيسجل خروج من كل الأجهزة مش بس الحالي
 export async function signOutEverywhere(): Promise<void> {
   const { error } = await supabase.auth.signOut({ scope: 'global' })
   if (error) throw error
