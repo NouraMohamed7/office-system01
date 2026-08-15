@@ -4,7 +4,7 @@
 import { PortalLayout, Card, StatusPill } from "@/components/portal-layout";
 import { useToast } from "@/components/toast";
 import { Clock, Check, LogIn, LogOut, Coffee, PlayCircle, Loader2, Palmtree, X, Pencil, Trash2, Eye } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   checkIn as apiCheckIn,
   checkOut as apiCheckOut,
@@ -14,19 +14,17 @@ import {
   getMyMonthSummary,
   startBreak as apiStartBreak,
   endBreak as apiEndBreak,
-  getBreaksByAttendanceId,
   getBreaksByAttendanceIds,
   getBreaksSummaryByAttendanceIds,
+  getMyLeaveRequests,
+  submitLeave as apiSubmitLeave,
+  editLeave as apiEditLeave,
+  removeLeave as apiRemoveLeave,
   type AttendanceRecord,
   type MonthSummary,
   type BreakRecord,
 } from "@/modules/attendance/api/attendance.api";
-import {
-  getCurrentOpenBreak,
-  computeTotalBreakSeconds,
-  isLeaveStarted as isLeaveStartedPure,
-} from "@/modules/attendance/api/attendance-logic";
-import { useMyLeaveRequests, useLeaveActions } from "@/modules/attendance/api/hooks/useAttendance";
+
 import {
   ATTENDANCE_STATUS_LABEL,
   LEAVE_TYPE_LABEL,
@@ -37,19 +35,41 @@ import {
 } from "@/lib/constants";
 import type { LeaveRequest } from "@/types/attendance";
 
+// ============================================================
+// ✅ دوال محلية مستقلة — كانت قبل كده في attendance-logic.ts (اتحذف).
+// نفس المنطق بالظبط، بس دلوقتي مصدرها الوحيد هو الملف ده.
+// ============================================================
+
 // ⚠️ قواعد مؤكدة فعليًا من الباك (اتفحصت مباشرة عبر الـ RPCs):
 // - update_leave / delete_leave: بيرفضوا برسالة "Cannot update/delete a leave
 //   that has already started" لو start_date <= النهاردة، بغض النظر عن الحالة.
 // - end_leave_early: بيرفض برسالة "Only accepted leaves can be ended early"
-//   لو الحالة مش accepted. منضيفش عليها هنا شرط start_date لأن المفروض
-//   تنفع تتاستخدم أثناء الإجازة (يعني start_date <= النهاردة <= end_date)
-//   — ده بالظبط عكس isLeaveStarted بتاعة باقي الإجراءات، فبنسيبها زي ما هي.
-//
-// ✅ فيكس: كانت الدالة دي معرّفة محليًا هنا وفي صفحة المدير كمان (نسخة
-// مكررة) بدل ما تستخدم النسخة الموحّدة والمختبَرة في attendance-logic.ts.
-// بنستخدم isLeaveStartedPure دلوقتي (نفس المنطق بالظبط، بس مصدر واحد).
+//   لو الحالة مش accepted.
 function isLeaveStarted(startDate: string): boolean {
-  return isLeaveStartedPure(startDate);
+  return startDate <= new Date().toISOString().slice(0, 10);
+}
+
+// بندور على أحدث بريك مفتوح (end_time === null). لو فيه orphan قديم
+// (بريك فاضل مفتوح من باگ سابق في end_break)، بنتجاهله ونستخدم الأحدث.
+function getCurrentOpenBreak(breaks: BreakRecord[]): BreakRecord | null {
+  const open = breaks.filter((b) => b.end_time === null);
+  if (open.length === 0) return null;
+  return open.reduce((latest, b) => (new Date(b.start_time) > new Date(latest.start_time) ? b : latest));
+}
+
+// إجمالي وقت البريك بالثواني: مجموع البريكات المقفولة + وقت البريك
+// المفتوح الحالي (بيتحدث كل ثانية من breakElapsedSec).
+function computeTotalBreakSeconds(breaks: BreakRecord[], breakElapsedSec: number): number {
+  let total = 0;
+  for (const b of breaks) {
+    if (b.end_time) {
+      const secs = Math.round((new Date(b.end_time).getTime() - new Date(b.start_time).getTime()) / 1000);
+      total += Math.max(0, secs);
+    }
+  }
+  const hasOpen = breaks.some((b) => b.end_time === null);
+  if (hasOpen) total += breakElapsedSec;
+  return total;
 }
 
 // 🔧 VALIDATION FIX: تاريخ اليوم كسلسلة نصية — مستخدم في أكتر من مكان
@@ -98,42 +118,37 @@ export default function AttendancePage() {
   const [loadingToday, setLoadingToday] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
-  // ---- البريك: جدول breaks + RPC start_break/end_break ----
-  // الفلو: start_break → نجيب حالة البريك تاني من جدول breaks (فيه بريك
-  // مفتوح ولا لأ) → لو فيه بريك مفتوح (isOnBreak = true) يظهر زرار end_break.
-  //
-  // ✅ فيكس أساسي: "isOnBreak" و"currentBreak" كانوا بيتحسبوا بأخذ آخر
-  // عنصر في مصفوفة breaks (breaks[breaks.length - 1])، وده غلط لو فيه
-  // أكتر من بريك مفتوح (orphan قديم من باگ سابق في end_break) أو لو
-  // الترتيب من الباك مش مضمون. النتيجة العملية: المستخدم يعمل start_break
-  // بنجاح، الباك يفتح بريك فعلي، لكن الواجهة تفضل عارضة زرار "بدء البريك"
-  // بدل "إنهاء البريك" — وده بالظبط اللي ظهر في اختبارك (الباك رفض
-  // start_break التانية برسالة "لديك استراحة قائمة بالفعل" والواجهة كانت
-  // لسه شايفة إن مفيش بريك شغال). getCurrentOpenBreak() مصدر واحد موحّد
-  // ومختبَر بيدور فعليًا على أحدث بريك end_time=null.
   const [breaks, setBreaks] = useState<BreakRecord[]>([]);
   const [breakSubmitting, setBreakSubmitting] = useState(false);
   const [breakElapsedSec, setBreakElapsedSec] = useState(0);
-  // ✅ جديد: كل الـ attendance_id بتاعت صفوف اليوم كلها (مش بس آخر صف).
-  // لازمة عشان refreshBreaks تقدر تجيب بريكات أي صف قديم النهاردة برضه،
-  // مش بس الصف الحالي المعروض — راجع شرح getMyTodayAttendanceRecords
-  // في attendance.api.ts لسبب المشكلة دي بالتفصيل.
+  // كل الـ attendance_id بتاعت صفوف اليوم كلها (مش بس آخر صف) — لازمة عشان
+  // refreshBreaks تقدر تجيب بريكات أي صف قديم النهاردة برضه.
   const [todayAttendanceIds, setTodayAttendanceIds] = useState<number[]>([]);
 
   // ---- طلبات الإجازة — مباشرة من جدول leaves في الباك ----
-  const {
-    data: leaves,
-    loading: loadingLeaves,
-    refresh: refreshLeaves,
-  } = useMyLeaveRequests();
-  const leaveActions = useLeaveActions();
+  // ✅ كان useMyLeaveRequests() / useLeaveActions() من hooks/useAttendance.ts
+  // (اتحذف). دلوقتي state محلي بسيط بيستخدم دوال attendance.api مباشرة.
+  const [leaves, setLeaves] = useState<LeaveRequest[]>([]);
+  const [loadingLeaves, setLoadingLeaves] = useState(true);
+  const [leaveActionLoading, setLeaveActionLoading] = useState(false);
 
-  // فيكس مشكلة "error في end_leave_early من غير ما تتمسح" — leaveActions.loading
-  // كان state واحد مشترك بين كل أكشنز الإجازة (حفظ الفورم / إلغاء / إنهاء بدري)،
-  // وأزرار الصف (تعديل/إلغاء/إنهاء بدري) مكانش عليها أي disabled خالص. ده كان بيسمح
-  // بضغط متكرر/متزامن يبعت نفس الـ RPC مرتين، النداء التاني بيفشل برسالة من الباك
-  // (لأن الحالة اتغيرت بالنداء الأول) — إيرور بيظهر من غير أي سبب واضح للمستخدم
-  // ومفيش حماية تمنعه. الحل: نتبع أي صف/أكشن بالظبط شغال دلوقتي، ونعطّل زراره بس.
+  const refreshLeaves = useCallback(async () => {
+    try {
+      const data = await getMyLeaveRequests();
+      setLeaves(data);
+    } catch (err) {
+      showToast("error", err instanceof Error ? err.message : "حصل خطأ في تحميل طلبات الإجازة");
+    } finally {
+      setLoadingLeaves(false);
+    }
+  }, [showToast]);
+
+  useEffect(() => {
+    refreshLeaves();
+  }, [refreshLeaves]);
+
+  // فيكس مشكلة "error من غير ما يتمسح" — بنتبع الصف/الأكشن بالظبط اللي
+  // شغال دلوقتي، ونعطّل زراره بس بدل state لودينج مشترك.
   const [busyLeave, setBusyLeave] = useState<{ id: number; action: LeaveRowAction } | null>(null);
 
   // كارد تفاصيل الإجازة — مودال منفصل يعرض تفاصيل طلب الإجازة كاملة
@@ -176,11 +191,8 @@ export default function AttendancePage() {
         setHistory(hist);
         setMonthSummary(summary);
 
-        // ✅ فيكس: بنجيب كل صفوف اليوم بتاعت المستخدم (مش بس الأحدث)
-        // وبنجمع بريكات كل الصفوف دي مع بعض. لو المستخدم عمل check-in
-        // أكتر من مرة النهاردة (اختبار مثلاً)، وفيه بريك مفتوح اتفتح من
-        // صف قديم النهاردة ولسه متقفلش، هيظهر هنا بدل ما يفضل مخفي عن
-        // الواجهة بينما الباك شايفه وبيرفض start_break بسببه.
+        // بنجيب كل صفوف اليوم بتاعت المستخدم (مش بس الأحدث) وبنجمع
+        // بريكات كل الصفوف دي مع بعض.
         const todayRecords = await getMyTodayAttendanceRecords();
         const ids = todayRecords.map((r) => r.id);
         setTodayAttendanceIds(ids);
@@ -204,11 +216,6 @@ export default function AttendancePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ✅ فيكس: بدل ما ناخد آخر عنصر في المصفوفة، بندور فعليًا على أحدث
-  // بريك مفتوح (end_time === null) — نفس الدالة المستخدمة والمختبَرة في
-  // attendance-logic.ts (getCurrentOpenBreak). لو فيه orphan قديم (بريك
-  // فاضل مفتوح من باگ سابق في end_break)، الدالة دي بتتجاهله وتاخد
-  // الأحدث بالظبط.
   const currentBreak = getCurrentOpenBreak(breaks);
   const isOnBreak = !!currentBreak;
 
@@ -230,10 +237,9 @@ export default function AttendancePage() {
   const hasCheckedIn = !!record?.check_in_at;
   const hasCheckedOut = !!record?.check_out_at;
 
-  // ✅ فيكس: بنجيب بريكات كل صفوف اليوم (todayAttendanceIds) مش صف واحد
-  // بس، عشان لو الباك بيتعامل مع البريك على مستوى المستخدم مش الصف
-  // (زي ما ظهر من رفض start_break رغم إن الصف الحالي مفيهوش بريك مفتوح)،
-  // الواجهة تفضل شايفة الصورة كاملة دايمًا.
+  // بنجيب بريكات كل صفوف اليوم (todayAttendanceIds) مش صف واحد بس، عشان
+  // لو الباك بيتعامل مع البريك على مستوى المستخدم مش الصف، الواجهة تفضل
+  // شايفة الصورة كاملة دايمًا.
   async function refreshBreaks(attendanceIds: number[]) {
     if (attendanceIds.length === 0) {
       setBreaks([]);
@@ -243,7 +249,7 @@ export default function AttendancePage() {
     setBreaks(fresh);
   }
 
-  // ✅ لو صف حضور جديد اتعمل (مثلاً بعد check-in) ومكانش في اللستة، نضيفه
+  // لو صف حضور جديد اتعمل (مثلاً بعد check-in) ومكانش في اللستة، نضيفه
   // عشان refreshBreaks الجاية تجيب بريكاته هو كمان.
   async function refreshTodayAttendanceIds(): Promise<number[]> {
     const todayRecords = await getMyTodayAttendanceRecords();
@@ -291,24 +297,7 @@ export default function AttendancePage() {
     }
   }
 
-  // الفلو: نادي start_break → نجيب حالة البريك تاني (refreshBreaks) →
-  // بما إن فيه بريك مفتوح دلوقتي، isOnBreak هتبقى true تلقائيًا وهيظهر
-  // زرار "إنهاء البريك" بدل "بدء البريك".
-  //
-  // ✅ فاليديشن فرونت — مرآة لقواعد الباك، عشان المستخدم ياخد رسالة
-  // واضحة فورًا من غير ما ننتظر رد RPC هيترفض أكيد:
-  // 1) لازم يكون مسجل حضور فعلاً ولسه مسجلش انصراف — مينفعش تاخد بريك
-  //    قبل ما تسجل حضور، ولا بعد ما تسجل انصراف.
-  // 2) مينفعش تبدأ بريك وانت أصلاً في بريك مفتوح — الزرار أصلاً بيتخفي
-  //    وقت isOnBreak، بس ده حارس صريح إضافي (دفاع في العمق) لو حصل أي
-  //    سباق أو ضغط سريع قبل ما الحالة تتحدّث بصريًا.
-  //
-  // ✅ فيكس أساسي: لو الباك رفض start_break (مثلاً P0001 "لديك استراحة
-  // قائمة بالفعل" — بيحصل لو فيه بريك مفتوح فعليًا مش ظاهر صح في
-  // الواجهة القديمة)، لازم نعمل refreshBreaks() *حتى مع الفشل* عشان
-  // نزامن الواجهة مع الحالة الحقيقية في الباك فورًا، بدل ما نسيب
-  // المستخدم شايف "بدء البريك" وهو فعليًا في استراحة من الأصل.
-  async function handleStartBreak() {
+ async function handleStartBreak() {
     if (breakSubmitting) return;
 
     if (!hasCheckedIn) {
@@ -326,16 +315,25 @@ export default function AttendancePage() {
 
     setBreakSubmitting(true);
     try {
-      await apiStartBreak();
-      const ids = await refreshTodayAttendanceIds();
-      await refreshBreaks(ids);
+      const newBreak = await apiStartBreak();
+      // ✅ تحديث فوري من الـ data الراجعة من الـ RPC نفسه — من غير ما
+      // نستنى refetch كامل لجدول breaks. لو الـ refetch اللي بعده فشل،
+      // الواجهة برضه هتفضل شايفة إن البريك بدأ فعلاً.
+      if (newBreak) {
+        setBreaks((prev) => [...prev, newBreak]);
+      }
       setBreakElapsedSec(0);
       showToast("success", `بدأت البريك الساعة ${time}`);
+
+      // مزامنة في الخلفية (تأكيد الحالة + التقاط أي attendance id جديد)
+      try {
+        const ids = await refreshTodayAttendanceIds();
+        await refreshBreaks(ids);
+      } catch {
+        // التحديث المتفائل فوق كافي لعرض الزرار الصح؛ فشل المزامنة
+        // في الخلفية مش لازم يوقف حاجة
+      }
     } catch (err) {
-      // مزامنة إجبارية: لو الباك رافض لوجود بريك مفتوح بالفعل (حتى لو
-      // في صف حضور قديم النهاردة)، نعرض الحالة الصح فورًا — isOnBreak
-      // هيبقى true تلقائيًا بعد الـ refresh لأننا بنجيب بريكات كل صفوف
-      // اليوم مش صف واحد بس.
       try {
         const ids = await refreshTodayAttendanceIds();
         await refreshBreaks(ids);
@@ -348,49 +346,49 @@ export default function AttendancePage() {
     }
   }
 
-  // الفلو: نادي end_break → نجيب حالة البريك تاني (refreshBreaks) →
-  // آخر بريك بقى له end_time، فـ isOnBreak هترجع false ويظهر زرار
-  // "بدء البريك" تاني.
-  //
-  // ✅ فاليديشن فرونت: مينفعش تنهي بريك ومفيش بريك مفتوح أصلاً — حارس
-  // صريح زي بتاع handleStartBreak، بدل ما نسيب الطلب يمشي للباك ويترفض.
-  //
-  // ✅ نفس فيكس المزامنة الإجبارية: لو end_break فشل (مثلاً "مفيش بريك
-  // مفتوح أصلاً" لأي سبب)، برضه نعمل refresh عشان الواجهة تعكس الحقيقة.
-async function handleEndBreak() {
-  if (breakSubmitting) return;
+  async function handleEndBreak() {
+    if (breakSubmitting) return;
 
-  if (!isOnBreak) {
-    showToast("error", "مفيش بريك شغال دلوقتي عشان تنهيه");
-    return;
-  }
-
-  setBreakSubmitting(true);
-  try {
-    await apiEndBreak();
-    if (record) await refreshBreaks([record.id]);
-    setBreakElapsedSec(0);
-    showToast("success", `انتهت البريك الساعة ${time}`);
-  } catch (err) {
-    if (record) {
-      try {
-        await refreshBreaks([record.id]);
-      } catch {
-        // تجاهل فشل الـ refresh نفسه
-      }
+    if (!isOnBreak) {
+      showToast("error", "مفيش بريك شغال دلوقتي عشان تنهيه");
+      return;
     }
-    showToast("error", err instanceof Error ? err.message : "تعذر إنهاء البريك");
-  } finally {
-    setBreakSubmitting(false);
+
+    setBreakSubmitting(true);
+    try {
+      const closedBreak = await apiEndBreak();
+      // ✅ نفس الفكرة: نحدّث نفس صف البريك في الـ state من الـ data
+      // الراجعة مباشرة بدل الاستنى على refetch.
+      if (closedBreak) {
+        setBreaks((prev) => prev.map((b) => (b.id === closedBreak.id ? closedBreak : b)));
+      }
+      setBreakElapsedSec(0);
+      showToast("success", `انتهت البريك الساعة ${time}`);
+
+      if (record) {
+        try {
+          await refreshBreaks([record.id]);
+        } catch {
+          // التحديث المتفائل فوق كافي لإخفاء الزرار الصح
+        }
+      }
+    } catch (err) {
+      if (record) {
+        try {
+          await refreshBreaks([record.id]);
+        } catch {
+          // تجاهل فشل الـ refresh نفسه
+        }
+      }
+      showToast("error", err instanceof Error ? err.message : "تعذر إنهاء البريك");
+    } finally {
+      setBreakSubmitting(false);
+    }
   }
-}
+  
 
   const todayStatus = record?.status ?? null;
 
-  // ✅ فيكس: بدل reduce يدوي كان بيدي breakElapsedSec لأي بريك مفتوح
-  // (لو فيه أكتر من واحد مفتوح بالغلط كان بيتضاعف الرقم غلط)، بنستخدم
-  // computeTotalBreakSeconds المختبَرة اللي بتاخد بس البريك المفتوح
-  // الحقيقي (نفس currentBreak) وتتجاهل أي orphan.
   const totalBreakSeconds = computeTotalBreakSeconds(breaks, breakElapsedSec);
 
   const formatDuration = (totalSec: number) => {
@@ -433,8 +431,6 @@ async function handleEndBreak() {
       showToast("error", "حدد نوع الإجازة");
       return;
     }
-    // 🔧 VALIDATION FIX: كان أي نص غير فاضي (حرف واحد كفاية) بيعدي كسبب —
-    // بنطلب حد أدنى معقول من الأحرف عشان السبب يبقى مفيد فعليًا للمدير.
     const trimmedReason = leaveForm.reason.trim();
     if (!trimmedReason) {
       showToast("error", "اكتب سبب الإجازة");
@@ -444,22 +440,18 @@ async function handleEndBreak() {
       showToast("error", `سبب الإجازة قصير جدًا — اكتب ${MIN_LEAVE_REASON_LENGTH} أحرف على الأقل`);
       return;
     }
-    // فاليديشن: من غير ده ممكن تبعت تاريخ نهاية قبل تاريخ البداية
     if (leaveForm.end_date < leaveForm.start_date) {
       showToast("error", "تاريخ النهاية لازم يكون بعد أو يساوي تاريخ البداية");
       return;
     }
-    // 🔧 VALIDATION FIX: طلب إجازة جديد بتاريخ بداية في الماضي كان بيعدي
-    // من غير أي تنبيه في الفرونت (الباك ممكن يقبله أو يرفضه بصمت حسب
-    // منطقه الداخلي). بنمنعها من هنا فقط لطلب جديد — التعديل على طلب
-    // قائم بالفعل ليه قاعدته الخاصة (isLeaveStarted) وممنوع أصلاً لو بدأت.
     if (editingLeaveId === null && leaveForm.start_date < todayISO()) {
       showToast("error", "تاريخ بداية الإجازة لازم يكون النهاردة أو بعده");
       return;
     }
+    setLeaveActionLoading(true);
     try {
       if (editingLeaveId !== null) {
-        await leaveActions.editLeave({
+        await apiEditLeave({
           p_leave_id: editingLeaveId,
           p_start_date: leaveForm.start_date,
           p_end_date: leaveForm.end_date,
@@ -467,7 +459,7 @@ async function handleEndBreak() {
         });
         showToast("success", "تم تعديل طلب الإجازة");
       } else {
-        await leaveActions.submitLeave({
+        await apiSubmitLeave({
           p_start_date: leaveForm.start_date,
           p_end_date: leaveForm.end_date,
           p_leave_type: leaveForm.leave_type,
@@ -479,15 +471,16 @@ async function handleEndBreak() {
       setLeaveOpen(false);
     } catch (err) {
       showToast("error", err instanceof Error ? err.message : "تعذر إرسال طلب الإجازة");
+    } finally {
+      setLeaveActionLoading(false);
     }
   }
 
   async function cancelLeave(leaveId: number) {
-    // حماية ضد الضغط المتكرر/المتزامن (سبب الإيرور اللي بيظهر من غير سبب واضح)
     if (busyLeave) return;
     setBusyLeave({ id: leaveId, action: "cancel" });
     try {
-      await leaveActions.removeLeave(leaveId);
+      await apiRemoveLeave(leaveId);
       await refreshLeaves();
       showToast("success", "تم إلغاء طلب الإجازة");
     } catch (err) {
@@ -630,8 +623,6 @@ async function handleEndBreak() {
               const isCancelling = busyLeave?.id === l.id && busyLeave.action === "cancel";
               const rowBusy = busyLeave?.id === l.id;
 
-              // السبب بيتقصّ بصريًا هنا (line-clamp-2) بس دايمًا فيه طريقة
-              // مضمونة تشوفه كامل من غير قطع: زرار "عرض التفاصيل" بيفتح كارد.
               return (
                 <div key={l.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border p-3 text-sm">
                   <button
@@ -642,10 +633,6 @@ async function handleEndBreak() {
                   >
                     <div className="font-semibold flex items-center gap-2 flex-wrap">
                       {LEAVE_TYPE_LABEL[l.leave_type]} — {l.start_date} إلى {l.end_date}
-                      {/* ✅ فيكس: كان بيستخدم ternary ناقص (نفس المشكلة اللي في
-                          المودال تحت) بيرجّع "muted" لأي حالة مش accepted/rejected/
-                          pending، يعني "cancelled" و"end_leave_early" بلون واحد
-                          غلط. دلوقتي بيستخدم LEAVE_STATUS_TONE الموحّد. */}
                       <StatusPill tone={LEAVE_STATUS_TONE[l.status]}>
                         {LEAVE_STATUS_LABEL[l.status]}
                       </StatusPill>
@@ -830,14 +817,10 @@ async function handleEndBreak() {
                   <input
                     type="date"
                     value={leaveForm.start_date}
-                    /* 🔧 VALIDATION FIX: منع اختيار تاريخ بداية في الماضي من
-                        الـ date picker نفسه (بالإضافة للفحص في submitLeaveForm
-                        كـ حماية مزدوجة). */
                     min={todayISO()}
                     onChange={(e) =>
                       setLeaveForm((f) => {
                         const start_date = e.target.value;
-                        // لو تاريخ النهاية بقى قبل البداية الجديدة، نزوّده تلقائيًا
                         const end_date = f.end_date < start_date ? start_date : f.end_date;
                         return { ...f, start_date, end_date };
                       })
@@ -875,8 +858,6 @@ async function handleEndBreak() {
               <label className="text-xs space-y-1 block">
                 <span className="text-muted-foreground">
                   السبب
-                  {/* 🔧 VALIDATION FIX: توضيح الحد الأدنى في الليبل نفسه عشان
-                      المستخدم يعرف مقدمًا بدل ما يتفاجئ بالإيرور بعد الإرسال */}
                   <span className="text-muted-foreground/70"> (لا يقل عن {MIN_LEAVE_REASON_LENGTH} أحرف)</span>
                 </span>
                 <textarea
@@ -889,10 +870,10 @@ async function handleEndBreak() {
 
               <button
                 onClick={submitLeaveForm}
-                disabled={leaveActions.loading}
+                disabled={leaveActionLoading}
                 className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-60"
               >
-                {leaveActions.loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Palmtree className="h-4 w-4" />}
+                {leaveActionLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Palmtree className="h-4 w-4" />}
                 {editingLeaveId !== null ? "حفظ التعديل" : "إرسال الطلب"}
               </button>
             </div>
@@ -902,7 +883,6 @@ async function handleEndBreak() {
 
       {/* ============================================================
           مودال: تفاصيل طلب الإجازة (كارد) — بيعرض السبب كامل من غير قطع
-          حتى لو فقرة طويلة جدًا (scroll جوه الكارد نفسه لو لزم الأمر).
       ============================================================ */}
       {detailsLeave && (
         <>
@@ -915,8 +895,6 @@ async function handleEndBreak() {
                   {LEAVE_TYPE_LABEL[detailsLeave.leave_type]}
                 </h3>
                 <div className="mt-1">
-                  {/* ✅ فيكس: نفس التوحيد — بيستخدم LEAVE_STATUS_TONE بدل الـ
-                      ternary الناقص القديم. */}
                   <StatusPill tone={LEAVE_STATUS_TONE[detailsLeave.status]}>
                     {LEAVE_STATUS_LABEL[detailsLeave.status]}
                   </StatusPill>
@@ -940,9 +918,6 @@ async function handleEndBreak() {
 
             <div>
               <div className="text-xs text-muted-foreground mb-1">السبب</div>
-              {/* النص كامل هنا بدون truncate، ومع whitespace-pre-wrap عشان
-                  الفقرات/الأسطر الطويلة تتلف بشكل طبيعي وتفضل قابلة للقراءة
-                  بالكامل، والكارد نفسه فيه scroll لو النص طويل جدًا. */}
               <div className="rounded-xl border border-border bg-background p-3 text-sm whitespace-pre-wrap break-words leading-relaxed">
                 {detailsLeave.reason || "— بدون سبب مكتوب —"}
               </div>

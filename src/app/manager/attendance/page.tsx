@@ -19,22 +19,12 @@ import {
   createAttendanceSettings,
   updateAttendanceSettings,
   deleteAttendanceSettings,
+  getAllLeaveRequests,
+  setLeaveStatus as apiSetLeaveStatus,
   type AttendanceTodayRow,
   type AttendanceSettings,
   type BreakRecord,
 } from "@/modules/attendance/api/attendance.api";
-import {
-  summarizeBreaks,
-  formatBreakCell,
-  formatMinutesAsHours,
-  isLeaveStarted,
-  resolveStatus,
-  dedupeAttendanceTodayByUser,
-} from "@/modules/attendance/api/attendance-logic";
-import {
-  useManagerLeaveRequests,
-  useLeaveActions,
-} from "@/modules/attendance/api/hooks/useAttendance";
 import { getEmployees } from "@/modules/employees/api/employees.api";
 import { getDepartments, type Department } from "@/modules/department/api/department.api";
 import { getBranches, type Branch } from "@/modules/branch/api/branch.api";
@@ -50,6 +40,7 @@ import {
   type LeaveStatus,
 } from "@/lib/constants";
 import { StatusPill } from "@/components/portal-layout";
+import type { LeaveRequest } from "@/types/attendance";
 
 type Status = AttendanceStatus;
 // قرارات المدير الوحيدة اللي check_leave_status بيقبلها فعليًا
@@ -65,9 +56,6 @@ type Row = {
   outISO: string | null;
   st: Status;
   tone: Tone;
-  // فيكس: قبل كده كنا بنخزن بريك واحد بس (آخر واحد) فكان بيتحسب غلط
-  // لو الموظف اخد أكتر من بريك في نفس اليوم. دلوقتي بنخزن الإجمالي الفعلي
-  // + هل فيه بريك مفتوح دلوقتي، عشان نعرض المجموع الصح.
   breakTotalMinutes: number;
   isOnBreakNow: boolean;
 };
@@ -83,17 +71,67 @@ type LeaveRow = {
   status: LeaveStatus;
 };
 
+// ============================================================
+// ✅ دوال محلية مستقلة — كانت قبل كده في attendance-logic.ts (اتحذف).
+// نفس المنطق بالظبط، بس دلوقتي مصدرها الوحيد هو الملف ده.
+// ============================================================
+
+function resolveStatus(r: AttendanceTodayRow): Status {
+  return (r.status as Status | null) ?? "not_checked_in";
+}
+
+// دمج بريكات الموظف (المقفولة + المفتوحة لو فيه) لإجمالي الدقايق + هل
+// فيه بريك شغال دلوقتي
+function summarizeBreaks(breaks: BreakRecord[]): { totalMinutes: number; isOnBreakNow: boolean } {
+  let totalMinutes = 0;
+  let isOnBreakNow = false;
+  for (const b of breaks) {
+    if (b.end_time) {
+      const mins =
+        b.break_mins ?? Math.round((new Date(b.end_time).getTime() - new Date(b.start_time).getTime()) / 60000);
+      totalMinutes += Math.max(0, mins);
+    } else {
+      isOnBreakNow = true;
+    }
+  }
+  return { totalMinutes, isOnBreakNow };
+}
+
+function formatBreakCell(totalMinutes: number, isOnBreakNow: boolean): string {
+  if (totalMinutes === 0 && !isOnBreakNow) return "—";
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  const base = h > 0 ? `${h}س ${m}د` : `${m}د`;
+  return isOnBreakNow ? `${base} (جارية الآن)` : base;
+}
+
+// هل الإجازة بدأت فعلاً؟ (start_date <= النهاردة) — نفس القاعدة المستخدمة
+// من الباك لرفض update_leave/delete_leave.
+function isLeaveStarted(startDate: string): boolean {
+  return startDate <= new Date().toISOString().slice(0, 10);
+}
+
+// لو موظف عنده أكتر من سجل attendance في نفس اليوم، بنسيب بس آخر سجل
+// (أحدث check_in_at) لكل موظف.
+function dedupeAttendanceTodayByUser(rows: AttendanceTodayRow[]): AttendanceTodayRow[] {
+  const map = new Map<string, AttendanceTodayRow>();
+  for (const r of rows) {
+    const existing = map.get(r.users_id);
+    if (!existing) {
+      map.set(r.users_id, r);
+      continue;
+    }
+    const existingTime = existing.check_in_at ? new Date(existing.check_in_at).getTime() : -Infinity;
+    const newTime = r.check_in_at ? new Date(r.check_in_at).getTime() : -Infinity;
+    if (newTime >= existingTime) map.set(r.users_id, r);
+  }
+  return Array.from(map.values());
+}
+
 function formatTimeAr(iso: string | null) {
   if (!iso) return "—";
   return new Date(iso).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit", hour12: false });
 }
-
-// ✅ فيكس: summarizeBreaks / formatBreakCell / formatMinutesAsHours و
-// isLeaveStarted كانوا معرّفين محليًا هنا بنسخة مكررة عن نفس المنطق في
-// employee/attendance/page.tsx وفي attendance-logic.ts (اللي فيه الاختبارات
-// الفعلية). أي تعديل مستقبلي كان محتاج يتنسخ في 3 أماكن يدويًا — ده اللي
-// خلّى فيكسات زي "getCurrentOpenBreak" تتطبق في مكان وتتنسى في التاني.
-// دلوقتي كل حاجة بتيجي من مصدر واحد مختبَر: attendance-logic.ts.
 
 function mapTodayRowToRow(
   r: AttendanceTodayRow,
@@ -215,7 +253,6 @@ export default function AttendancePage() {
   const [settingsForm, setSettingsForm] = useState<SettingsForm>(EMPTY_SETTINGS_FORM);
   const [editingSettingsId, setEditingSettingsId] = useState<number | null>(null);
   const [savingSettings, setSavingSettings] = useState(false);
-  // ✅ جديد: تتبّع أي إعداد بيتحذف دلوقتي عشان نعطّل زراره بس وقت الحذف
   const [deletingSettingsId, setDeletingSettingsId] = useState<number | null>(null);
 
   // ---- الفروع ----
@@ -223,16 +260,28 @@ export default function AttendancePage() {
   const branchMap = useMemo(() => new Map(branches.map((b) => [b.id, b])), [branches]);
 
   // ---- طلبات الإجازة — كل الحالات، مباشرة من جدول leaves في الباك ----
-  const {
-    data: leaves,
-    loading: leavesLoading,
-    refresh: refreshLeaves,
-  } = useManagerLeaveRequests();
-  const leaveActions = useLeaveActions();
+  // ✅ كان useManagerLeaveRequests() من hooks/useAttendance.ts (اتحذف).
+  // دلوقتي state محلي بسيط بيستخدم getAllLeaveRequests مباشرة.
+  const [leaves, setLeaves] = useState<LeaveRequest[]>([]);
+  const [leavesLoading, setLeavesLoading] = useState(true);
 
-  // فيكس مشكلة الإيرور اللي بيظهر من غير ما يتمسح — leaveActions.loading
-  // كان state عام واحد، فمفيش ضمان إن ضغطتين سريعتين على قرارين مختلفين
-  // (أو نفس القرار مرتين) ميعملوش تعارض. بنتبع الصف اللي شغال عليه دلوقتي بس.
+  const refreshLeaves = useCallback(async () => {
+    try {
+      const data = await getAllLeaveRequests();
+      setLeaves(data);
+    } catch (err) {
+      showToast("error", err instanceof Error ? err.message : "تعذر تحميل طلبات الإجازة");
+    } finally {
+      setLeavesLoading(false);
+    }
+  }, [showToast]);
+
+  useEffect(() => {
+    refreshLeaves();
+  }, [refreshLeaves]);
+
+  // فيكس مشكلة الإيرور اللي بيظهر من غير ما يتمسح — بنتبع الصف اللي شغال
+  // عليه دلوقتي بس عشان منسمحش بضغطتين متزامنتين.
   const [busyLeaveId, setBusyLeaveId] = useState<number | null>(null);
 
   // كارد تفاصيل الإجازة — بيعرض السبب كامل بدون truncate
@@ -247,11 +296,6 @@ export default function AttendancePage() {
         getTodayAttendanceRecords(),
       ]);
 
-      // ⚠️ dedupe: لو موظف عنده أكتر من سجل attendance في نفس اليوم (مثلاً
-      // check-in/check-out متكررين أثناء الاختبار)، view attendance_today
-      // بترجع صف لكل سجل، فبيتكرر users_id وده بيكسر الـ key في الجدول.
-      // بنسيب بس آخر سجل (أحدث check_in_at) لكل موظف — عبر الدالة الموحّدة
-      // والمختبَرة dedupeAttendanceTodayByUser بدل نسخة محلية.
       const todayRows = dedupeAttendanceTodayByUser(todayRowsRaw);
 
       const deptMap = new Map<string, string>();
@@ -267,7 +311,6 @@ export default function AttendancePage() {
       const attendanceIdToUser = new Map<number, string>();
       for (const rec of attendanceRecords) attendanceIdToUser.set(rec.id, rec.users_id);
 
-      // فيكس: تجميع كل البريكات بتاعة كل موظف (مش بريك واحد بس)
       const breaksByUser = new Map<string, BreakRecord[]>();
       for (const b of allBreaks) {
         const uid = attendanceIdToUser.get(b.attendance_id);
@@ -396,7 +439,6 @@ export default function AttendancePage() {
       showToast("error", "اختار الفرع الأول");
       return;
     }
-    // فاليديشن: التأكد إن أوقات الدوام منطقية قبل ما نبعتها للباك
     if (settingsForm.start_time >= settingsForm.end_time) {
       showToast("error", "وقت بداية الدوام لازم يكون قبل وقت النهاية");
       return;
@@ -434,10 +476,6 @@ export default function AttendancePage() {
     }
   }
 
-  // ✅ حذف إعداد حضور — كان الـ API function موجودة (deleteAttendanceSettings)
-  // بس مش متستخدمة في الـ UI خالص، مفيش أي زرار حذف لإعداد قديم/غلط.
-  // بيسأل تأكيد الأول (نفس نمط handleDeleteEmployee في صفحة الموظفين)،
-  // وبيمنع الحذف لو الإعداد ده هو نفسه اللي بيتعدّل دلوقتي في الفورم.
   async function handleDeleteSettings(s: AttendanceSettings) {
     const b = branchMap.get(s.branch_id);
     const label = b ? branchLabel(b) : `فرع #${s.branch_id}`;
@@ -451,7 +489,6 @@ export default function AttendancePage() {
     try {
       await deleteAttendanceSettings(s.id);
       setSettingsList((list) => list.filter((x) => x.id !== s.id));
-      // لو كان الإعداد ده هو نفسه المفتوح للتعديل دلوقتي، نرجّع الفورم فاضي
       if (editingSettingsId === s.id) {
         startNewSettings();
       }
@@ -468,13 +505,10 @@ export default function AttendancePage() {
   // ============================================================
 
   async function decideOnLeave(leaveId: number, status: LeaveDecision) {
-    // حماية ضد الضغط المتكرر/المتزامن على نفس الطلب أو طلبات مختلفة
-    // في نفس اللحظة — ده اللي كان بيسبب إيرور "من فراغ" لإن leaveActions.loading
-    // كان مشترك وملهوش أي منع فعلي للضغط المزدوج على مستوى الصف.
     if (busyLeaveId !== null) return;
     setBusyLeaveId(leaveId);
     try {
-      await leaveActions.setLeaveStatus(leaveId, status);
+      await apiSetLeaveStatus(leaveId, status);
       showToast("success", `تم تحديث حالة طلب الإجازة رقم ${leaveId}`);
       await refreshLeaves();
     } catch (err) {
@@ -653,10 +687,6 @@ export default function AttendancePage() {
                     <td className="px-4 py-3 tabular">{l.start_date}</td>
                     <td className="px-4 py-3 tabular">{l.end_date}</td>
                     <td className="px-4 py-3">
-                      {/* الفيكس الأساسي لمشكلة "التفاصيل المفروض تتعرض في كارد":
-                          truncate + title كان الاعتماد الوحيد لقراءة سبب طويل، وده
-                          مش شغال أصلاً على الموبايل. دلوقتي زرار "عرض" بيفتح كارد
-                          فيه النص كامل بدون أي قطع. */}
                       <button
                         onClick={() => setDetailsLeave(l)}
                         className="flex max-w-60 items-center gap-1.5 text-muted-foreground hover:text-foreground truncate"
@@ -686,7 +716,6 @@ export default function AttendancePage() {
                           >
                             {rowBusy ? <Loader2 className="size-3.5 animate-spin" /> : <XCircle className="size-3.5" />} رفض
                           </button>
-                          {/* الإلغاء ممنوع لو الإجازة بدأت فعلاً (رسالة الباك) */}
                           {!isLeaveStarted(l.start_date) && (
                             <button
                               onClick={() => decideOnLeave(l.id, "cancelled")}
@@ -743,8 +772,6 @@ export default function AttendancePage() {
                               {s.start_time.slice(0, 5)} - {s.end_time.slice(0, 5)} | مهلة تأخير {s.late_tolerance_minutes} د | cutoff {s.cutoff_time.slice(0, 5)}
                             </div>
                           </div>
-                          {/* ✅ زرار الحذف — كانت الدالة موجودة في الـ API
-                              بس مالهاش أي استخدام في الواجهة خالص */}
                           <div className="flex shrink-0 items-center gap-2">
                             <button
                               onClick={() => startEditSettings(s)}
@@ -889,10 +916,6 @@ export default function AttendancePage() {
                   {detailsLeave.employeeName}
                 </h3>
                 <div className="mt-2 flex items-center gap-2 flex-wrap">
-                  {/* ✅ فيكس: كان بيستخدم ternary ناقص هنا (cancelled/end_leave_early
-                      كانوا بيرجعوا "muted" بدل الألوان الصح)، فنفس الطلب كان يظهر
-                      بلون في الجدول ولون مختلف في المودال. دلوقتي بيستخدم نفس
-                      مصدر الألوان الموحّد (LEAVE_STATUS_TONE) المستخدم في الجدول. */}
                   <StatusPill tone={LEAVE_STATUS_TONE[detailsLeave.status]}>
                     {LEAVE_STATUS_LABEL[detailsLeave.status]}
                   </StatusPill>
