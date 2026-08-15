@@ -141,13 +141,42 @@ function breakDurationMinutes(b: BreakRecord): number | null {
 
 /** بياخد أحدث سجل من مجموعة سجلات (بالمقارنة بـ check_in_at)، عشان نستخدمها
  *  في أي مكان محتاج "آخر سجل حضور" بدل ما نعتمد على الداتابيز ترجع صف واحد
- *  بالظبط (اللي مش مضمون، زي ما موثق في dedupedByUser بصفحة المدير). */
+ *  بالظبط (اللي مش مضمون، زي ما موثق في dedupedByUser بصفحة المدير).
+ *
+ *  ⚠️ ملحوظة: الدالة دي كانت هي مصدر باگ "لديك استراحة قائمة بالفعل" اللي
+ *  الفرونت مش عارف يقفلها — لو فيه أكتر من صف attendance لنفس اليوزر/اليوم
+ *  (وده سيناريو حقيقي حصل فعليًا)، الدالة دي كانت بترجع "الأحدث بالـ
+ *  check_in_at" حتى لو الصف ده *مقفول* (check_out_at موجود)، بينما البريك
+ *  المفتوح فعليًا يكون متسجل على صف *تاني* (الأقدم لكن لسه مفتوح). النتيجة:
+ *  الـ UI مش شايف إنك في بريك، وبرضو مش قادر يقفله لأنه بيدور على
+ *  attendance_id غلط. لسه مستخدمة في أماكن مش حساسة لده (زي getAttendanceHistory
+ *  للمدير)، لكن أي مكان بيتعامل مع "هل فيه بريك مفتوح دلوقتي" بيستخدم
+ *  pickOpenOrLatestByCheckIn تحت بدالها. */
 function pickLatestByCheckIn<T extends { check_in_at: string | null }>(
   rows: T[],
 ): T | null {
   if (rows.length === 0) return null;
   let latest = rows[0];
   for (const r of rows) {
+    if ((r.check_in_at ?? "") >= (latest.check_in_at ?? "")) latest = r;
+  }
+  return latest;
+}
+
+/** 🔧 فيكس: زي pickLatestByCheckIn بالظبط، لكن بتفضّل الصف "المفتوح فعليًا"
+ *  (check_out_at = null) لو موجود، وترجع الأحدث بينهم بالـ check_in_at.
+ *  لو مفيش أي صف مفتوح (كل الصفوف مقفولة)، بترجع الأحدث عادي زي الدالة
+ *  القديمة. الهدف إننا لما نيجي نجيب البريكات المرتبطة بـ "سجل النهاردة"،
+ *  نجيب فعلاً السجل اللي المفروض يبقى شغال عليه دلوقتي، مش أي سجل تاني
+ *  لنفس اليوم حتى لو أحدث بالتاريخ. */
+function pickOpenOrLatestByCheckIn<
+  T extends { check_in_at: string | null; check_out_at: string | null },
+>(rows: T[]): T | null {
+  if (rows.length === 0) return null;
+  const openRows = rows.filter((r) => !r.check_out_at);
+  const pool = openRows.length > 0 ? openRows : rows;
+  let latest = pool[0];
+  for (const r of pool) {
     if ((r.check_in_at ?? "") >= (latest.check_in_at ?? "")) latest = r;
   }
   return latest;
@@ -285,13 +314,16 @@ export async function checkIn(): Promise<unknown> {
 // Employee: حالة اليوم بتاعي
 // ============================================================
 
-// ✅ فيكس: كانت بتستخدم .maybeSingle() اللي بيرمي error (PGRST116) لو رجع
-// أكتر من صف واحد لنفس اليوم — وده سيناريو معترف بيه وموثق فعليًا في نفس
-// المشروع (نفس المشكلة موجودة ومتعالجة في صفحة المدير عبر dedupedByUser).
-// لو حصل هنا، الاستثناء كان بيوقف تحميل الصفحة كلها ويوهم الموظف إن حالته
-// "لم يسجل حضور" حتى لو هو بالفعل مسجل فعليًا. دلوقتي بنجيب كل صفوف اليوم
-// ونرجّع الأحدث بالمقارنة بـ check_in_at، بدون أي افتراض إن الداتابيز
-// هترجع صف واحد بالظبط.
+// ✅ فيكس قديم: كانت بتستخدم .maybeSingle() اللي بيرمي error (PGRST116) لو
+// رجع أكتر من صف واحد لنفس اليوم. اتحل بجلب كل صفوف اليوم واختيار واحد
+// منهم بمنطق واضح.
+//
+// 🔧 فيكس جديد: كانت بتستخدم pickLatestByCheckIn (أحدث check_in_at بغض
+// النظر لو الصف ده مقفول أو مفتوح). ده كان بيسبب مشكلة "لديك استراحة
+// قائمة بالفعل" لما بيتعمل أكتر من صف attendance لنفس اليوم (باگ في
+// الباك محتاج يتصلح من الأساس — امنع تعدد صفوف check_in لنفس اليوزر/اليوم).
+// دلوقتي بنستخدم pickOpenOrLatestByCheckIn عشان نفضّل الصف المفتوح فعليًا
+// (اللي لسه مفيهوش check_out_at) لو موجود، بدل الأحدث تاريخيًا بس.
 export async function getMyAttendanceToday(): Promise<AttendanceRecord | null> {
   const userId = await getCurrentUserId();
 
@@ -302,7 +334,7 @@ export async function getMyAttendanceToday(): Promise<AttendanceRecord | null> {
     .eq("attendance_date", todayISODate());
 
   if (error) throw error;
-  return pickLatestByCheckIn((data ?? []) as AttendanceRecord[]);
+  return pickOpenOrLatestByCheckIn((data ?? []) as AttendanceRecord[]);
 }
 
 // ============================================================
@@ -602,6 +634,10 @@ export async function getMyActiveAttendanceSettings(): Promise<AttendanceSetting
 // Helpers جديدة للـ workaround
 // ============================================================
 
+// 🔧 فيكس: كانت بتستخدم pickLatestByCheckIn (نفس الباگ اللي في
+// getMyAttendanceToday بالظبط) — بتفضّل دلوقتي pickOpenOrLatestByCheckIn
+// عشان نمسك الصف المفتوح فعليًا (اللي المفروض عليه البريك)، مش أي صف تاني
+// لنفس اليوم حتى لو أحدث check_in_at.
 async function getMyOpenAttendance(): Promise<{
   attendanceId: number;
   checkInAt: string;
@@ -609,12 +645,16 @@ async function getMyOpenAttendance(): Promise<{
   const userId = await getCurrentUserId();
   const { data, error } = await supabase
     .from("attendance")
-    .select("id, check_in_at")
+    .select("id, check_in_at, check_out_at")
     .eq("users_id", userId)
     .eq("attendance_date", todayISODate());
   if (error) throw error;
-  const latest = pickLatestByCheckIn(
-    (data ?? []) as { id: number; check_in_at: string | null }[],
+  const latest = pickOpenOrLatestByCheckIn(
+    (data ?? []) as {
+      id: number;
+      check_in_at: string | null;
+      check_out_at: string | null;
+    }[],
   );
   return latest
     ? { attendanceId: latest.id, checkInAt: latest.check_in_at! }
@@ -633,7 +673,8 @@ function isBrokenRpcColumnError(err: unknown): boolean {
 
 // الباك بيرمي الرسالة دي لو فيه بريك مفتوح بالفعل — مش إيرور حقيقي بقدر ما هو
 // desync بين حالة الفرونت والداتابيز (عادة بسبب end_break اللي فشل قبل كده
-// وسابت البريك مفتوح).
+// وسابت البريك مفتوح، أو تعدد صفوف attendance لنفس اليوم — شايف ملحوظة
+// pickOpenOrLatestByCheckIn فوق).
 function isAlreadyOnBreakError(err: unknown): boolean {
   return (
     typeof err === "object" &&
@@ -648,6 +689,38 @@ async function getOpenBreak(attendanceId: number): Promise<BreakRecord | null> {
     .from("breaks")
     .select("*")
     .eq("attendance_id", attendanceId)
+    .is("end_time", null)
+    .order("start_time", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+// 🔧 فيكس جديد: fallback أوسع — بيدوّر على أي بريك مفتوح لليوزر ده مربوط
+// بأي سجل attendance بتاريخ اليوم، مش بس على attendance_id واحد بعينه.
+// محتاج ده لأن لو عندك أكتر من صف attendance لنفس اليوم (الباگ الأصلي)،
+// ممكن الـ attendanceId اللي getMyOpenAttendance حسبته يفضل مختلف عن
+// الـ attendance_id اللي البريك فعليًا متسجل عليه. الحل ده بيضمن إننا
+// نمسك البريك المفتوح الحقيقي بغض النظر عن أي صف attendance هو مربوط بيه،
+// طالما الصف ده بتاريخ اليوم ولنفس اليوزر.
+async function getOpenBreakForUserToday(
+  userId: string,
+): Promise<BreakRecord | null> {
+  const { data: todaysAttendance, error: attErr } = await supabase
+    .from("attendance")
+    .select("id")
+    .eq("users_id", userId)
+    .eq("attendance_date", todayISODate());
+  if (attErr) throw attErr;
+
+  const ids = (todaysAttendance ?? []).map((r) => r.id as number);
+  if (ids.length === 0) return null;
+
+  const { data, error } = await supabase
+    .from("breaks")
+    .select("*")
+    .in("attendance_id", ids)
     .is("end_time", null)
     .order("start_time", { ascending: false })
     .limit(1)
@@ -671,8 +744,21 @@ export async function startBreak(): Promise<BreakRecord> {
 
     // الحالة الأشيع: فيه بريك مفتوح فعلاً من قبل — منرميش إيرور، منرجّع نفس البريك
     if (isAlreadyOnBreakError(err)) {
+      // أول محاولة: على نفس الـ attendanceId اللي حسبناه
       const openBreak = await getOpenBreak(info.attendanceId);
       if (openBreak) return openBreak;
+
+      // 🔧 فيكس: لو مالقيناش على الـ attendanceId ده، دوّر على أي بريك
+      // مفتوح لليوزر ده النهاردة (على أي صف attendance تاني بتاريخ اليوم)
+      const userId = await getCurrentUserId();
+      const openBreakAnyRecord = await getOpenBreakForUserToday(userId);
+      if (openBreakAnyRecord) return openBreakAnyRecord;
+
+      // لسه مش لاقيين حاجة — الرسالة دي مش حقيقية فعليًا أو الداتا غير
+      // متسقة تمامًا، نرمي إيرور واضح للفرونت بدل الرسالة الخام من الباك
+      throw new Error(
+        "الباك بيقول إن عندك استراحة مفتوحة لكن مش لاقينها في السجلات — برجاء التواصل مع الدعم الفني (desync بين attendance و breaks)",
+      );
     }
 
     // الـ RPC نفسها مكسورة (باگ SQL) — نعمل insert مباشر بدالها
@@ -706,13 +792,18 @@ export async function endBreak(): Promise<BreakRecord> {
     if (error) throw error;
     return data;
   } catch (err) {
-    if (!isBrokenRpcColumnError(err)) throw err;
+    // 🔧 فيكس: قبل كده كان بيرمي أي إيرور مش isBrokenRpcColumnError زي ما
+    // هو، من غير ما يحاول يقفل البريك المفتوح فعليًا (لو موجود) عن طريق
+    // fallback مباشر. دلوقتي بنحاول نلاقي أي بريك مفتوح لليوزر النهاردة
+    // (بنفس منطق startBreak) ونقفله مباشرة، سواء كان سبب فشل الـ RPC هو
+    // الباگ المعروف (42703) أو أي إيرور تاني غير متوقع.
+    const userId = await getCurrentUserId();
+    const openBreak = await getOpenBreakForUserToday(userId);
 
-    const info = await getMyOpenAttendance();
-    if (!info) throw new Error("لم تقم بتسجيل الحضور اليوم بعد");
-
-    const openBreak = await getOpenBreak(info.attendanceId);
-    if (!openBreak) throw new Error("لا توجد استراحة قائمة لإنهائها");
+    if (!openBreak) {
+      // مفيش بريك مفتوح أصلاً نقدر نقفله — الإيرور الأصلي حقيقي، نرميه زي ما هو
+      throw err;
+    }
 
     const endTime = new Date();
     const startTime = new Date(openBreak.start_time);
@@ -747,7 +838,12 @@ export async function checkOut(): Promise<AttendanceRecord> {
     const info = await getMyOpenAttendance();
     if (!info) throw new Error("لم تقم بتسجيل الحضور اليوم بعد");
 
-    const openBreak = await getOpenBreak(info.attendanceId);
+    // 🔧 فيكس: كانت بتشيك بريك مفتوح على attendanceId واحد بس
+    // (getOpenBreak(info.attendanceId))، فلو البريك متسجل على صف تاني
+    // بسبب باگ تعدد الصفوف، كان بيسمح بالـ checkout مع إن فيه بريك لسه
+    // شغال فعليًا. دلوقتي بنشيك على أي بريك مفتوح لليوزر النهاردة بشكل عام.
+    const userId = await getCurrentUserId();
+    const openBreak = await getOpenBreakForUserToday(userId);
     if (openBreak) throw new Error("لازم تنهي البريك الأول قبل تسجيل الانصراف");
 
     const { data: allBreaks, error: breaksErr } = await supabase
