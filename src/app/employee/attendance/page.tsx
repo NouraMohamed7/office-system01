@@ -316,23 +316,33 @@ export default function AttendancePage() {
     }
   }
 
-  async function handleStartBreak() {
+async function handleStartBreak() {
     if (breakSubmitting) return;
     setBreakSubmitting(true);
     try {
-      await apiStartBreak();
-      await refreshBreaks();
+      const newBreak = await apiStartBreak();
+      // ✅ الفيكس الأساسي: قبل كده كنا بنتجاهل الـ break اللي الـ RPC رجّعته
+      // ونعتمد بالكامل على refreshBreaks() (إعادة جلب من الداتابيز) عشان
+      // نحدّث الـ UI. لو الاستعلام التاني ده لأي سبب (تأخير، فلترة غلط،
+      // إلخ) مرجّعش نفس السجل، الـ UI كان بيفضل واقف على "بدء البريك"
+      // حتى لو البريك اتسجل فعليًا بنجاح في الداتابيز.
+      // دلوقتي بنحدّث الـ state فورًا بالسجل اللي الـ RPC نفسها رجّعته —
+      // ده مضمون 100% لأنه نفس المصدر اللي أكّد النجاح.
+      setBreaks((prev) => {
+        const exists = prev.some((b) => b.id === newBreak.id);
+        return exists
+          ? prev.map((b) => (b.id === newBreak.id ? newBreak : b))
+          : [...prev, newBreak];
+      });
       setBreakElapsedSec(0);
       showToast("success", `بدأت البريك الساعة ${time}`);
+      // مزامنة إضافية في الخلفية فقط — مش شرط لتحديث الـ UI دلوقتي
+      refreshBreaks().catch(() => {});
     } catch (err) {
       showToast(
         "error",
         err instanceof Error ? err.message : "تعذر بدء البريك",
       );
-      // 🔧 فيكس: حتى لو apiStartBreak رمى إيرور (نادر بعد الفيكس الاستباقي
-      // في startBreak، لكن ممكن يحصل في حالات edge)، نعمل refresh للبريكات
-      // على أي حال — ممكن يكون فيه بريك مفتوح فعلاً محتاجين نعرضه في الـ UI
-      // حتى لو الـ toast عرض رسالة خطأ.
       await refreshBreaks().catch(() => {});
     } finally {
       setBreakSubmitting(false);
@@ -343,10 +353,15 @@ export default function AttendancePage() {
     if (breakSubmitting) return;
     setBreakSubmitting(true);
     try {
-      await apiEndBreak();
-      await refreshBreaks();
+      const endedBreak = await apiEndBreak();
+      // ✅ نفس الفيكس بالظبط لإنهاء البريك — نحدّث الـ state من نتيجة
+      // الـ RPC مباشرة بدل الاعتماد الكامل على إعادة الجلب.
+      setBreaks((prev) =>
+        prev.map((b) => (b.id === endedBreak.id ? endedBreak : b)),
+      );
       setBreakElapsedSec(0);
       showToast("success", `انتهت البريك الساعة ${time}`);
+      refreshBreaks().catch(() => {});
     } catch (err) {
       showToast(
         "error",
@@ -356,7 +371,6 @@ export default function AttendancePage() {
       setBreakSubmitting(false);
     }
   }
-
   const todayStatus = record?.status ?? null;
 
   // 🔧 الفيكس الأساسي: قبل كده كان أي بريك مفتوح (end_time === null) —
