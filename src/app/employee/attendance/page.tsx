@@ -64,13 +64,24 @@ function getCurrentOpenBreak(breaks: BreakRecord[]): BreakRecord | null {
   return open.reduce((latest, b) => (new Date(b.start_time) > new Date(latest.start_time) ? b : latest));
 }
 
-// إجمالي وقت البريك بالثواني: مجموع البريكات المقفولة + وقت البريك
-// المفتوح الحالي (بيتحدث كل ثانية من breakElapsedSec).
+// 🔧 FIX (break_mins from backend): إجمالي وقت البريك بالثواني.
+// المصدر الرسمي لمدة أي بريك *مقفول* هو break_mins الراجعة من الباك،
+// مش طرح start_time/end_time على الفرونت — بالظبط زي ما بيحصل أصلاً في
+// getBreaksSummaryByAttendanceIds (سجل الحضور السابق). قبل كده الفانكشن
+// دي كانت بتتجاهل break_mins تمامًا وبتحسب من التواريخ دايمًا، وده كان
+// ممكن يدي رقم مختلف عن اللي الباك فعليًا حاسبه ومسجله (مثلاً لو فيه أي
+// فرق/تقريب أو منطق خاص في حساب الباك مش موجود على الفرونت).
+// الاستثناء الوحيد: البريك المفتوح دلوقتي — لسه معندوش break_mins نهائي
+// من الباك لحد ما يتقفل، فبنستخدم breakElapsedSec (عداد لايف بيتحدث كل
+// ثانية على الفرونت) لحد ما ده يحصل.
 function computeTotalBreakSeconds(breaks: BreakRecord[], breakElapsedSec: number): number {
   let total = 0;
   for (const b of breaks) {
     if (b.end_time) {
-      const secs = Math.round((new Date(b.end_time).getTime() - new Date(b.start_time).getTime()) / 1000);
+      const secs =
+        b.break_mins != null
+          ? b.break_mins * 60
+          : Math.round((new Date(b.end_time).getTime() - new Date(b.start_time).getTime()) / 1000);
       total += Math.max(0, secs);
     }
   }
