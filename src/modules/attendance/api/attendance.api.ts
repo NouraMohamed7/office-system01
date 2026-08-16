@@ -207,10 +207,12 @@ export async function getMyMonthSummary(): Promise<MonthSummary> {
 /**
  * ⚠️ شكل الـ data الراجعة من start_break/end_break مش موثّق حرفيًا في
  * الباك (التوثيق بيقول بس "console.log(data)"). عشان كده الكود اللي
- * بيستخدم الفانكشنين دول (في page.tsx) بيعتمد على refetch كامل من
- * getMyTodayStatusRow + جدول breaks، مش على شكل الـ data الراجعة هنا.
+ * بيستخدم الفانكشنين دول (في page.tsx) بيعتمد على refetch كامل من جدول
+ * breaks كمصدر الحقيقة الوحيد، مش على شكل الـ data الراجعة هنا — تجربة
+ * فعلية أثبتت إن الاعتماد على شكل غير مؤكد بيسبب حالة "بريك ما بيقفلش".
  * سايبين الدالتين ترجعوا الـ data الخام زي ما هي (من غير أي افتراض على
- * شكلها) لأي استخدام مستقبلي.
+ * شكلها) لأي استخدام مستقبلي، لكن من غير تطبيع (normalize) بيفترض إنها
+ * BreakRecord.
  */
 export async function startBreak(): Promise<unknown> {
   const { data, error } = await supabase.rpc("start_break");
@@ -297,11 +299,6 @@ export async function getAttendanceToday(): Promise<AttendanceTodayRow[]> {
  * بينما الباك فعليًا رافض start_break برسالة "لديك استراحة قائمة بالفعل".
  * الحل: نعتمد على الصف ده كمصدر الحقيقة الوحيد للحالة، وجدول breaks
  * نستخدمه بس لعرض التفاصيل/الإجمالي.
- *
- * ⚠️ ملاحظة اختبار سابقة: أول تجربة فعلية لينا رجّعت "late" مش
- * "on_work"/"break" — يبدو إن الباك عدّل الـ view بعد كده. لسه محتاجين
- * تأكيد نهائي من تجربة حية جديدة (فيه console.log في page.tsx لحد ما
- * نتأكد 100%).
  */
 export interface MyTodayStatusRow {
   users_id: string;
