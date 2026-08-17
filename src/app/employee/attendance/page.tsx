@@ -749,7 +749,6 @@ useEffect(() => {
                 <tr className="text-right text-muted-foreground border-b border-border">
                   <th className="pb-3 font-semibold">وقت الحضور</th>
                   <th className="pb-3 font-semibold">وقت الانصراف</th>
-                  <th className="pb-3 font-semibold">إجمالي البريك</th>
                   <th className="pb-3 font-semibold">الحالة</th>
                 </tr>
               </thead>
@@ -757,7 +756,6 @@ useEffect(() => {
                 <tr className="border-b border-border/60">
                   <td className="py-3 text-foreground tabular-nums">{checkInTime}</td>
                   <td className="py-3 text-muted-foreground tabular-nums">{hasCheckedOut ? checkOutTime : "— لسه ماسجلتيش انصراف —"}</td>
-                  <td className="py-3 text-muted-foreground tabular-nums">{formatDuration(totalBreakSeconds)}</td>
                   <td className="py-3">
                     {todayStatus && (
                       <StatusPill tone={todayStatus === "present" ? "success" : todayStatus === "late" ? "warning" : "danger"}>
@@ -799,26 +797,21 @@ useEffect(() => {
                 <th className="pb-3 font-semibold">التاريخ</th>
                 <th className="pb-3 font-semibold">الحضور</th>
                 <th className="pb-3 font-semibold">الانصراف</th>
-                <th className="pb-3 font-semibold">الاستراحة</th>
                 <th className="pb-3 font-semibold">الحالة</th>
               </tr>
             </thead>
             <tbody>
               {history.length === 0 && !loadingToday && (
                 <tr>
-                  <td colSpan={5} className="py-6 text-center text-muted-foreground">مفيش سجل سابق</td>
+                  <td colSpan={4} className="py-6 text-center text-muted-foreground">مفيش سجل سابق</td>
                 </tr>
               )}
               {history.map((r) => {
-                const breakMins = historyBreakMinutes.get(r.id) ?? 0;
                 return (
                   <tr key={r.id} className="border-b border-border/60 hover:bg-primary/5 transition">
                     <td className="py-3 text-foreground">{r.attendance_date}</td>
                     <td className="py-3 text-muted-foreground tabular-nums">{formatTime(r.check_in_at)}</td>
                     <td className="py-3 text-muted-foreground tabular-nums">{formatTime(r.check_out_at)}</td>
-                    <td className="py-3 text-muted-foreground tabular-nums">
-                      {breakMins > 0 ? formatMinutesAsHhMm(breakMins) : "—"}
-                    </td>
                     <td className="py-3">
                       <StatusPill tone={r.status === "present" ? "success" : r.status === "late" ? "warning" : "danger"}>
                         {ATTENDANCE_STATUS_LABEL[r.status]}
