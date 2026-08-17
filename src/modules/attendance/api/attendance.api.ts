@@ -5,7 +5,7 @@
  * ⚠️ القاعدة الأساسية لكل حاجة في الملف ده: مفيش أي دالة هنا بتعمل حاجة
  * الباك مش بيدعمها فعليًا. الجداول والـ RPCs المستخدمة هنا هي بالظبط اللي
  * موثقة في Supabase API docs بتاعت المشروع:
- *   - جداول: attendance, attendance_today (view), attendance_settings, breaks, leaves
+ *   - جداول: attendance, attendance_today (view), attendance_settings, breaks, leaves, users
  *   - RPCs: check_in, check_out, start_break, end_break, request_leave,
  *           update_leave, delete_leave, end_leave_early, check_leave_status
  *
@@ -37,6 +37,10 @@ export interface AttendanceRecord {
  * دفعة واحدة. كل الحقول Optional/nullable في التوثيق، يعني على الأرجح
  * الـ view دي LEFT JOIN من الموظفين على attendance بتاع النهاردة —
  * فالموظف اللي لسه ماسجلش حضور بيظهر برضه بس بقيم null.
+ *
+ * ⚠️ ملاحظة: الـ view دي بترجّع حالة الحضور (present/absent/late/...)،
+ * مش حالة البريك. حالة البريك (on_work/break) مصدرها جدول users
+ * (شوف getMyBreakStatusRow تحت).
  */
 export interface AttendanceTodayRow {
   users_id: string;
@@ -208,11 +212,11 @@ export async function getMyMonthSummary(): Promise<MonthSummary> {
  * ⚠️ شكل الـ data الراجعة من start_break/end_break مش موثّق حرفيًا في
  * الباك (التوثيق بيقول بس "console.log(data)"). عشان كده الكود اللي
  * بيستخدم الفانكشنين دول (في page.tsx) بيعتمد على refetch كامل من جدول
- * breaks كمصدر الحقيقة الوحيد، مش على شكل الـ data الراجعة هنا — تجربة
- * فعلية أثبتت إن الاعتماد على شكل غير مؤكد بيسبب حالة "بريك ما بيقفلش".
- * سايبين الدالتين ترجعوا الـ data الخام زي ما هي (من غير أي افتراض على
- * شكلها) لأي استخدام مستقبلي، لكن من غير تطبيع (normalize) بيفترض إنها
- * BreakRecord.
+ * breaks + عمود users.break_status كمصدر الحقيقة الوحيد، مش على شكل
+ * الـ data الراجعة هنا — تجربة فعلية أثبتت إن الاعتماد على شكل غير مؤكد
+ * بيسبب حالة "بريك ما بيقفلش". سايبين الدالتين ترجعوا الـ data الخام
+ * زي ما هي (من غير أي افتراض على شكلها) لأي استخدام مستقبلي، لكن من
+ * غير تطبيع (normalize) بيفترض إنها BreakRecord.
  */
 export async function startBreak(): Promise<unknown> {
   const { data, error } = await supabase.rpc("start_break");
@@ -291,33 +295,30 @@ export async function getAttendanceToday(): Promise<AttendanceTodayRow[]> {
 }
 
 /**
- * ✅ مؤكد فعليًا من الباك (مش افتراض): عمود status في الـ view دي بيرجّع
- * "on_work" أو "break" وقت ما المستخدم شغال/في استراحة — ده هو مصدر
- * الحقيقة الرسمي لحالة البريك، مش استنتاج من جدول breaks. الاعتماد على
- * breaks لوحده كان بيفشل في حالة بريك قديم فاضل مفتوح من يوم/صف سابق
- * (مش هيظهر في breaks بتاعة اليوم بس)، فالواجهة كانت شايفة isOnBreak=false
- * بينما الباك فعليًا رافض start_break برسالة "لديك استراحة قائمة بالفعل".
- * الحل: نعتمد على الصف ده كمصدر الحقيقة الوحيد للحالة، وجدول breaks
- * نستخدمه بس لعرض التفاصيل/الإجمالي.
+ * ✅ مؤكد فعليًا من الباك (اتفحص مباشرة عبر REST API على جدول users
+ * الحقيقي، مش الـ view): عمود break_status في جدول public.users هو
+ * مصدر الحقيقة الرسمي لحالة البريك — بيرجّع "on_work" أو "break".
+ * enum: public.break_status_type.
+ *
+ * ⚠️ الافتراض القديم إن الحالة دي جايه من attendance_today.status كان
+ * غلط — attendance_today.status هي حالة الحضور (present/late/...)،
+ * مش حالة البريك. اتأكد الفرق عن طريق فيتش مباشر على REST API لجدول
+ * users فرجع فعليًا عمود break_status بقيمة "on_work"/"break".
  */
-export interface MyTodayStatusRow {
-  users_id: string;
-  name: string;
-  check_in_at: string | null;
-  check_out_at: string | null;
-  late_minutes: number | null;
-  status: string | null;
+export interface MyBreakStatusRow {
+  id: string;
+  break_status: string | null;
 }
 
-export async function getMyTodayStatusRow(): Promise<MyTodayStatusRow | null> {
+export async function getMyTodayStatusRow(): Promise<MyBreakStatusRow | null> {
   const userId = await getAuthUserId();
   const { data, error } = await supabase
-    .from("attendance_today")
-    .select("*")
-    .eq("users_id", userId)
+    .from("users")
+    .select("id, break_status")
+    .eq("id", userId)
     .maybeSingle();
   if (error) throw new Error(error.message);
-  return (data as MyTodayStatusRow) ?? null;
+  return (data as MyBreakStatusRow) ?? null;
 }
 
 /**
