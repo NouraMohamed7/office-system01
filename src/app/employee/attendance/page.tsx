@@ -166,10 +166,10 @@ export default function AttendancePage() {
     }
   }, [showToast]);
 
-  useEffect(() => {
-    refreshLeaves();
-  }, [refreshLeaves]);
-
+useEffect(() => {
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- initial data load on mount, not a reactive sync
+  refreshLeaves();
+}, [refreshLeaves]);
   // فيكس مشكلة "error من غير ما يتمسح" — بنتبع الصف/الأكشن بالظبط اللي
   // شغال دلوقتي، ونعطّل زراره بس بدل state لودينج مشترك.
   const [busyLeave, setBusyLeave] = useState<{ id: number; action: LeaveRowAction } | null>(null);
@@ -241,26 +241,14 @@ export default function AttendancePage() {
   const hasCheckedIn = !!record?.check_in_at;
   const hasCheckedOut = !!record?.check_out_at;
 
-  // بنجيب بريكات كل صفوف اليوم (todayAttendanceIds) مش صف واحد بس، عشان
-  // لو الباك بيتعامل مع البريك على مستوى المستخدم مش الصف، الواجهة تفضل
-  // شايفة الصورة كاملة دايمًا.
-  async function refreshBreaks(attendanceIds: number[]) {
-    if (attendanceIds.length === 0) {
-      setBreaks([]);
-      return;
-    }
-    const fresh = await getBreaksByAttendanceIds(attendanceIds);
-    setBreaks(fresh);
-  }
-
-  // لو صف حضور جديد اتعمل (مثلاً بعد check-in) ومكانش في اللستة، نضيفه
-  // عشان refreshBreaks الجاية تجيب بريكاته هو كمان.
-  async function refreshTodayAttendanceIds(): Promise<number[]> {
-    const todayRecords = await getMyTodayAttendanceRecords();
-    const ids = todayRecords.map((r) => r.id);
-    setTodayAttendanceIds(ids);
-    return ids;
-  }
+  // ⚠️ ملحوظة: كانت هنا دالتين refreshBreaks/refreshTodayAttendanceIds
+  // بتعملوا refetch من جدول breaks. اتشالوا لأن جدول breaks معندوش RLS
+  // Policy بتسمح بالـ SELECT حاليًا (اتأكد بتجربة فعلية: أي قراءة منه
+  // بترجع [] فاضية)، فأي استدعاء ليهم كان هيمسح بيانات البريك الحالي
+  // اللي بقينا بنبنيها من response الـ start_break/end_break مباشرة.
+  // breaks state دلوقتي مصدره فقط: (1) القراءة الأولية عند فتح الصفحة
+  // (initial load تحت — هترجع [] فاضية لحد ما الـ Policy تتضاف، ده
+  // متوقع وآمن)، و(2) الـ response الراجع من start_break/end_break.
 
   // تحميل حالة اليوم + البريكات + السجل السابق + ملخص الشهر أول ما الصفحة تفتح
   useEffect(() => {
@@ -304,15 +292,16 @@ export default function AttendancePage() {
 
   // ✅ realtime على جدول breaks — دي فانكشن موثّقة وجاهزة من الباك
   // (نفس اللي مستخدمة في صفحة المدير) وكانت موجودة بالفعل في attendance.api
-  // بس مش موصولة هنا. بتحدّث تفاصيل/إجمالي البريك فورًا لحظة ما أي صف
-  // breaks يتغيّر، وبرضه بتعيد قراءة users.break_status عشان الحالة
-  // (on_work/break) تفضل متزامنة مع الباك دايمًا، حتى لو التغيير حصل من
-  // مصدر تاني (مثلاً تبويب/جلسة تانية لنفس المستخدم).
+  // بس مش موصولة هنا. بتنبهنا لحظة ما أي صف breaks يتغيّر (مثلاً من
+  // تبويب/جلسة تانية لنفس المستخدم)، فبنعيد قراءة users.break_status
+  // بس عشان الحالة (on_work/break) تفضل متزامنة.
+  // ⚠️ *مش* بتعمل أي refetch من جدول breaks نفسه هنا — لأن الجدول ده
+  // معندوش RLS Policy بتسمح بالـ SELECT حاليًا وأي محاولة قراءة منه
+  // بترجع [] فاضية دايمًا (اتأكد بتجربة فعلية)، فده كان هيمسح بيانات
+  // البريك الحالي اللي بنيناها من response الـ RPC نفسه.
   useEffect(() => {
     const unsubscribe = subscribeToBreaks(async () => {
       try {
-        const ids = await refreshTodayAttendanceIds();
-        await refreshBreaks(ids);
         await refreshTodayBreakStatus();
       } catch {
         // تجاهل فشل الـ refresh التلقائي — الأكشنات نفسها (start/end break)
@@ -380,19 +369,25 @@ export default function AttendancePage() {
 
     setBreakSubmitting(true);
     try {
-      await apiStartBreak();
-      // ✅ refetch كامل: breaks للتفاصيل/الإجمالي + users.break_status
-      // كمصدر الحقيقة للحالة (on_work/break). شكل الـ data الراجعة من
-      // start_break نفسها مش موثّق، فمنعتمدش عليها.
-      const ids = await refreshTodayAttendanceIds();
-      await refreshBreaks(ids);
+      // ✅ start_break بيرجّع صف breaks كامل وحقيقي مباشرة (id,
+      // attendance_id, start_time, end_time: null, break_mins: null).
+      // بنستخدم الـ response ده مباشرة كمصدر الحقيقة للبريك الحالي —
+      // *بدون* أي refetch من جدول breaks، لأن الجدول ده معندوش RLS
+      // Policy بتسمح بالـ SELECT حاليًا وأي محاولة قراءة منه بترجع []
+      // فاضية دايمًا (اتأكد ده بتجربة فعلية)، وكانت بتمسح الداتا اللي
+      // جبناها لسه من الـ RPC نفسه.
+      const newBreak = await apiStartBreak();
+      setBreaks((prev) => (prev.some((b) => b.id === newBreak.id) ? prev : [...prev, newBreak]));
+      setTodayAttendanceIds((prev) =>
+        prev.includes(newBreak.attendance_id) ? prev : [...prev, newBreak.attendance_id]
+      );
+      // برضه بنقرا users.break_status عشان نتأكد إن الحالة (on_work/break)
+      // اتزامنت صح — القراءة دي شغالة عادي (مش عليها نفس مشكلة breaks).
       await refreshTodayBreakStatus();
       setBreakElapsedSec(0);
       showToast("success", `بدأت البريك الساعة ${time}`);
     } catch (err) {
       try {
-        const ids = await refreshTodayAttendanceIds();
-        await refreshBreaks(ids);
         await refreshTodayBreakStatus();
       } catch {
         // تجاهل فشل الـ refresh نفسه — التوست تحت هيوضح المشكلة الأصلية
@@ -413,19 +408,23 @@ export default function AttendancePage() {
 
     setBreakSubmitting(true);
     try {
-      await apiEndBreak();
-      // ✅ نفس المبدأ: refetch كامل لـ breaks + users.break_status.
-      // بنستخدم todayAttendanceIds (كل صفوف اليوم) مش صف واحد بس — عشان
-      // نغطي حالة أكتر من check-in في نفس اليوم.
-      const ids = todayAttendanceIds.length > 0 ? todayAttendanceIds : await refreshTodayAttendanceIds();
-      await refreshBreaks(ids);
+      // ✅ end_break بيرجّع نفس صف الـ breaks بعد ما يتقفل — فيه
+      // end_time و break_mins النهائيين محسوبين من الباك نفسه. بنستخدم
+      // الـ response ده مباشرة عشان نحدّث الصف المطابق في breaks state،
+      // *بدون* أي refetch من جدول breaks لنفس سبب RLS المذكور فوق.
+      const updatedBreak = await apiEndBreak();
+      setBreaks((prev) => {
+        const idx = prev.findIndex((b) => b.id === updatedBreak.id);
+        if (idx === -1) return [...prev, updatedBreak];
+        const next = [...prev];
+        next[idx] = updatedBreak;
+        return next;
+      });
       await refreshTodayBreakStatus();
       setBreakElapsedSec(0);
       showToast("success", `انتهت البريك الساعة ${time}`);
     } catch (err) {
       try {
-        const ids = todayAttendanceIds.length > 0 ? todayAttendanceIds : await refreshTodayAttendanceIds();
-        await refreshBreaks(ids);
         await refreshTodayBreakStatus();
       } catch {
         // تجاهل فشل الـ refresh نفسه

@@ -209,31 +209,48 @@ export async function getMyMonthSummary(): Promise<MonthSummary> {
 // ============================================================
 
 /**
- * ⚠️ شكل الـ data الراجعة من start_break/end_break مش موثّق حرفيًا في
- * الباك (التوثيق بيقول بس "console.log(data)"). عشان كده الكود اللي
- * بيستخدم الفانكشنين دول (في page.tsx) بيعتمد على refetch كامل من جدول
- * breaks + عمود users.break_status كمصدر الحقيقة الوحيد، مش على شكل
- * الـ data الراجعة هنا — تجربة فعلية أثبتت إن الاعتماد على شكل غير مؤكد
- * بيسبب حالة "بريك ما بيقفلش". سايبين الدالتين ترجعوا الـ data الخام
- * زي ما هي (من غير أي افتراض على شكلها) لأي استخدام مستقبلي، لكن من
- * غير تطبيع (normalize) بيفترض إنها BreakRecord.
+ * ✅ مؤكد فعليًا من الباك (اتفحص مباشرة عبر REST API): start_break/
+ * end_break بيرجّعوا صف breaks كامل ومباشر (id, attendance_id,
+ * start_time, end_time, break_mins)، مثال حقيقي من الفحص:
+ *   { id: 19, attendance_id: 46, start_time: "...", end_time: null,
+ *     break_mins: null }
+ *
+ * ⚠️ مهم جدًا: جدول breaks حاليًا معندوش RLS Policy بتسمح بقراءته
+ * (SELECT) للمستخدم العادي — أي SELECT مباشر عليه (حتى لصفوف
+ * المستخدم نفسه) بيرجع مصفوفة فاضية [] دايمًا، رغم إن الـ RPC قادر
+ * يكتب فيه بنجاح (لأنه شغال بصلاحيات أعلى). ده اتأكد بتجربة فعلية:
+ * استدعاء start_break نجح ورجع صف حقيقي، لكن SELECT بعده مباشرة على
+ * breaks رجع [] فاضية.
+ *
+ * عشان كده: الفرونت **مينفعش** يعتمد على أي refetch من جدول breaks —
+ * لازم يستخدم الـ response الراجع من start_break/end_break نفسه
+ * كمصدر الحقيقة الوحيد لبيانات البريك الحالي، ويبني عليه الـ state
+ * محليًا (شوف handleStartBreak/handleEndBreak في page.tsx).
  */
-export async function startBreak(): Promise<unknown> {
+export async function startBreak(): Promise<BreakRecord> {
   const { data, error } = await supabase.rpc("start_break");
   if (error) throw new Error(error.message);
-  return data;
+  return data as BreakRecord;
 }
 
-export async function endBreak(): Promise<unknown> {
+export async function endBreak(): Promise<BreakRecord> {
   const { data, error } = await supabase.rpc("end_break");
   if (error) throw new Error(error.message);
-  return data;
+  return data as BreakRecord;
 }
 
 // ============================================================
 // جدول breaks
 // ============================================================
 
+/**
+ * ⚠️ ملاحظة مهمة (اتأكدت بتجربة فعلية): جدول breaks حاليًا معندوش RLS
+ * Policy بتسمح بالـ SELECT للمستخدم العادي، فالدوال دي (وكل اللي بيعتمد
+ * عليها) بترجع [] فاضية دايمًا لحد ما الـ Policy تتضاف في الباك. سايبة
+ * الدوال زي ما هي هنا (هتشتغل صح تلقائيًا أول ما الـ Policy تتضاف)، لكن
+ * page.tsx بقى معتمد على response الـ RPC مباشرة (startBreak/endBreak)
+ * للبريك الحالي، مش على الدوال دي.
+ */
 export async function getBreaksByAttendanceId(attendanceId: number): Promise<BreakRecord[]> {
   const { data, error } = await supabase
     .from("breaks")
