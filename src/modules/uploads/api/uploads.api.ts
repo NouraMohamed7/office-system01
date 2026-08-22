@@ -2,21 +2,13 @@ import { supabase } from "@/lib/supabase/client";
 
 /* ------------------------------------------------------------------ */
 /*  Raw table types                                                    */
+/*  NOTE: Backend only exposes `files_approval`. There is no separate  */
+/*  "plain files" table/endpoints (upload-file, delete-file,           */
+/*  update_file_name) — attachment_type enum only supports             */
+/*  `tasks | files_approval`, confirming this is the only file table.  */
 /* ------------------------------------------------------------------ */
 
 export type FileApprovalStatus = "pending" | "accepted" | "rejected" | "edit_requested";
-
-export type PlainFileRow = {
-  id: number;
-  created_at: string;
-  updated_at: string;
-  name: string;
-  file_path: string;
-  users_id: string;
-  mime_type: string;
-  size_bytes: number;
-  storage_id: string;
-};
 
 export type FileApprovalRow = {
   id: number;
@@ -36,46 +28,29 @@ type WithUser<T> = T & { users: { name: string } | null };
 /*  Unified shape used across the UI                                   */
 /* ------------------------------------------------------------------ */
 
-export type FileKind = "file" | "approval";
-
 export type UnifiedFile = {
-  kind: FileKind;
   id: number;
   name: string;
   url: string;
-  size_bytes: number | null;
-  mime_type: string | null;
-  status: FileApprovalStatus | null;
+  status: FileApprovalStatus;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
   created_at: string;
+  updated_at: string;
   users_id: string;
   user_name?: string | null;
 };
 
-function plainToUnified(row: PlainFileRow, userName?: string | null): UnifiedFile {
-  return {
-    kind: "file",
-    id: row.id,
-    name: row.name,
-    url: row.file_path,
-    size_bytes: row.size_bytes,
-    mime_type: row.mime_type,
-    status: null,
-    created_at: row.created_at,
-    users_id: row.users_id,
-    user_name: userName ?? null,
-  };
-}
-
 function approvalToUnified(row: FileApprovalRow, userName?: string | null): UnifiedFile {
   return {
-    kind: "approval",
     id: row.id,
     name: row.file_name,
     url: row.file_url,
-    size_bytes: null,
-    mime_type: null,
     status: row.status,
+    reviewed_by: row.reviewed_by,
+    reviewed_at: row.reviewed_at,
     created_at: row.created_at,
+    updated_at: row.updated_at,
     users_id: row.users_id,
     user_name: userName ?? null,
   };
@@ -99,7 +74,6 @@ export const FILE_STATUSES: FileApprovalStatus[] = [
   "edit_requested",
 ];
 
-export const MAX_FILE_SIZE_MB = 10;
 export const MAX_APPROVAL_FILE_SIZE_MB = 50;
 
 /* ------------------------------------------------------------------ */
@@ -107,39 +81,23 @@ export const MAX_APPROVAL_FILE_SIZE_MB = 50;
 /* ------------------------------------------------------------------ */
 
 export async function getMyFiles(): Promise<UnifiedFile[]> {
-  const [plainRes, approvalRes] = await Promise.all([
-    supabase.from("files").select("*").order("created_at", { ascending: false }),
-    supabase.from("files_approval").select("*").order("created_at", { ascending: false }),
-  ]);
-
-  if (plainRes.error) throw plainRes.error;
-  if (approvalRes.error) throw approvalRes.error;
-
-  const plain = (plainRes.data ?? []).map((r) => plainToUnified(r as PlainFileRow));
-  const approval = (approvalRes.data ?? []).map((r) => approvalToUnified(r as FileApprovalRow));
-
-  return [...plain, ...approval].sort(
-    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-  );
-}
-
-export async function uploadPlainFiles(files: File[]): Promise<void> {
-  const formData = new FormData();
-  files.forEach((f) => formData.append("file", f));
-
-  const { data, error } = await supabase.functions.invoke("upload-file", {
-    body: formData,
-  });
+  const { data, error } = await supabase
+    .from("files_approval")
+    .select("*")
+    .order("created_at", { ascending: false });
 
   if (error) throw error;
-  if (data?.errors?.length) throw new Error(data.errors.join("، "));
+
+  return (data ?? []).map((r) => approvalToUnified(r as FileApprovalRow));
 }
 
+// رفع ملف للموافقة — upload-file-approval Edge Function
+// دايمًا بيعمل record جديد بحالة pending، وبياخد ملف واحد بس (مش array)
 export async function uploadApprovalFile(file: File): Promise<void> {
   const formData = new FormData();
   formData.append("file", file);
 
-  const { data, error } = await supabase.functions.invoke("upload-file-approval", {
+  const { data, error } = await supabase.functions.invoke("upload_file_approval", {
     body: formData,
   });
 
@@ -147,29 +105,9 @@ export async function uploadApprovalFile(file: File): Promise<void> {
   if (data?.error) throw new Error(data.error);
 }
 
-// تعديل اسم ملف عادي — RPC update_file_name (الباك: file owner أو manager)
-export async function renamePlainFile(fileId: number, newName: string) {
-  const { data, error } = await supabase.rpc("update_file_name", {
-    p_file_id: fileId,
-    p_new_name: newName,
-  });
-
-  if (error) throw error;
-  return data;
-}
-
-// حذف ملف/ملفات عادية — delete-file Edge Function (الباك: file owner أو manager)
-export async function deletePlainFiles(fileIds: number[]) {
-  const { data, error } = await supabase.functions.invoke("delete-file", {
-    body: { file_ids: fileIds },
-  });
-
-  if (error) throw error;
-  if (data?.errors?.length) throw new Error(data.errors.join("، "));
-  return data;
-}
-
-// حذف ملف موافقة — delete-file-approval Edge Function (الباك: يقبل file_id مفرد فقط)
+// حذف ملف موافقة — delete-file-approval Edge Function
+// الباك يقبل file_id مفرد فقط. الحذف مسموح في أي حالة (pending/accepted/rejected/edit_requested)
+// من الموظف (لملفاته فقط) أو من المدير (لأي ملف).
 export async function deleteApprovalFile(fileId: number) {
   const { data, error } = await supabase.functions.invoke("delete-file-approval", {
     body: { file_id: fileId },
@@ -185,23 +123,15 @@ export async function deleteApprovalFile(fileId: number) {
 /* ------------------------------------------------------------------ */
 
 export async function getAllFiles(): Promise<UnifiedFile[]> {
-  const [plainRes, approvalRes] = await Promise.all([
-    supabase.from("files").select("*, users:users_id(name)").order("created_at", { ascending: false }),
-    supabase.from("files_approval").select("*, users:users_id(name)").order("created_at", { ascending: false }),
-  ]);
+  const { data, error } = await supabase
+    .from("files_approval")
+    .select("*, users:users_id(name)")
+    .order("created_at", { ascending: false });
 
-  if (plainRes.error) throw plainRes.error;
-  if (approvalRes.error) throw approvalRes.error;
+  if (error) throw error;
 
-  const plain = ((plainRes.data ?? []) as unknown as WithUser<PlainFileRow>[]).map((r) =>
-    plainToUnified(r, r.users?.name)
-  );
-  const approval = ((approvalRes.data ?? []) as unknown as WithUser<FileApprovalRow>[]).map((r) =>
+  return ((data ?? []) as unknown as WithUser<FileApprovalRow>[]).map((r) =>
     approvalToUnified(r, r.users?.name)
-  );
-
-  return [...plain, ...approval].sort(
-    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
   );
 }
 
